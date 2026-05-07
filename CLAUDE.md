@@ -13,6 +13,11 @@ Tooling, infrastructure, and the first reference modules are in place:
 - `AuthModule` under `/v1/auth` — login + JWT issuance, `JwtAuthGuard`
   registered globally so every endpoint requires a JWT unless
   `@Public()` is applied; `@CurrentUser` decorator for handlers
+- `RolesGuard` global, opt-in via `@Roles('admin', ...)` for coarse
+  RBAC; resource ownership stays in the service
+- `AuditInterceptor` global, opt-in via `@Audit('action.name')` —
+  emits structured `audit: true` log lines with actor + target +
+  outcome for compliance pipelines
 - `AppLoggerModule` (nestjs-pino) — JSON logs in prod, pino-pretty in
   dev; redacts password / token / authorization fields; every line
   carries the Fastify request id

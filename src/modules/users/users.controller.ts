@@ -11,7 +11,9 @@ import {
 } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { z } from 'zod';
+import { Audit } from '../../common/decorators/audit.decorator';
 import { Public } from '../../common/decorators/public.decorator';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UserResponseDto } from './dto/user-response.dto';
 import { UsersService } from './users.service';
@@ -59,6 +61,12 @@ export class UsersController {
     };
   }
 
+  // Soft-delete is admin-only and audited. Demonstrates the Pilar 4
+  // RBAC + audit pattern: @Roles for coarse role gating, @Audit so
+  // the operation lands in the audit log stream alongside actor +
+  // target + outcome.
+  @Roles('admin')
+  @Audit('user.soft_delete')
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Param('id') id: string): Promise<void> {

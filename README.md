@@ -102,7 +102,7 @@ Mirror its shape when adding a new bounded context.
 | `POST /v1/users`      | `@Public` | Self-registration (argon2id hashed)         |
 | `GET /v1/users`       | JWT       | Cursor pagination                           |
 | `GET /v1/users/:id`   | JWT       | Single user                                 |
-| `DELETE /v1/users/:id`| JWT       | Soft delete                                 |
+| `DELETE /v1/users/:id`| JWT + admin | Soft delete (audited, `@Roles('admin')` + `@Audit('user.soft_delete')`) |
 
 ## Common scripts
 
@@ -159,7 +159,7 @@ own variants.
 
 - Throttler / rate limiter with Redis storage
 - OpenTelemetry SDK and exporter wiring
-- Refresh-token rotation and `RolesGuard` for coarse RBAC
+- Refresh-token rotation
 - BullMQ + worker entrypoint (process separate)
 - Helm chart
 

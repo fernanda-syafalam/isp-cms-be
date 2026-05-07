@@ -1,11 +1,13 @@
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { APP_FILTER, APP_GUARD, APP_PIPE } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { ZodValidationPipe } from 'nestjs-zod';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
+import { RolesGuard } from './common/guards/roles.guard';
+import { AuditInterceptor } from './common/interceptors/audit.interceptor';
 import { type AppConfig, appConfig } from './config/configuration';
 import { envSchema } from './config/env.schema';
 import { DrizzleModule } from './infrastructure/database/drizzle.module';
@@ -73,6 +75,13 @@ import { UsersModule } from './modules/users/users.module';
     // Per-IP rate limit. ThrottlerGuard runs after JwtAuthGuard so
     // unauthenticated traffic still counts against the same bucket.
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Coarse RBAC. No-op unless a handler opts in with @Roles(...).
+    // Resource ownership ("only owner of order X") still belongs in
+    // the service, not here. Pilar 4.
+    { provide: APP_GUARD, useClass: RolesGuard },
+    // Structured audit log for handlers annotated with @Audit('...').
+    // Pass-through for everything else.
+    { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
     // ZodValidationPipe is registered globally so that any DTO created
     // with `createZodDto()` is validated automatically. Non-zod DTOs
     // pass through unchanged.
