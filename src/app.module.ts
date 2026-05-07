@@ -36,17 +36,27 @@ import { UsersModule } from './modules/users/users.module';
     // Rate limit per IP, backed by Redis so the limit is consistent
     // across pods. In-memory storage resets per replica and is useless
     // in K8s — see Pilar 2.
+    //
+    // Tests use the in-memory default to stay offline; the real Redis
+    // wiring is exercised by hand or in a future integration suite
+    // when the throttler logic itself needs coverage.
     ThrottlerModule.forRootAsync({
       inject: [ConfigService, RedisService],
-      useFactory: (config: ConfigService<{ app: AppConfig }, true>, redis: RedisService) => ({
-        throttlers: [
+      useFactory: (config: ConfigService<{ app: AppConfig }, true>, redis: RedisService) => {
+        const throttlers = [
           {
             ttl: config.get('app.throttler.ttlMs', { infer: true }),
             limit: config.get('app.throttler.limit', { infer: true }),
           },
-        ],
-        storage: new ThrottlerStorageRedisService(redis.client),
-      }),
+        ];
+        if (config.get('app.nodeEnv', { infer: true }) === 'test') {
+          return { throttlers };
+        }
+        return {
+          throttlers,
+          storage: new ThrottlerStorageRedisService(redis.client),
+        };
+      },
     }),
     AuthModule,
     HealthModule,
