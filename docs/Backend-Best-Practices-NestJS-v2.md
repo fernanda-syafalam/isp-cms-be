@@ -121,44 +121,44 @@ src/\
 ├── modules/\
 │ ├── users/\
 │ │ ├── dto/\
-│ │ │ ├── create-user.dto.ts \# input DTO (zod schema + class wrapper)\
-│ │ │ └── user-response.dto.ts \# output DTO (serialisasi)\
-│ │ ├── users.controller.ts \# @Controller — HTTP layer\
-│ │ ├── users.service.ts \# @Injectable — business logic\
-│ │ ├── users.repository.ts \# @Injectable — data access via Drizzle\
-│ │ ├── users.module.ts \# @Module — wiring\
-│ │ └── users.service.spec.ts \# unit test bersebelahan\
+│ │ │ ├── create-user.dto.ts # input DTO (zod schema + class wrapper)\
+│ │ │ └── user-response.dto.ts # output DTO (serialisasi)\
+│ │ ├── users.controller.ts # @Controller — HTTP layer\
+│ │ ├── users.service.ts # @Injectable — business logic\
+│ │ ├── users.repository.ts # @Injectable — data access via Drizzle\
+│ │ ├── users.module.ts # @Module — wiring\
+│ │ └── users.service.spec.ts # unit test bersebelahan\
 │ ├── orders/\
 │ │ └── ... (struktur sama)\
 │ └── billing/\
 │ └── ... (struktur sama)\
 ├── common/\
-│ ├── decorators/ \# @CurrentUser, @Public, dll\
-│ ├── filters/ \# exception filter global\
-│ ├── guards/ \# JwtAuthGuard, RolesGuard\
-│ ├── interceptors/ \# LoggingInterceptor, TransformInterceptor\
-│ ├── pipes/ \# ZodValidationPipe\
-│ └── hooks/ \# Fastify hooks (request-id, dll)\
+│ ├── decorators/ # @CurrentUser, @Public, dll\
+│ ├── filters/ # exception filter global\
+│ ├── guards/ # JwtAuthGuard, RolesGuard\
+│ ├── interceptors/ # LoggingInterceptor, TransformInterceptor\
+│ ├── pipes/ # ZodValidationPipe\
+│ └── hooks/ # Fastify hooks (request-id, dll)\
 ├── config/\
-│ ├── env.schema.ts \# zod schema untuk env\
-│ └── configuration.ts \# typed config object\
+│ ├── env.schema.ts # zod schema untuk env\
+│ └── configuration.ts # typed config object\
 ├── infrastructure/\
 │ ├── database/\
-│ │ ├── schema/ \# Drizzle pgTable schema\
+│ │ ├── schema/ # Drizzle pgTable schema\
 │ │ │ ├── users.schema.ts\
 │ │ │ ├── orders.schema.ts\
-│ │ │ └── index.ts \# re-export semua schema\
-│ │ ├── drizzle.service.ts \# wrapper koneksi\
-│ │ └── drizzle.module.ts \# @Global module\
+│ │ │ └── index.ts # re-export semua schema\
+│ │ ├── drizzle.service.ts # wrapper koneksi\
+│ │ └── drizzle.module.ts # @Global module\
 │ ├── redis/\
 │ │ ├── redis.service.ts\
 │ │ └── redis.module.ts\
 │ ├── queue/\
-│ │ └── queue.module.ts \# BullMQ root config\
+│ │ └── queue.module.ts # BullMQ root config\
 │ └── logger/\
-│ └── logger.module.ts \# nestjs-pino config\
-├── app.module.ts \# composition root\
-└── main.ts \# bootstrap (Fastify adapter)
+│ └── logger.module.ts # nestjs-pino config\
+├── app.module.ts # composition root\
+└── main.ts # bootstrap (Fastify adapter)
 
 Catatan: di project kecil-menengah, gabungkan dto/, users.controller.ts, dst di satu folder seperti di atas. Di project besar dengan domain kompleks, boleh tambah subfolder domain/ untuk value objects dan domain events. Jangan over-engineer di awal.
 
@@ -175,20 +175,20 @@ import { ConfigService } from '@nestjs/config'**;**\
 import type { AppConfig } from './config/configuration'**;**\
 \
 **async** **function** **bootstrap**() {\
-**const** app **=** **await** NestFactory**.create\<**NestFastifyApplication**\>**(\
+**const** app **=** **await** NestFactory**.create<**NestFastifyApplication**>**(\
 AppModule**,**\
 **new** **FastifyAdapter**({\
 logger**:** **false,** *// logging di-handle nestjs-pino*\
 trustProxy**:** **true,** *// di belakang ALB/ingress*\
 bodyLimit**:** 1_048_576**,** *// 1 MB; naikkan eksplisit kalau perlu*\
-genReqId**:** (req) **=\>** req**.**headers\['x-request-id'\]**?.toString**() **??** crypto**.randomUUID**()**,**\
+genReqId**:** (req) **=>** req**.**headers\['x-request-id'\]**?.toString**() **??** crypto**.randomUUID**()**,**\
 })**,**\
 { bufferLogs**:** **true** }**,** *// tahan log sampai logger siap*\
 )**;**\
 \
 app**.useLogger**(app**.get**(Logger))**;**\
 \
-**const** config **=** app**.get**(ConfigService**\<**AppConfig**,** **true\>**)**;**\
+**const** config **=** app**.get**(ConfigService**<**AppConfig**,** **true>**)**;**\
 \
 *// Plugin Fastify — register lewat HTTP adapter*\
 **await** app**.register**(helmet**,** { contentSecurityPolicy**:** **false** })**;**\
@@ -250,18 +250,18 @@ JWT_EXPIRES_IN**:** z**.string**()**.default**('15m')**,**\
 OTEL_EXPORTER_OTLP_ENDPOINT**:** z**.string**()**.url**()**.optional**()**,**\
 LOG_LEVEL**:** z**.enum**(\['fatal'**,** 'error'**,** 'warn'**,** 'info'**,** 'debug'**,** 'trace'\])**.default**('info')**,**\
 \
-CORS_ORIGINS**:** z**.string**()**.transform**((s) **=\>** s**.split**(',')**.map**((o) **=\>** o**.trim**()))**,**\
+CORS_ORIGINS**:** z**.string**()**.transform**((s) **=>** s**.split**(',')**.map**((o) **=>** o**.trim**()))**,**\
 })**;**\
 \
-export type Env **=** z**.**infer**\<typeof** envSchema**\>;**
+export type Env **=** z**.**infer**<typeof** envSchema**>;**
 
 *// src/config/configuration.ts*\
 import { registerAs } from '@nestjs/config'**;**\
 import { envSchema } from './env.schema'**;**\
 \
-export type AppConfig **=** ReturnType**\<typeof** appConfig**\>;**\
+export type AppConfig **=** ReturnType**<typeof** appConfig**>;**\
 \
-export **const** appConfig **=** **registerAs**('app'**,** () **=\>** {\
+export **const** appConfig **=** **registerAs**('app'**,** () **=>** {\
 **const** env **=** envSchema**.parse**(process**.**env)**;** *// parse, jangan cuma cast — supaya nilai ter-coerce (number, array) sampai ke config object.*\
 **return** {\
 nodeEnv**:** env**.**NODE_ENV**,**\
@@ -285,7 +285,7 @@ imports**:** \[\
 ConfigModule**.forRoot**({\
 isGlobal**:** **true,**\
 load**:** \[appConfig\]**,**\
-validate**:** (raw) **=\>** envSchema**.parse**(raw)**,** *// gagal startup kalau invalid*\
+validate**:** (raw) **=>** envSchema**.parse**(raw)**,** *// gagal startup kalau invalid*\
 })**,**\
 *// ... module lain*\
 \]**,**\
@@ -321,7 +321,7 @@ export **class** DrizzleModule {}
 
 - **Logic bisnis di controller.** Controller tidak boleh tahu apapun selain HTTP. Kalau Anda nulis if (user.role === 'admin') di controller, itu di service.
 
-- **ConfigService.get('foo') tanpa generic atau getOrThrow.** Return type jadi any \| undefined, type safety hilang. Pakai getOrThrow atau get\<T\>('foo', { infer: true }).
+- **ConfigService.get('foo') tanpa generic atau getOrThrow.** Return type jadi any \| undefined, type safety hilang. Pakai getOrThrow atau get<T>('foo', { infer: true }).
 
 ### Definition of Done — Pilar 1
 
@@ -383,7 +383,7 @@ role**:** z**.enum**(\['admin'**,** 'staff'**,** 'customer'\])**.default**('cust
 })**.strict**()**;** *// strict() menolak field tak dikenal — penting*\
 \
 export **class** CreateUserDto **extends** **createZodDto**(CreateUserSchema) {}\
-export type CreateUserInput **=** z**.**infer**\<typeof** CreateUserSchema**\>;**
+export type CreateUserInput **=** z**.**infer**<typeof** CreateUserSchema**>;**
 
 *// src/modules/users/dto/user-response.dto.ts*\
 import { createZodDto } from 'nestjs-zod'**;**\
@@ -398,7 +398,7 @@ createdAt**:** z**.string**()**.datetime**()**,**\
 })**;**\
 \
 export **class** UserResponseDto **extends** **createZodDto**(UserResponseSchema) {}\
-export type UserResponse **=** z**.**infer**\<typeof** UserResponseSchema**\>;**
+export type UserResponse **=** z**.**infer**<typeof** UserResponseSchema**>;**
 
 Register ZodValidationPipe global, sekali di AppModule:
 
@@ -431,13 +431,13 @@ export **class** UsersController {\
 @**Post**()\
 @**HttpCode**(HttpStatus**.**CREATED)\
 @**ZodSerializerDto**(UserResponseDto)\
-**create**(@**Body**() body**:** CreateUserDto)**:** Promise**\<**UserResponseDto**\>** {\
+**create**(@**Body**() body**:** CreateUserDto)**:** Promise**<**UserResponseDto**>** {\
 **return** **this.**users**.create**(body)**;**\
 }\
 \
 @**Get**(':id')\
 @**ZodSerializerDto**(UserResponseDto)\
-**findOne**(@**Param**('id') id**:** string)**:** Promise**\<**UserResponseDto**\>** {\
+**findOne**(@**Param**('id') id**:** string)**:** Promise**<**UserResponseDto**>** {\
 **return** **this.**users**.findById**(id)**;**\
 }\
 }
@@ -457,13 +457,13 @@ role**:** 'admin' **\|** 'staff' **\|** 'customer'**;**\
 }\
 \
 export **const** CurrentUser **=** **createParamDecorator**(\
-(\_data**:** unknown**,** ctx**:** ExecutionContext)**:** AuthUser **=\>** {\
-**const** req **=** ctx**.switchToHttp**()**.getRequest\<**FastifyRequest **&** { user**:** AuthUser }**\>**()**;**\
+(\_data**:** unknown**,** ctx**:** ExecutionContext)**:** AuthUser **=>** {\
+**const** req **=** ctx**.switchToHttp**()**.getRequest<**FastifyRequest **&** { user**:** AuthUser }**>**()**;**\
 **return** req**.**user**;**\
 }**,**\
 )**;**
 
-Catatan: getRequest\<FastifyRequest\>() — pakai type Fastify, bukan Express Request. Property req.user di-set oleh JwtAuthGuard (lihat Pilar 4).
+Catatan: getRequest<FastifyRequest>() — pakai type Fastify, bukan Express Request. Property req.user di-set oleh JwtAuthGuard (lihat Pilar 4).
 
 ### Exception filter global (RFC 7807)
 
@@ -490,8 +490,8 @@ export **class** AllExceptionsFilter **implements** ExceptionFilter {\
 \
 **catch**(exception**:** unknown**,** host**:** ArgumentsHost)**:** void {\
 **const** ctx **=** host**.switchToHttp**()**;**\
-**const** reply **=** ctx**.getResponse\<**FastifyReply**\>**()**;**\
-**const** req **=** ctx**.getRequest\<**FastifyRequest**\>**()**;**\
+**const** reply **=** ctx**.getResponse<**FastifyReply**>**()**;**\
+**const** req **=** ctx**.getRequest<**FastifyRequest**>**()**;**\
 \
 **let** status **=** HttpStatus**.**INTERNAL_SERVER_ERROR**;**\
 **let** title **=** 'Internal Server Error'**;**\
@@ -507,7 +507,7 @@ status **=** exception**.getStatus**()**;**\
 **const** res **=** exception**.getResponse**()**;**\
 title **=** exception**.**message**;**\
 detail **=** **typeof** res **===** 'object' **&&** res **&&** 'detail' **in** res\
-**?** String((res as Record**\<**string**,** unknown**\>**)**.**detail) **:** undefined**;**\
+**?** String((res as Record**<**string**,** unknown**>**)**.**detail) **:** undefined**;**\
 } **else** **if** (exception **instanceof** Error) {\
 **this.**logger**.error**({ err**:** exception }**,** 'unhandled exception')**;**\
 detail **=** req**.**url**;** *// jangan expose stack ke client*\
@@ -548,15 +548,15 @@ export **class** LoggingInterceptor **implements** NestInterceptor {\
 **this.**logger**.setContext**('HTTP')**;**\
 }\
 \
-**intercept**(ctx**:** ExecutionContext**,** next**:** CallHandler)**:** Observable**\<**unknown**\>** {\
-**const** req **=** ctx**.switchToHttp**()**.getRequest\<**FastifyRequest**\>**()**;**\
-**const** reply **=** ctx**.switchToHttp**()**.getResponse\<**FastifyReply**\>**()**;**\
+**intercept**(ctx**:** ExecutionContext**,** next**:** CallHandler)**:** Observable**<**unknown**>** {\
+**const** req **=** ctx**.switchToHttp**()**.getRequest<**FastifyRequest**>**()**;**\
+**const** reply **=** ctx**.switchToHttp**()**.getResponse<**FastifyReply**>**()**;**\
 **const** start **=** process**.hrtime.bigint**()**;**\
 \
 **return** next**.handle**()**.pipe**(\
 **tap**({\
-next**:** () **=\>** **this.logComplete**(req**,** reply**,** start)**,**\
-error**:** (err) **=\>** **this.logComplete**(req**,** reply**,** start**,** err)**,**\
+next**:** () **=>** **this.logComplete**(req**,** reply**,** start)**,**\
+error**:** (err) **=>** **this.logComplete**(req**,** reply**,** start**,** err)**,**\
 })**,**\
 )**;**\
 }\
@@ -582,7 +582,7 @@ imports**:** \[\
 ThrottlerModule**.forRootAsync**({\
 imports**:** \[RedisModule\]**,**\
 inject**:** \[RedisService\]**,**\
-useFactory**:** (redis**:** RedisService) **=\>** ({\
+useFactory**:** (redis**:** RedisService) **=>** ({\
 throttlers**:** \[{ ttl**:** 60_000**,** limit**:** 100 }\]**,** *// 100 req/menit*\
 storage**:** **new** **ThrottlerStorageRedisService**(redis**.**client)**,**\
 })**,**\
@@ -698,7 +698,7 @@ limit**:** z**.**coerce**.number**()**.int**()**.min**(1)**.max**(100)**.default
 \
 export **class** CursorQueryDto **extends** **createZodDto**(CursorQuerySchema) {}\
 \
-export **interface** CursorPage**\<**T**\>** {\
+export **interface** CursorPage**<**T**>** {\
 items**:** T\[\]**;**\
 nextCursor**:** string **\|** null**;**\
 }
@@ -778,7 +778,7 @@ Tiga prinsip yang harus di-internalize: 1. **Schema adalah single source of trut
 
 - **DrizzleService membungkus pool dan client drizzle().** Repository inject DrizzleService, bukan db global.
 
-- **Transaction selalu pakai db.transaction(async (tx) =\> …)**. Service yang butuh transaction terima tx opsional sebagai parameter, atau pakai AsyncLocalStorage pattern (lihat di bawah).
+- **Transaction selalu pakai db.transaction(async (tx) => …)**. Service yang butuh transaction terima tx opsional sebagai parameter, atau pakai AsyncLocalStorage pattern (lihat di bawah).
 
 - **Tidak ada db.execute(sql\raw…\`)\` untuk query bisnis.** Itu escape hatch untuk fitur yang Drizzle belum dukung (window function eksotik, vendor-specific). Default: query builder.
 
@@ -809,13 +809,13 @@ createdAt**:** **timestamp**('created_at'**,** { withTimezone**:** **true** })**
 updatedAt**:** **timestamp**('updated_at'**,** { withTimezone**:** **true** })**.notNull**()**.defaultNow**()**,**\
 deletedAt**:** **timestamp**('deleted_at'**,** { withTimezone**:** **true** })**,**\
 }**,**\
-(t) **=\>** ({\
+(t) **=>** ({\
 createdAtIdx**:** **index**('users_created_at_idx')**.on**(t**.**createdAt)**,**\
 emailIdx**:** **index**('users_email_idx')**.on**(t**.**email)**,**\
 })**,**\
 )**;**\
 \
-export **const** usersRelations **=** **relations**(users**,** ({ many }) **=\>** ({\
+export **const** usersRelations **=** **relations**(users**,** ({ many }) **=>** ({\
 orders**:** **many**(orders)**,**\
 }))**;**\
 \
@@ -838,7 +838,7 @@ import { Pool } from 'pg'**;**\
 import **\*** as schema from './schema'**;**\
 import type { AppConfig } from '../../config/configuration'**;**\
 \
-export type Db **=** NodePgDatabase**\<typeof** schema**\>;**\
+export type Db **=** NodePgDatabase**<typeof** schema**>;**\
 \
 @**Injectable**()\
 export **class** DrizzleService **implements** OnModuleInit**,** OnModuleDestroy {\
@@ -846,9 +846,9 @@ export **class** DrizzleService **implements** OnModuleInit**,** OnModuleDestroy
 **private** pool**!:** Pool**;**\
 **public** db**!:** Db**;**\
 \
-**constructor**(**private** **readonly** config**:** ConfigService**\<**AppConfig**,** **true\>**) {}\
+**constructor**(**private** **readonly** config**:** ConfigService**<**AppConfig**,** **true>**) {}\
 \
-**async** **onModuleInit**()**:** Promise**\<**void**\>** {\
+**async** **onModuleInit**()**:** Promise**<**void**>** {\
 **this.**pool **=** **new** **Pool**({\
 connectionString**:** **this.**config**.get**('database.url'**,** { infer**:** **true** })**,**\
 max**:** **this.**config**.get**('database.poolSize'**,** { infer**:** **true** })**,**\
@@ -863,7 +863,7 @@ connectionTimeoutMillis**:** 5_000**,**\
 **this.**logger**.log**('database pool initialized')**;**\
 }\
 \
-**async** **onModuleDestroy**()**:** Promise**\<**void**\>** {\
+**async** **onModuleDestroy**()**:** Promise**<**void**>** {\
 **await** **this.**pool**?.end**()**;**\
 **this.**logger**.log**('database pool closed')**;**\
 }\
@@ -886,7 +886,7 @@ export **class** UsersRepository {\
 \
 **private** **get** **db**()**:** Db { **return** **this.**drizzle**.**db**;** }\
 \
-**async** **findById**(id**:** string)**:** Promise**\<**User **\|** null**\>** {\
+**async** **findById**(id**:** string)**:** Promise**<**User **\|** null**>** {\
 **const** \[row\] **=** **await** **this.**db\
 **.select**()\
 **.from**(users)\
@@ -895,7 +895,7 @@ export **class** UsersRepository {\
 **return** row **??** **null;**\
 }\
 \
-**async** **findByEmail**(email**:** string)**:** Promise**\<**User **\|** null**\>** {\
+**async** **findByEmail**(email**:** string)**:** Promise**<**User **\|** null**>** {\
 **const** \[row\] **=** **await** **this.**db\
 **.select**()\
 **.from**(users)\
@@ -904,12 +904,12 @@ export **class** UsersRepository {\
 **return** row **??** **null;**\
 }\
 \
-**async** **create**(input**:** NewUser)**:** Promise**\<**User**\>** {\
+**async** **create**(input**:** NewUser)**:** Promise**<**User**>** {\
 **const** \[row\] **=** **await** **this.**db**.insert**(users)**.values**(input)**.returning**()**;**\
 **return** row**;**\
 }\
 \
-**async** **listPage**(cursor**:** string **\|** undefined**,** limit**:** number)**:** Promise**\<**CursorPage**\<**User**\>\>** {\
+**async** **listPage**(cursor**:** string **\|** undefined**,** limit**:** number)**:** Promise**<**CursorPage**<**User**>>** {\
 **const** decoded **=** cursor **?** **decodeCursor**(cursor) **:** null**;**\
 \
 **const** rows **=** **await** **this.**db\
@@ -930,11 +930,11 @@ decoded\
 **.limit**(limit **+** 1)**;**\
 \
 **const** items **=** rows**.slice**(0**,** limit)**;**\
-**const** next **=** rows**.**length **\>** limit **?** **encodeCursor**(items\[items**.**length **-** 1\]) **:** null**;**\
+**const** next **=** rows**.**length **>** limit **?** **encodeCursor**(items\[items**.**length **-** 1\]) **:** null**;**\
 **return** { items**,** nextCursor**:** next }**;**\
 }\
 \
-**async** **softDelete**(id**:** string)**:** Promise**\<**void**\>** {\
+**async** **softDelete**(id**:** string)**:** Promise**<**void**>** {\
 **const** res **=** **await** **this.**db\
 **.update**(users)\
 **.set**({ deletedAt**:** **sql**\`now()\` })\
@@ -943,7 +943,7 @@ decoded\
 }\
 }\
 \
-**function** **encodeCursor**(u**:** Pick**\<**User**,** 'id' **\|** 'createdAt'**\>**)**:** string {\
+**function** **encodeCursor**(u**:** Pick**<**User**,** 'id' **\|** 'createdAt'**>**)**:** string {\
 **return** Buffer**.from**(JSON**.stringify**({ id**:** u**.**id**,** createdAt**:** u**.**createdAt**.toISOString**() }))**.toString**('base64url')**;**\
 }\
 **function** **decodeCursor**(s**:** string)**:** { id**:** string**;** createdAt**:** Date } {\
@@ -959,8 +959,8 @@ Tiga skenario, tiga pendekatan:
 
 **Sederhana — semua query ada di satu method.**
 
-**async** **transferCredit**(fromId**:** string**,** toId**:** string**,** amount**:** number)**:** Promise**\<**void**\>** {\
-**await** **this.**db**.transaction**(**async** (tx) **=\>** {\
+**async** **transferCredit**(fromId**:** string**,** toId**:** string**,** amount**:** number)**:** Promise**<**void**>** {\
+**await** **this.**db**.transaction**(**async** (tx) **=>** {\
 **await** tx**.update**(accounts)**.set**({ balance**:** **sql**\`**\${**accounts**.**balance**}** - **\${**amount**}**\` })**.where**(**eq**(accounts**.**id**,** fromId))**;**\
 **await** tx**.update**(accounts)**.set**({ balance**:** **sql**\`**\${**accounts**.**balance**}** + **\${**amount**}**\` })**.where**(**eq**(accounts**.**id**,** toId))**;**\
 })**;**\
@@ -969,7 +969,7 @@ Tiga skenario, tiga pendekatan:
 **Cross-repository — tx dipropagasi sebagai parameter opsional.**
 
 *// repository*\
-**async** **create**(input**:** NewOrder**,** tx**?:** Db)**:** Promise**\<**Order**\>** {\
+**async** **create**(input**:** NewOrder**,** tx**?:** Db)**:** Promise**<**Order**>** {\
 **const** exec **=** tx **??** **this.**drizzle**.**db**;**\
 **const** \[row\] **=** **await** exec**.insert**(orders)**.values**(input)**.returning**()**;**\
 **return** row**;**\
@@ -977,9 +977,9 @@ Tiga skenario, tiga pendekatan:
 \
 *// service*\
 **async** **checkout**(userId**:** string**,** items**:** CartItem\[\]) {\
-**return** **this.**drizzle**.**db**.transaction**(**async** (tx) **=\>** {\
+**return** **this.**drizzle**.**db**.transaction**(**async** (tx) **=>** {\
 **const** order **=** **await** **this.**ordersRepo**.create**({ userId**,** **...** }**,** tx)**;**\
-**await** **this.**itemsRepo**.bulkCreate**(items**.map**((i) **=\>** ({ **...**i**,** orderId**:** order**.**id }))**,** tx)**;**\
+**await** **this.**itemsRepo**.bulkCreate**(items**.map**((i) **=>** ({ **...**i**,** orderId**:** order**.**id }))**,** tx)**;**\
 **await** **this.**eventsRepo**.append**({ type**:** 'order.placed'**,** orderId**:** order**.**id }**,** tx)**;**\
 **return** order**;**\
 })**;**\
@@ -1003,14 +1003,14 @@ export **class** UsersService {\
 \
 **async** **findById**(id**:** string) {\
 **const** key **=** \`user:**\${**id**}**\`**;**\
-**const** cached **=** **await** **this.**cache**.get\<**User**\>**(key)**;**\
+**const** cached **=** **await** **this.**cache**.get<**User**>**(key)**;**\
 **if** (cached) **return** cached**;**\
 **const** user **=** **await** **this.**repo**.findById**(id)**;**\
 **if** (user) **await** **this.**cache**.set**(key**,** user**,** 60_000)**;** *// 60 detik*\
 **return** user**;**\
 }\
 \
-**async** **update**(id**:** string**,** patch**:** Partial**\<**NewUser**\>**) {\
+**async** **update**(id**:** string**,** patch**:** Partial**<**NewUser**>**) {\
 **const** updated **=** **await** **this.**repo**.update**(id**,** patch)**;**\
 **await** **this.**cache**.del**(\`user:**\${**id**}**\`)**;** *// invalidate*\
 **return** updated**;**\
@@ -1180,7 +1180,7 @@ export **class** JwtAuthGuard **extends** **AuthGuard**('jwt') {\
 **constructor**(**private** **readonly** reflector**:** Reflector) { **super**()**;** }\
 \
 **canActivate**(context**:** ExecutionContext) {\
-**const** isPublic **=** **this.**reflector**.getAllAndOverride\<**boolean**\>**(IS_PUBLIC_KEY**,** \[\
+**const** isPublic **=** **this.**reflector**.getAllAndOverride<**boolean**>**(IS_PUBLIC_KEY**,** \[\
 context**.getHandler**()**,** context**.getClass**()**,**\
 \])**;**\
 **if** (isPublic) **return** **true;**\
@@ -1191,7 +1191,7 @@ context**.getHandler**()**,** context**.getClass**()**,**\
 *// src/common/decorators/public.decorator.ts*\
 import { SetMetadata } from '@nestjs/common'**;**\
 export **const** IS_PUBLIC_KEY **=** 'isPublic'**;**\
-export **const** Public **=** () **=\>** **SetMetadata**(IS_PUBLIC_KEY**,** **true**)**;**
+export **const** Public **=** () **=>** **SetMetadata**(IS_PUBLIC_KEY**,** **true**)**;**
 
 Register global:
 
@@ -1224,7 +1224,7 @@ import type { FastifyRequest } from 'fastify'**;**\
 import type { AuthUser } from '../decorators/current-user.decorator'**;**\
 \
 export **const** ROLES_KEY **=** 'roles'**;**\
-export **const** Roles **=** (**...**roles**:** AuthUser\['role'\]\[\]) **=\>**\
+export **const** Roles **=** (**...**roles**:** AuthUser\['role'\]\[\]) **=>**\
 **SetMetadata**(ROLES_KEY**,** roles)**;** *// pakai SetMetadata, konsisten dengan @Public; Reflect.metadata adalah factory style yang berbeda perilakunya.*\
 \
 @**Injectable**()\
@@ -1232,11 +1232,11 @@ export **class** RolesGuard **implements** CanActivate {\
 **constructor**(**private** **readonly** reflector**:** Reflector) {}\
 \
 **canActivate**(ctx**:** ExecutionContext)**:** boolean {\
-**const** required **=** **this.**reflector**.getAllAndOverride\<**AuthUser\['role'\]\[\]**\>**(\
+**const** required **=** **this.**reflector**.getAllAndOverride<**AuthUser\['role'\]\[\]**>**(\
 ROLES_KEY**,** \[ctx**.getHandler**()**,** ctx**.getClass**()\]**,**\
 )**;**\
 **if** (**!**required**?.**length) **return** **true;**\
-**const** req **=** ctx**.switchToHttp**()**.getRequest\<**FastifyRequest **&** { user**:** AuthUser }**\>**()**;**\
+**const** req **=** ctx**.switchToHttp**()**.getRequest<**FastifyRequest **&** { user**:** AuthUser }**>**()**;**\
 **if** (**!**required**.includes**(req**.**user**.**role)) {\
 **throw** **new** **ForbiddenException**('insufficient role')**;**\
 }\
@@ -1256,7 +1256,7 @@ export **class** AdminController {\
 
 RolesGuard tidak tahu konteks resource. “Customer hanya boleh lihat order miliknya” adalah authorization fine-grained — itu di service.
 
-**async** **getOrder**(id**:** string**,** user**:** AuthUser)**:** Promise**\<**Order**\>** {\
+**async** **getOrder**(id**:** string**,** user**:** AuthUser)**:** Promise**<**Order**>** {\
 **const** order **=** **await** **this.**repo**.findById**(id)**;**\
 **if** (**!**order) **throw** **new** **NotFoundException**()**;**\
 **if** (user**.**role **!==** 'admin' **&&** order**.**userId **!==** user**.**id) {\
@@ -1281,7 +1281,7 @@ import type { AuthUser } from '../../common/decorators/current-user.decorator'**
 @**Injectable**()\
 export **class** JwtStrategy **extends** **PassportStrategy**(Strategy) {\
 **constructor**(\
-config**:** ConfigService**\<**AppConfig**,** **true\>,**\
+config**:** ConfigService**<**AppConfig**,** **true>,**\
 **private** **readonly** users**:** UsersService**,**\
 ) {\
 **super**({\
@@ -1291,14 +1291,14 @@ ignoreExpiration**:** **false,**\
 })**;**\
 }\
 \
-**async** **validate**(payload**:** JwtPayload)**:** Promise**\<**AuthUser**\>** {\
+**async** **validate**(payload**:** JwtPayload)**:** Promise**<**AuthUser**>** {\
 *// Cache user object 60s — tanpa cache, setiap request hit DB. Untuk service high-RPS itu mahal._\
 **const** cacheKey **=** \`auth:user:**\${**payload**.**sub**}**\`**;**\
-**const** cached **=** **await** **this.**cache**.get\<**AuthUser**\>**(cacheKey)**;**\
+**const** cached **=** **await** **this.**cache**.get<**AuthUser**>**(cacheKey)**;**\
 **if** (cached) **return** cached**;**\
 \
 **const** user **=** **await** **this.**users**.findById**(payload**.**sub)**;**\
-**if** (**!**user **\|\|** user**.**deletedAt) **throw** **new** **UnauthorizedException**()**;**\
+**if** (**!**user **||** user**.**deletedAt) **throw** **new** **UnauthorizedException**()**;**\
 \
 **const** auth**:** AuthUser **=** { id**:** user**.**id**,** email**:** user**.**email**,** role**:** user**.**role }**;**\
 **await** **this.**cache**.set**(cacheKey**,** auth**,** 60_000)**;** *// 60s_\
@@ -1347,7 +1347,7 @@ import { PinoLogger } from 'nestjs-pino'**;**\
 import { Observable**,** tap } from 'rxjs'**;**\
 \
 export **const** AUDIT_KEY **=** 'audit'**;**\
-export **const** Audit **=** (action**:** string) **=\>** **SetMetadata**(AUDIT_KEY**,** action)**;**\
+export **const** Audit **=** (action**:** string) **=>** **SetMetadata**(AUDIT_KEY**,** action)**;**\
 \
 @**Injectable**()\
 export **class** AuditInterceptor **implements** NestInterceptor {\
@@ -1355,15 +1355,15 @@ export **class** AuditInterceptor **implements** NestInterceptor {\
 **this.**logger**.setContext**('audit')**;**\
 }\
 \
-**intercept**(ctx**:** ExecutionContext**,** next**:** CallHandler)**:** Observable**\<**unknown**\>** {\
-**const** action **=** **this.**reflector**.get\<**string**\>**(AUDIT_KEY**,** ctx**.getHandler**())**;**\
+**intercept**(ctx**:** ExecutionContext**,** next**:** CallHandler)**:** Observable**<**unknown**>** {\
+**const** action **=** **this.**reflector**.get<**string**>**(AUDIT_KEY**,** ctx**.getHandler**())**;**\
 **if** (**!**action) **return** next**.handle**()**;**\
 \
 **const** req **=** ctx**.switchToHttp**()**.getRequest**()**;**\
 **return** next**.handle**()**.pipe**(\
 **tap**({\
-next**:** () **=\>** **this.**logger**.info**({ audit**:** **true,** action**,** actor**:** req**.**user**?.**id**,** target**:** req**.**params**,** outcome**:** 'success' })**,**\
-error**:** (err) **=\>** **this.**logger**.warn**({ audit**:** **true,** action**,** actor**:** req**.**user**?.**id**,** target**:** req**.**params**,** outcome**:** 'failure'**,** err**:** err**.**message })**,**\
+next**:** () **=>** **this.**logger**.info**({ audit**:** **true,** action**,** actor**:** req**.**user**?.**id**,** target**:** req**.**params**,** outcome**:** 'success' })**,**\
+error**:** (err) **=>** **this.**logger**.warn**({ audit**:** **true,** action**,** actor**:** req**.**user**?.**id**,** target**:** req**.**params**,** outcome**:** 'failure'**,** err**:** err**.**message })**,**\
 })**,**\
 )**;**\
 }\
@@ -1376,15 +1376,18 @@ error**:** (err) **=\>** **this.**logger**.warn**({ audit**:** **true,** action*
 
 ### OWASP Top 10 — checklist NestJS+Fastify+Drizzle
 
-| \# | Item | Bagaimana ditangani |
-|----|----|----|
-| A01 Broken Access Control | RBAC via guard + ownership check di service. Default deny (JwtAuthGuard global). |  |
-| A02 Cryptographic Failures | TLS di edge. JWT signing dengan secret kuat (32+ char). Password argon2id. PII tidak di-log. |  |
-| A03 Injection | Drizzle parameterized queries by default. Tidak ada string-concat di sql\\. zod validate input di pipe. \| \| A04 Insecure Design \| Threat modeling untuk fitur baru (terutama auth, payment). Idempotency-Key untuk operasi keuangan. \| \| A05 Security Misconfiguration \| Helmet aktif, CORS whitelist, secret di env, debug tidak di-leak ke client (filter eksposdetailsaja, bukan stack). \| \| A06 Vulnerable Components \| Dependency scan di CI (pnpm audit\`, Snyk, atau Dependabot). Lockfile di-commit. |  |
-| A07 Identification & Auth Failures | Refresh token rotating, lockout setelah N failed login (Redis counter), 2FA untuk admin. |  |
-| A08 Software & Data Integrity | Image Docker signed, supply chain via SLSA (kalau matur). Lockfile + integrity check di-enforce. |  |
-| A09 Logging & Monitoring Failures | Structured log dengan request-id, audit log untuk operasi sensitif, alert di anomaly. |  |
-| A10 SSRF | Outbound request hanya ke allowlist domain. URL dari user di-validate dengan zod (regex domain) sebelum fetch. |  |
+| Item | Bagaimana ditangani |
+|------|---------------------|
+| A01 Broken Access Control | RBAC via guard + ownership check di service. Default deny (JwtAuthGuard global). |
+| A02 Cryptographic Failures | TLS di edge. JWT signing dengan secret kuat (32+ char). Password argon2id. PII tidak di-log. |
+| A03 Injection | Drizzle parameterized queries by default. Tidak ada string-concat di `sql\` template. zod validate input di pipe. |
+| A04 Insecure Design | Threat modeling untuk fitur baru (terutama auth, payment). Idempotency-Key untuk operasi keuangan. |
+| A05 Security Misconfiguration | Helmet aktif, CORS whitelist, secret di env, debug tidak di-leak ke client (filter expose `detail` saja, bukan stack). |
+| A06 Vulnerable Components | Dependency scan di CI (`pnpm audit`, Snyk, atau Dependabot). Lockfile di-commit. |
+| A07 Identification & Auth Failures | Refresh token rotating, lockout setelah N failed login (Redis counter), 2FA untuk admin. |
+| A08 Software & Data Integrity | Image Docker signed, supply chain via SLSA (kalau matur). Lockfile + integrity check di-enforce. |
+| A09 Logging & Monitoring Failures | Structured log dengan request-id, audit log untuk operasi sensitif, alert di anomaly. |
+| A10 SSRF | Outbound request hanya ke allowlist domain. URL dari user di-validate dengan zod (regex domain) sebelum fetch. |
 
 ### Anti-pattern
 
@@ -1498,12 +1501,12 @@ import { UsersService } from './users.service'**;**\
 import { UsersRepository } from './users.repository'**;**\
 import { CACHE_MANAGER } from '@nestjs/cache-manager'**;**\
 \
-**describe**('UsersService'**,** () **=\>** {\
+**describe**('UsersService'**,** () **=>** {\
 **let** service**:** UsersService**;**\
-**let** repo**:** { findById**:** ReturnType**\<typeof** vi**.**fn**\>;** create**:** ReturnType**\<typeof** vi**.**fn**\>** }**;**\
-**let** cache**:** { **get:** ReturnType**\<typeof** vi**.**fn**\>;** **set:** ReturnType**\<typeof** vi**.**fn**\>;** del**:** ReturnType**\<typeof** vi**.**fn**\>** }**;**\
+**let** repo**:** { findById**:** ReturnType**<typeof** vi**.**fn**>;** create**:** ReturnType**<typeof** vi**.**fn**>** }**;**\
+**let** cache**:** { **get:** ReturnType**<typeof** vi**.**fn**>;** **set:** ReturnType**<typeof** vi**.**fn**>;** del**:** ReturnType**<typeof** vi**.**fn**>** }**;**\
 \
-**beforeEach**(**async** () **=\>** {\
+**beforeEach**(**async** () **=>** {\
 repo **=** { findById**:** vi**.fn**()**,** create**:** vi**.fn**() }**;**\
 cache **=** { **get:** vi**.fn**()**,** **set:** vi**.fn**()**,** del**:** vi**.fn**() }**;**\
 \
@@ -1518,14 +1521,14 @@ UsersService**,**\
 service **=** module**.get**(UsersService)**;**\
 })**;**\
 \
-**it**('returns cached user when present'**,** **async** () **=\>** {\
+**it**('returns cached user when present'**,** **async** () **=>** {\
 cache**.**get**.mockResolvedValue**({ id**:** '1'**,** email**:** 'a@b.com' })**;**\
 **const** out **=** **await** service**.findById**('1')**;**\
 **expect**(out)**.toEqual**({ id**:** '1'**,** email**:** 'a@b.com' })**;**\
 **expect**(repo**.**findById)**.**not**.toHaveBeenCalled**()**;**\
 })**;**\
 \
-**it**('falls back to repo and caches'**,** **async** () **=\>** {\
+**it**('falls back to repo and caches'**,** **async** () **=>** {\
 cache**.**get**.mockResolvedValue**(**null**)**;**\
 repo**.**findById**.mockResolvedValue**({ id**:** '1'**,** email**:** 'a@b.com' })**;**\
 **const** out **=** **await** service**.findById**('1')**;**\
@@ -1545,13 +1548,13 @@ import { Pool } from 'pg'**;**\
 import **\*** as schema from '../../infrastructure/database/schema'**;**\
 import { UsersRepository } from './users.repository'**;**\
 \
-**describe**('UsersRepository (integration)'**,** () **=\>** {\
+**describe**('UsersRepository (integration)'**,** () **=>** {\
 **let** container**:** StartedPostgreSqlContainer**;**\
 **let** pool**:** Pool**;**\
-**let** db**:** NodePgDatabase**\<typeof** schema**\>;**\
+**let** db**:** NodePgDatabase**<typeof** schema**>;**\
 **let** repo**:** UsersRepository**;**\
 \
-**beforeAll**(**async** () **=\>** {\
+**beforeAll**(**async** () **=>** {\
 container **=** **await** **new** **PostgreSqlContainer**('postgres:16-alpine')**.start**()**;**\
 pool **=** **new** **Pool**({ connectionString**:** container**.getConnectionUri**() })**;**\
 db **=** **drizzle**(pool**,** { schema })**;**\
@@ -1559,16 +1562,16 @@ db **=** **drizzle**(pool**,** { schema })**;**\
 \
 *// Bangun DrizzleService minimal yang punya kontrak sama dengan production.*\
 *// Hindari `as never` — itu menyembunyikan drift kalau DrizzleService berubah.*\
-**const** drizzleService**:** Pick**\<**DrizzleService**,** 'db'**\>** **=** { db }**;**\
+**const** drizzleService**:** Pick**<**DrizzleService**,** 'db'**>** **=** { db }**;**\
 repo **=** **new** **UsersRepository**(drizzleService as DrizzleService)**;**\
 }**,** 60_000)**;**\
 \
-**afterAll**(**async** () **=\>** {\
+**afterAll**(**async** () **=>** {\
 **await** pool**.end**()**;**\
 **await** container**.stop**()**;**\
 })**;**\
 \
-**it**('creates and reads back'**,** **async** () **=\>** {\
+**it**('creates and reads back'**,** **async** () **=>** {\
 **const** created **=** **await** repo**.create**({ email**:** 'a@b.com'**,** fullName**:** 'A B'**,** passwordHash**:** 'x' })**;**\
 **const** got **=** **await** repo**.findByEmail**('a@b.com')**;**\
 **expect**(got**?.**id)**.toBe**(created**.**id)**;**\
@@ -1586,23 +1589,23 @@ import { ValidationPipe**,** INestApplication } from '@nestjs/common'**;**\
 import { describe**,** it**,** expect**,** beforeAll**,** afterAll } from 'vitest'**;**\
 import { AppModule } from '../../src/app.module'**;**\
 \
-**describe**('Users (e2e)'**,** () **=\>** {\
+**describe**('Users (e2e)'**,** () **=>** {\
 **let** app**:** NestFastifyApplication**;**\
 \
-**beforeAll**(**async** () **=\>** {\
+**beforeAll**(**async** () **=>** {\
 **const** mod **=** **await** Test**.createTestingModule**({ imports**:** \[AppModule\] })\
 **.overrideProvider**('SOME_TOKEN')**.useValue**(*/\* fake \*/*)\
 **.compile**()**;**\
 \
-app **=** mod**.createNestApplication\<**NestFastifyApplication**\>**(**new** **FastifyAdapter**())**;**\
+app **=** mod**.createNestApplication<**NestFastifyApplication**>**(**new** **FastifyAdapter**())**;**\
 *// pipe/guard/filter global yang dipakai di main.ts juga harus di-pasang di sini*\
 **await** app**.init**()**;**\
 **await** app**.getHttpAdapter**()**.getInstance**()**.ready**()**;**\
 })**;**\
 \
-**afterAll**(**async** () **=\>** { **await** app**.close**()**;** })**;**\
+**afterAll**(**async** () **=>** { **await** app**.close**()**;** })**;**\
 \
-**it**('POST /v1/users → 201'**,** **async** () **=\>** {\
+**it**('POST /v1/users → 201'**,** **async** () **=>** {\
 **const** res **=** **await** app**.inject**({\
 method**:** 'POST'**,**\
 url**:** '/v1/users'**,**\
@@ -1620,7 +1623,7 @@ headers**:** { 'content-type'**:** 'application/json' }**,**\
 
 **const** mod **=** **await** Test**.createTestingModule**({ imports**:** \[AppModule\] })\
 **.overrideProvider**(ClockService)\
-**.useValue**({ now**:** () **=\>** **new** Date('2026-01-01T00:00:00Z') })\
+**.useValue**({ now**:** () **=>** **new** Date('2026-01-01T00:00:00Z') })\
 **.overrideProvider**(EmailGateway)\
 **.useValue**({ send**:** vi**.fn**()**.mockResolvedValue**({ messageId**:** 'fake' }) })\
 **.compile**()**;**
@@ -1637,23 +1640,23 @@ import { ExecutionContext**,** ForbiddenException } from '@nestjs/common'**;**\
 import { Reflector } from '@nestjs/core'**;**\
 import { RolesGuard } from './roles.guard'**;**\
 \
-**const** ctx **=** (user**:** { role**:** string } **\|** null**,** required**:** string\[\]) **=\>**\
+**const** ctx **=** (user**:** { role**:** string } **\|** null**,** required**:** string\[\]) **=>**\
 ({\
-switchToHttp**:** () **=\>** ({ getRequest**:** () **=\>** ({ user }) })**,**\
-getHandler**:** () **=\>** ({})**,**\
-getClass**:** () **=\>** ({})**,**\
+switchToHttp**:** () **=>** ({ getRequest**:** () **=>** ({ user }) })**,**\
+getHandler**:** () **=>** ({})**,**\
+getClass**:** () **=>** ({})**,**\
 } as unknown as ExecutionContext)**;**\
 \
-**it**('allows when role matches'**,** () **=\>** {\
-**const** reflector **=** { getAllAndOverride**:** () **=\>** \['admin'\] } as unknown as Reflector**;**\
+**it**('allows when role matches'**,** () **=>** {\
+**const** reflector **=** { getAllAndOverride**:** () **=>** \['admin'\] } as unknown as Reflector**;**\
 **const** g **=** **new** **RolesGuard**(reflector)**;**\
 **expect**(g**.canActivate**(**ctx**({ role**:** 'admin' }**,** \['admin'\])))**.toBe**(**true**)**;**\
 })**;**\
 \
-**it**('throws when role does not match'**,** () **=\>** {\
-**const** reflector **=** { getAllAndOverride**:** () **=\>** \['admin'\] } as unknown as Reflector**;**\
+**it**('throws when role does not match'**,** () **=>** {\
+**const** reflector **=** { getAllAndOverride**:** () **=>** \['admin'\] } as unknown as Reflector**;**\
 **const** g **=** **new** **RolesGuard**(reflector)**;**\
-**expect**(() **=\>** g**.canActivate**(**ctx**({ role**:** 'staff' }**,** \['admin'\])))**.toThrow**(ForbiddenException)**;**\
+**expect**(() **=>** g**.canActivate**(**ctx**({ role**:** 'staff' }**,** \['admin'\])))**.toThrow**(ForbiddenException)**;**\
 })**;**
 
 ### Anti-pattern
@@ -1716,7 +1719,7 @@ Tujuan utama: **MTTR rendah**. Saat insiden, 90% waktu hilang karena tidak tahu 
 
 - **Health probe terpisah.** /healthz (liveness) ringan, hanya cek proses hidup. /readyz (readiness) cek dependency (DB ping, Redis ping).
 
-- **SLO didokumentasikan.** Latency p95 di bawah X ms untuk endpoint utama, error rate \< Y%. Alert berdasar SLO, bukan threshold semaunya.
+- **SLO didokumentasikan.** Latency p95 di bawah X ms untuk endpoint utama, error rate < Y%. Alert berdasar SLO, bukan threshold semaunya.
 
 ### Logger production: nestjs-pino
 
@@ -1731,11 +1734,11 @@ imports**:** \[\
 LoggerModule**.forRootAsync**({\
 imports**:** \[ConfigModule\]**,**\
 inject**:** \[ConfigService\]**,**\
-useFactory**:** (config**:** ConfigService**\<**AppConfig**,** **true\>**) **=\>** ({\
+useFactory**:** (config**:** ConfigService**<**AppConfig**,** **true>**) **=>** ({\
 pinoHttp**:** {\
 level**:** config**.get**('logLevel'**,** { infer**:** **true** })**,**\
 autoLogging**:** **true,**\
-customProps**:** (req) **=\>** ({ requestId**:** req**.**id })**,**\
+customProps**:** (req) **=>** ({ requestId**:** req**.**id })**,**\
 redact**:** {\
 paths**:** \[\
 'req.headers.authorization'**,**\
@@ -1748,8 +1751,8 @@ paths**:** \[\
 censor**:** '\[REDACTED\]'**,**\
 }**,**\
 serializers**:** {\
-req**:** (req) **=\>** ({ method**:** req**.**method**,** url**:** req**.**url**,** id**:** req**.**id })**,**\
-res**:** (res) **=\>** ({ statusCode**:** res**.**statusCode })**,**\
+req**:** (req) **=>** ({ method**:** req**.**method**,** url**:** req**.**url**,** id**:** req**.**id })**,**\
+res**:** (res) **=>** ({ statusCode**:** res**.**statusCode })**,**\
 }**,**\
 transport**:** config**.get**('nodeEnv'**,** { infer**:** **true** }) **===** 'development'\
 **?** { target**:** 'pino-pretty'**,** options**:** { singleLine**:** **true** } }\
@@ -1830,8 +1833,8 @@ instrumentations**:** \[\
 \
 otelSdk**.start**()**;**\
 \
-process**.on**('SIGTERM'**,** () **=\>** {\
-otelSdk**.shutdown**()**.catch**(() **=\>** {})**.finally**(() **=\>** process**.exit**(0))**;**\
+process**.on**('SIGTERM'**,** () **=>** {\
+otelSdk**.shutdown**()**.catch**(() **=>** {})**.finally**(() **=>** process**.exit**(0))**;**\
 })**;**
 
 tracing.ts **harus di-import paling awal** — sebelum NestFactory.create, sebelum module apapun yang akan di-instrument.
@@ -1874,7 +1877,7 @@ import { trace } from '@opentelemetry/api'**;**\
 **const** tracer **=** trace**.getTracer**('orders-service')**;**\
 \
 **async** **pricingCalculation**(items**:** CartItem\[\]) {\
-**return** tracer**.startActiveSpan**('pricing.calculate'**,** **async** (span) **=\>** {\
+**return** tracer**.startActiveSpan**('pricing.calculate'**,** **async** (span) **=>** {\
 **try** {\
 span**.setAttribute**('items.count'**,** items**.**length)**;**\
 **const** result **=** **await** **this.calc**(items)**;**\
@@ -1919,8 +1922,8 @@ export **class** HealthController {\
 @**HealthCheck**()\
 **readiness**() {\
 **return** **this.**health**.check**(\[\
-() **=\>** **this.**drizzleH**.pingCheck**('database')**,**\
-() **=\>** **this.**redisH**.pingCheck**('redis')**,**\
+() **=>** **this.**drizzleH**.pingCheck**('database')**,**\
+() **=>** **this.**redisH**.pingCheck**('redis')**,**\
 \])**;**\
 }\
 }
@@ -1939,7 +1942,7 @@ K8s probe wiring ada di Pilar 9.
 
 - **Metric kardinalitas tinggi** (label berisi user-id, order-id). Prometheus/Mimir meledak. Label hanya untuk dimensi rendah-kardinalitas (region, status, route template).
 
-- **Alert on threshold tanpa SLO.** “CPU \> 80% alert” tidak menjawab apakah user terdampak. Alert on SLO (latency p95, error rate).
+- **Alert on threshold tanpa SLO.** “CPU > 80% alert” tidak menjawab apakah user terdampak. Alert on SLO (latency p95, error rate).
 
 ### Definition of Done — Pilar 6
 
@@ -2000,7 +2003,7 @@ imports**:** \[\
 BullModule**.forRootAsync**({\
 imports**:** \[ConfigModule\]**,**\
 inject**:** \[ConfigService\]**,**\
-useFactory**:** (config**:** ConfigService**\<**AppConfig**,** **true\>**) **=\>** ({\
+useFactory**:** (config**:** ConfigService**<**AppConfig**,** **true>**) **=>** ({\
 connection**:** { url**:** config**.get**('redis.url'**,** { infer**:** **true** }) }**,**\
 defaultJobOptions**:** {\
 attempts**:** 3**,**\
@@ -2036,15 +2039,15 @@ import { Queue } from 'bullmq'**;**\
 export **interface** SendEmailJob {\
 to**:** string**;**\
 templateId**:** string**;**\
-variables**:** Record**\<**string**,** string**\>;**\
+variables**:** Record**<**string**,** string**>;**\
 idempotencyKey**:** string**;** *// mis. \\order-confirm:\\{orderId}\\*\
 }\
 \
 @**Injectable**()\
 export **class** EmailService {\
-**constructor**(@**InjectQueue**('email') **private** **readonly** queue**:** Queue**\<**SendEmailJob**\>**) {}\
+**constructor**(@**InjectQueue**('email') **private** **readonly** queue**:** Queue**<**SendEmailJob**>**) {}\
 \
-**async** **sendOrderConfirmation**(orderId**:** string**,** to**:** string**,** vars**:** Record**\<**string**,** string**\>**) {\
+**async** **sendOrderConfirmation**(orderId**:** string**,** to**:** string**,** vars**:** Record**<**string**,** string**>**) {\
 **await** **this.**queue**.add**(\
 'order-confirm'**,**\
 { to**,** templateId**:** 'order-confirm'**,** variables**:** vars**,** idempotencyKey**:** \`order-confirm:**\${**orderId**}**\` }**,**\
@@ -2074,7 +2077,7 @@ export **class** EmailProcessor **extends** WorkerHost {\
 **private** **readonly** sent**:** SentEmailRepository**,**\
 ) { **super**()**;** }\
 \
-**async** process(job**:** Job**\<**SendEmailJob**\>**)**:** Promise**\<**{ messageId**:** string }**\>** {\
+**async** process(job**:** Job**<**SendEmailJob**>**)**:** Promise**<**{ messageId**:** string }**>** {\
 **const** existing **=** **await** **this.**sent**.findByIdempotencyKey**(job**.**data**.**idempotencyKey)**;**\
 **if** (existing) {\
 **this.**logger**.log**({ jobId**:** job**.**id**,** idempotencyKey**:** job**.**data**.**idempotencyKey }**,** 'already sent — skipping')**;**\
@@ -2090,7 +2093,7 @@ messageId**:** result**.**messageId**,**\
 }\
 \
 @**OnWorkerEvent**('failed')\
-**onFailed**(job**:** Job**\<**SendEmailJob**\>,** err**:** Error) {\
+**onFailed**(job**:** Job**<**SendEmailJob**>,** err**:** Error) {\
 **this.**logger**.error**({ jobId**:** job**.**id**,** attemptsMade**:** job**.**attemptsMade**,** err**:** err**.**message }**,** 'email job failed')**;**\
 }\
 }
@@ -2153,8 +2156,8 @@ OTel auto-instrumentation untuk BullMQ belum stabil di semua versi. Tambah span 
 import { trace**,** SpanStatusCode } from '@opentelemetry/api'**;**\
 **const** tracer **=** trace**.getTracer**('email-worker')**;**\
 \
-**async** process(job**:** Job**\<**SendEmailJob**\>**) {\
-**return** tracer**.startActiveSpan**(\`bullmq.process email\`**,** **async** (span) **=\>** {\
+**async** process(job**:** Job**<**SendEmailJob**>**) {\
+**return** tracer**.startActiveSpan**(\`bullmq.process email\`**,** **async** (span) **=>** {\
 span**.setAttribute**('job.id'**,** job**.**id **??** '')**;**\
 span**.setAttribute**('job.attempts'**,** job**.**attemptsMade)**;**\
 **try** {\
@@ -2235,20 +2238,20 @@ Migration adalah **deployment ritual**. Salah migration = downtime atau data los
 
 ### Workflow drizzle-kit
 
-*\# 1. Edit src/infrastructure/database/schema/\*.ts*\
+*# 1. Edit src/infrastructure/database/schema/\*.ts*\
 \
-*\# 2. Generate file migrasi*\
+*# 2. Generate file migrasi*\
 pnpm drizzle-kit generate\
-*\# → menghasilkan drizzle/0007_add_users_phone.sql*\
+*# → menghasilkan drizzle/0007_add_users_phone.sql*\
 \
-*\# 3. Review file SQL — pastikan tidak ada operasi destruktif tak diharapkan*\
+*# 3. Review file SQL — pastikan tidak ada operasi destruktif tak diharapkan*\
 **git** diff drizzle/\
 \
-*\# 4. Commit schema + migration bersama (satu PR)*\
+*# 4. Commit schema + migration bersama (satu PR)*\
 **git** add src/infrastructure/database/schema drizzle/\
 **git** commit -m "feat(users): add phone column"\
 \
-*\# 5. Di pipeline CI/CD, sebelum deploy:*\
+*# 5. Di pipeline CI/CD, sebelum deploy:*\
 pnpm drizzle-kit migrate
 
 Konfigurasi:
@@ -2300,7 +2303,7 @@ Code: tulis ke kedua kolom, baca dari kolom lama.
 
 **ALTER** **TABLE** orders **ADD** **COLUMN** region varchar(2) **NOT** **NULL** **DEFAULT** 'id';
 
-Postgres \< 11 rewrite seluruh tabel (lock). Postgres 11+ optimize default constant, tapi tetap risky kalau default berdasarkan ekspresi atau column lain.
+Postgres < 11 rewrite seluruh tabel (lock). Postgres 11+ optimize default constant, tapi tetap risky kalau default berdasarkan ekspresi atau column lain.
 
 **Benar:**
 
@@ -2336,7 +2339,7 @@ drizzle-kit menghasilkan CREATE INDEX biasa. Tambah CONCURRENTLY manual di file 
 
 ### CI/CD integration
 
-*\# .github/workflows/deploy.yml (potongan)*\
+*# .github/workflows/deploy.yml (potongan)*\
 **jobs:**\
 **deploy:**\
 **steps:**\
@@ -2416,10 +2419,10 @@ Empat hal yang sering jadi penyebab outage: 1. Image bloat → cold-start lambat
 
 ### Multi-stage Dockerfile
 
-*\# **syntax=docker/dockerfile:1.7***\
+*# **syntax=docker/dockerfile:1.7***\
 **ARG** NODE_VERSION=22\
 \
-*\# ---------- Stage 1: deps ----------*\
+*# ---------- Stage 1: deps ----------*\
 **FROM** node:\${NODE_VERSION}-alpine **AS** deps\
 **WORKDIR** /app\
 **RUN** corepack enable **&&** corepack prepare pnpm@latest --activate\
@@ -2428,7 +2431,7 @@ Empat hal yang sering jadi penyebab outage: 1. Image bloat → cold-start lambat
 pnpm config set store-dir /pnpm/store **&&** \\\
 pnpm install --frozen-lockfile\
 \
-*\# ---------- Stage 2: build ----------*\
+*# ---------- Stage 2: build ----------*\
 **FROM** node:\${NODE_VERSION}-alpine **AS** build\
 **WORKDIR** /app\
 **RUN** corepack enable **&&** corepack prepare pnpm@latest --activate\
@@ -2436,12 +2439,12 @@ pnpm install --frozen-lockfile\
 **COPY** . .\
 **RUN** pnpm run build\
 \
-*\# Prune dev deps untuk production node_modules ramping*\
+*# Prune dev deps untuk production node_modules ramping*\
 **RUN** **--mount=type=cache,id=pnpm,target=/pnpm/store** **\\**\
 pnpm config set store-dir /pnpm/store **&&** \\\
 pnpm prune --prod\
 \
-*\# ---------- Stage 3: runtime ----------*\
+*# ---------- Stage 3: runtime ----------*\
 **FROM** gcr.io/distroless/nodejs22-debian12 **AS** runtime\
 **WORKDIR** /app\
 **ENV** NODE_ENV=production\
@@ -2475,7 +2478,7 @@ README.md\
 
 ### Health probe wiring di K8s
 
-*\# k8s/deployment.yaml (potongan)*\
+*# k8s/deployment.yaml (potongan)*\
 **apiVersion:** apps/v1\
 **kind:** Deployment\
 **metadata:**\
@@ -2501,7 +2504,7 @@ README.md\
 **startupProbe:**\
 **httpGet:** **{** **path:** /healthz**,** **port:** 3000 **}**\
 **periodSeconds:** 5\
-**failureThreshold:** 30 *\# 30\*5s = 150s untuk start-up lambat*\
+**failureThreshold:** 30 *# 30\*5s = 150s untuk start-up lambat*\
 **livenessProbe:**\
 **httpGet:** **{** **path:** /healthz**,** **port:** 3000 **}**\
 **periodSeconds:** 10\
@@ -2514,7 +2517,7 @@ README.md\
 **failureThreshold:** 3\
 **lifecycle:**\
 **preStop:**\
-**httpGet:** *\# distroless tidak punya /bin/sh — pakai httpGet, bukan exec*\
+**httpGet:** *# distroless tidak punya /bin/sh — pakai httpGet, bukan exec*\
 **path:** /shutdown\
 **port:** 3000
 
@@ -2539,12 +2542,12 @@ Alternatif minimalis: hapus `preStop` sama sekali dan handle SIGTERM di app deng
 enableShutdownHooks() (lihat Pilar 1) men-trigger OnModuleDestroy saat SIGTERM. Tambahan: di Fastify, pakai app.close() untuk hentikan accept koneksi baru sebelum OnModuleDestroy.
 
 *// di main.ts (potongan, ditambahkan setelah enableShutdownHooks)*\
-**const** shutdown **=** **async** (signal**:** string) **=\>** {\
+**const** shutdown **=** **async** (signal**:** string) **=>** {\
 app**.get**(Logger)**.log**(\`received **\${**signal**}**, shutting down\`)**;**\
 **await** app**.close**()**;**\
 }**;**\
-process**.on**('SIGTERM'**,** () **=\>** **void** **shutdown**('SIGTERM'))**;**\
-process**.on**('SIGINT'**,** () **=\>** **void** **shutdown**('SIGINT'))**;**
+process**.on**('SIGTERM'**,** () **=>** **void** **shutdown**('SIGTERM'))**;**\
+process**.on**('SIGINT'**,** () **=>** **void** **shutdown**('SIGINT'))**;**
 
 app.close() memanggil semua OnModuleDestroy — termasuk DrizzleService.onModuleDestroy() yang close pool, dan BullMQ worker close() yang membiarkan job aktif selesai (sampai timeout).
 
@@ -2630,7 +2633,7 @@ Begitu Anda menyentuh reply langsung (reply.send(...), reply.code(...)), NestJS 
 
 ### 3. Fastify hook async lupa done atau lupa return
 
-fastify**.addHook**('preHandler'**,** **async** (req**,** reply) **=\>** {\
+fastify**.addHook**('preHandler'**,** **async** (req**,** reply) **=>** {\
 **await** **doSomething**()**;**\
 *// lupa return → handler berikutnya tetap jalan, bisa double-process*\
 })**;**
@@ -2721,7 +2724,7 @@ E2E test pakai Test.createTestingModule({ imports: \[AppModule\] }) tapi lupa us
 
 **const** url **=** **this.**config**.get**('database.url')**;** *// type: any \| undefined*
 
-Pakai get\<T\>('database.url', { infer: true }) atau getOrThrow. Type aman, fail-fast kalau missing.
+Pakai get<T>('database.url', { infer: true }) atau getOrThrow. Type aman, fail-fast kalau missing.
 
 ### 16. Lupa app.enableShutdownHooks()
 
@@ -2804,7 +2807,7 @@ Daftar tooling yang dipakai konsisten antar project. Penyimpangan boleh, tapi de
 
 ### CI integration
 
-*\# .github/workflows/ci.yml (potongan)*\
+*# .github/workflows/ci.yml (potongan)*\
 **-** **run:** pnpm install --frozen-lockfile\
 **-** **run:** pnpm biome check\
 **-** **run:** pnpm tsc --noEmit\
@@ -2948,7 +2951,7 @@ Pakai ini sebagai pengingat saat review PR. Sebagian besar baris di sini referen
 
 - [ ] Komentar menjelaskan **kenapa**, bukan **apa** — kode harusnya menjelaskan apa.
 
-- [ ] Tidak ada copy-paste antar method (\>5 baris yang sama → ekstrak).
+- [ ] Tidak ada copy-paste antar method (>5 baris yang sama → ekstrak).
 
 ## Lampiran B — Migration Guide v1.0 → v2.0
 
