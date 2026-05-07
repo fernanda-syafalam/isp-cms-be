@@ -1,0 +1,35 @@
+# Build artifacts and ephemeral state
+node_modules
+dist
+coverage
+*.tsbuildinfo
+
+# Git / IDE / OS
+.git
+.gitignore
+.idea
+.vscode
+.DS_Store
+
+# Local env files (production gets env from the orchestrator)
+.env
+.env.*
+!.env.example
+
+# Tests are not part of the runtime image
+test
+**/*.spec.ts
+**/*.e2e-spec.ts
+**/*.int-spec.ts
+
+# Tooling configs not needed in the image
+biome.json
+vitest.config.ts
+vitest.int.config.ts
+.github
+.claude
+
+# Docs and READMEs are referenced from the repo, not the image
+docs
+README.md
+*.md
