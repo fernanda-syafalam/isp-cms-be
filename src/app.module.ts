@@ -1,10 +1,11 @@
 import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
+import { HealthModule } from './modules/health/health.module';
 
+/**
+ * Composition root. Should only import other modules — no controllers
+ * or providers of its own. See v2 Best Practices doc, Pilar 1.
+ */
 @Module({
-  imports: [],
-  controllers: [AppController],
-  providers: [AppService],
+  imports: [HealthModule],
 })
 export class AppModule {}
