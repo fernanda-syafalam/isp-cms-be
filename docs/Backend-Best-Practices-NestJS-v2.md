@@ -257,12 +257,12 @@ export type Env **=** z**.**infer**\<typeof** envSchema**\>;**
 
 *// src/config/configuration.ts*\
 import { registerAs } from '@nestjs/config'**;**\
-import type { Env } from './env.schema'**;**\
+import { envSchema } from './env.schema'**;**\
 \
 export type AppConfig **=** ReturnType**\<typeof** appConfig**\>;**\
 \
 export **const** appConfig **=** **registerAs**('app'**,** () **=\>** {\
-**const** env **=** process**.**env as unknown as Env**;**\
+**const** env **=** envSchema**.parse**(process**.**env)**;** *// parse, jangan cuma cast — supaya nilai ter-coerce (number, array) sampai ke config object.*\
 **return** {\
 nodeEnv**:** env**.**NODE_ENV**,**\
 port**:** env**.**PORT**,**\
@@ -1067,14 +1067,14 @@ export **class** AuthController {\
 ### RolesGuard
 
 *// src/common/guards/roles.guard.ts*\
-import { CanActivate**,** ExecutionContext**,** Injectable**,** ForbiddenException } from '@nestjs/common'**;**\
+import { CanActivate**,** ExecutionContext**,** Injectable**,** ForbiddenException**,** SetMetadata } from '@nestjs/common'**;**\
 import { Reflector } from '@nestjs/core'**;**\
 import type { FastifyRequest } from 'fastify'**;**\
 import type { AuthUser } from '../decorators/current-user.decorator'**;**\
 \
 export **const** ROLES_KEY **=** 'roles'**;**\
 export **const** Roles **=** (**...**roles**:** AuthUser\['role'\]\[\]) **=\>**\
-Reflect**.metadata**(ROLES_KEY**,** roles)**;**\
+**SetMetadata**(ROLES_KEY**,** roles)**;** *// pakai SetMetadata, konsisten dengan @Public; Reflect.metadata adalah factory style yang berbeda perilakunya.*\
 \
 @**Injectable**()\
 export **class** RolesGuard **implements** CanActivate {\
@@ -1385,7 +1385,10 @@ pool **=** **new** **Pool**({ connectionString**:** container**.getConnectionUri
 db **=** **drizzle**(pool**,** { schema })**;**\
 **await** **migrate**(db**,** { migrationsFolder**:** 'drizzle' })**;**\
 \
-repo **=** **new** **UsersRepository**({ db } as never)**;** *// wrapper ringan; di production via DI*\
+*// Bangun DrizzleService minimal yang punya kontrak sama dengan production.*\
+*// Hindari `as never` — itu menyembunyikan drift kalau DrizzleService berubah.*\
+**const** drizzleService**:** Pick**\<**DrizzleService**,** 'db'**\>** **=** { db }**;**\
+repo **=** **new** **UsersRepository**(drizzleService as DrizzleService)**;**\
 }**,** 60_000)**;**\
 \
 **afterAll**(**async** () **=\>** {\
@@ -2281,7 +2284,7 @@ pnpm prune --prod\
 \
 **CMD** \["dist/main.js"\]
 
-Untuk worker, image sama, CMD \["dist/worker.js"\]. Atau bikin satu image dengan entrypoint variabel via env (CMD \["dist/\${ENTRYPOINT:-main}.js"\] — distroless tidak punya shell, jadi pakai pattern build-time dengan ARG).
+Untuk worker, **build image terpisah** (Dockerfile yang sama, CMD berbeda: `CMD ["dist/worker.js"]`). Jangan coba shell-substitution di JSON-form CMD seperti `CMD ["dist/${ENTRYPOINT:-main}.js"]` — exec form tidak shell-expand, dan distroless tidak punya `/bin/sh` sama sekali. Pattern yang benar: dua image dengan tag berbeda dari Dockerfile yang sama, atau satu Dockerfile dengan `ARG ENTRYPOINT` build-time + dua build invocation. Hindari kreatif di runtime karena distroless akan literal mencari file `dist/${ENTRYPOINT}.js`.
 
 .dockerignore wajib:
 
@@ -2339,10 +2342,25 @@ README.md\
 **failureThreshold:** 3\
 **lifecycle:**\
 **preStop:**\
-**exec:**\
-**command:** **\[**"/bin/sh"**,** "-c"**,** "sleep 5"**\]** *\# delay biar LB de-register*
+**httpGet:** *\# distroless tidak punya /bin/sh — pakai httpGet, bukan exec*\
+**path:** /shutdown\
+**port:** 3000
 
-Catatan: distroless tidak punya /bin/sh. Untuk preStop, pakai image dengan shell, atau buat handler khusus di app yang return setelah delay (lebih bersih). Kalau pakai distroless, preStop exec tidak jalan — andalkan terminationGracePeriodSeconds + handle SIGTERM di app.
+Catatan: `preStop.httpGet` jalan di distroless karena tidak butuh shell. Endpoint `/shutdown` adalah controller yang sleep 5 detik lalu return 200 — tujuannya beri waktu kube-proxy/ingress de-register endpoint sebelum aplikasi berhenti accept koneksi. Implementasi handler:
+
+```ts
+// src/modules/health/health.controller.ts (tambahkan)
+@Public()
+@Get('shutdown')
+async shutdown(): Promise<{ ok: true }> {
+  // Dipanggil oleh K8s preStop. Tunggu agar LB sempat de-register pod
+  // sebelum SIGTERM dikirim & app.close() jalan.
+  await new Promise((r) => setTimeout(r, 5000));
+  return { ok: true };
+}
+```
+
+Alternatif minimalis: hapus `preStop` sama sekali dan handle SIGTERM di app dengan delay 5 detik sebelum `app.close()`. Trade-off: kalau pod ter-replace cepat, race window lebih besar karena LB dan SIGTERM tidak terkoordinasi.
 
 ### Graceful shutdown di NestJS
 
