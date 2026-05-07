@@ -6,8 +6,12 @@ import { UsersService } from './users.service';
 @Module({
   controllers: [UsersController],
   providers: [UsersService, UsersRepository],
-  // Only the service is exported. UsersRepository is an internal detail
-  // — other modules must talk to users through the service. See Pilar 1.
-  exports: [UsersService],
+  // UsersRepository is exported so AuthModule's JwtStrategy can resolve
+  // a user without going through UsersService — the service throws
+  // NotFoundException for "missing user", and the auth path needs to
+  // convert that to UnauthorizedException without crossing exception
+  // boundaries twice. UsersService remains the canonical entry for
+  // anything else.
+  exports: [UsersService, UsersRepository],
 })
 export class UsersModule {}

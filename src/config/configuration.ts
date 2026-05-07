@@ -16,6 +16,10 @@ export const appConfig = registerAs('app', () => {
       url: env.DATABASE_URL,
       poolSize: env.DATABASE_POOL_SIZE,
     },
+    jwt: {
+      secret: env.JWT_SECRET,
+      expiresIn: env.JWT_EXPIRES_IN,
+    },
   } as const;
 });
 
