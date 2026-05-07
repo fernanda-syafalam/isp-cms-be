@@ -24,9 +24,14 @@ Tooling, infrastructure, and the first reference modules are in place:
 - `AllExceptionsFilter` — uniform `application/problem+json` (RFC 7807)
   responses; never leaks server-side stack traces to the client
 - `RedisModule` (ioredis) — single shared client for the throttler
-  today, ready to back BullMQ + cache later
+  + BullMQ
 - `ThrottlerGuard` global, Redis-backed (Pilar 2) — limit consistent
   across pods, configurable via `THROTTLER_TTL_MS` / `THROTTLER_LIMIT`
+- `QueueModule` + `EmailModule` — BullMQ wired with idempotent
+  `jobId`, attempts + exponential backoff defaults, capped
+  `removeOnComplete`/`removeOnFail`. `dist/worker.js` runs the
+  consumer in a separate process; same image as the API, override
+  the container command (Pilar 7)
 - Env validation via zod parsed at startup; `ZodValidationPipe`
   global; URI versioning enabled
 - `AppModule` is a pure composition root

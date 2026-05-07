@@ -12,9 +12,11 @@ import { type AppConfig, appConfig } from './config/configuration';
 import { envSchema } from './config/env.schema';
 import { DrizzleModule } from './infrastructure/database/drizzle.module';
 import { AppLoggerModule } from './infrastructure/logger/logger.module';
+import { QueueModule } from './infrastructure/queue/queue.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
 import { RedisService } from './infrastructure/redis/redis.service';
 import { AuthModule } from './modules/auth/auth.module';
+import { EmailModule } from './modules/email/email.module';
 import { HealthModule } from './modules/health/health.module';
 import { UsersModule } from './modules/users/users.module';
 
@@ -60,7 +62,9 @@ import { UsersModule } from './modules/users/users.module';
         };
       },
     }),
+    QueueModule,
     AuthModule,
+    EmailModule,
     HealthModule,
     UsersModule,
   ],
