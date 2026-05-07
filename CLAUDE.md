@@ -7,14 +7,17 @@ for the v2 Best Practices doc and the two ADRs accepted in this repo.
 
 Tooling has been migrated to the target stack. The first real module
 (`HealthModule` exposing `/healthz` and `/readyz`) lives under
-`src/modules/health/` per Pilar 1; `AppModule` is now a pure composition
-root. Domain modules will follow the same shape.
+`src/modules/health/` per Pilar 1; `AppModule` is a pure composition
+root. Env validation is wired (zod schema parsed at startup via
+`ConfigModule.forRoot`), and `ZodValidationPipe` is registered globally
+so future DTOs created with `createZodDto()` are validated automatically.
+Domain modules will follow the same shape.
 
 | Aspect             | Current state                                | Target state                                            | Reference       |
 | ------------------ | -------------------------------------------- | ------------------------------------------------------- | --------------- |
 | HTTP adapter       | ✅ `@nestjs/platform-fastify`                | `@nestjs/platform-fastify`                              | v2 doc, Pilar 1 |
 | ORM                | ❌ (none)                                    | Drizzle + drizzle-kit                                   | ADR-0001        |
-| Validation         | ❌ (none)                                    | zod via nestjs-zod                                      | ADR-0002        |
+| Validation         | ✅ zod (env at startup) + global ZodValidationPipe | zod via nestjs-zod                                      | ADR-0002        |
 | Test runner        | ✅ Vitest + SWC + Fastify `inject()` for E2E | Vitest                                                  | ADR-0002        |
 | Linter / Formatter | ✅ Biome                                     | Biome                                                   | ADR-0002        |
 | Folder layout      | 🟡 `src/modules/*` started (HealthModule)    | `src/modules/*`, `src/infrastructure/*`, `src/common/*` | v2 doc, Pilar 1 |

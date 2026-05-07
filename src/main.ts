@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
+import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { AppModule } from './app.module';
+import type { AppConfig } from './config/configuration';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestFastifyApplication>(
@@ -21,7 +23,10 @@ async function bootstrap(): Promise<void> {
   // Required so SIGTERM in K8s triggers OnModuleDestroy hooks.
   app.enableShutdownHooks();
 
-  const port = Number(process.env.PORT ?? 3000);
+  // Read port via ConfigService so the value comes from the validated
+  // env schema (parsed + coerced), not an ad-hoc process.env read.
+  const config = app.get(ConfigService<{ app: AppConfig }, true>);
+  const port = config.get('app.port', { infer: true });
   // Bind to 0.0.0.0 — without this, the container is unreachable from outside the pod.
   await app.listen(port, '0.0.0.0');
 }
