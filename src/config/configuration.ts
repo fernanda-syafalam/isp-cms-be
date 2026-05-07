@@ -12,6 +12,10 @@ export const appConfig = registerAs('app', () => {
   return {
     nodeEnv: env.NODE_ENV,
     port: env.PORT,
+    database: {
+      url: env.DATABASE_URL,
+      poolSize: env.DATABASE_POOL_SIZE,
+    },
   } as const;
 });
 

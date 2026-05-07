@@ -4,6 +4,7 @@ import { APP_PIPE } from '@nestjs/core';
 import { ZodValidationPipe } from 'nestjs-zod';
 import { appConfig } from './config/configuration';
 import { envSchema } from './config/env.schema';
+import { DrizzleModule } from './infrastructure/database/drizzle.module';
 import { HealthModule } from './modules/health/health.module';
 
 /**
@@ -20,6 +21,7 @@ import { HealthModule } from './modules/health/health.module';
       // app boot with bad config and crash later.
       validate: (raw) => envSchema.parse(raw),
     }),
+    DrizzleModule,
     HealthModule,
   ],
   providers: [
