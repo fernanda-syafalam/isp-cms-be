@@ -18,6 +18,9 @@ export default defineConfig({
     environment: 'node',
     setupFiles: ['./test/setup.ts'],
     include: ['src/**/*.spec.ts', 'test/**/*.e2e-spec.ts'],
+    // Integration tests are slower (Testcontainers ~5 s each) and need
+    // Docker; run them with `pnpm test:int` instead.
+    exclude: ['**/node_modules/**', '**/dist/**', '**/*.int-spec.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'lcov'],

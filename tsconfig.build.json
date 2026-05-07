@@ -9,7 +9,9 @@
     "dist",
     "drizzle",
     "vitest.config.ts",
+    "vitest.int.config.ts",
     "drizzle.config.ts",
-    "**/*spec.ts"
+    "**/*spec.ts",
+    "**/*.int-spec.ts"
   ]
 }

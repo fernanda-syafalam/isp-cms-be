@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
+import { VersioningType } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -19,6 +20,10 @@ async function bootstrap(): Promise<void> {
       genReqId: (req: IncomingMessage) => req.headers['x-request-id']?.toString() ?? randomUUID(),
     }),
   );
+
+  // URI versioning so business endpoints live under /v1, /v2, etc.
+  // Health endpoints stay un-versioned (no `version` on the controller).
+  app.enableVersioning({ type: VersioningType.URI });
 
   // Required so SIGTERM in K8s triggers OnModuleDestroy hooks.
   app.enableShutdownHooks();

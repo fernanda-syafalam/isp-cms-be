@@ -58,6 +58,12 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 # TypeScript incremental build cache
 *.tsbuildinfo
 
+# Root-level config artifacts emitted by accidental tsc runs
+# (the tooling configs are .ts and should never be transpiled in-place)
+/*.config.js
+/*.config.js.map
+/*.config.d.ts
+
 # Claude Code per-user settings (settings.json is project-shared and committed)
 .claude/settings.local.json
 .claude/plans/
