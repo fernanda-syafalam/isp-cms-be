@@ -61,4 +61,13 @@ COPY --from=build /app/package.json ./package.json
 USER nonroot
 EXPOSE 3000
 
+# Default entrypoint is the HTTP API. The worker process runs from the
+# same image with a different command — set when deploying:
+#
+#   docker run boilerplate-nestjs:<sha>                  # API
+#   docker run boilerplate-nestjs:<sha> dist/worker.js   # worker
+#
+# Distroless's nodejs entrypoint is `node`, so passing a different JS
+# path as the command is sufficient. K8s deploys this as two
+# Deployments sharing the image but overriding `command` per workload.
 CMD ["dist/main.js"]

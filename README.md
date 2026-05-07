@@ -28,6 +28,7 @@ pivot.
 | Logging            | nestjs-pino (JSON in prod, pino-pretty in dev) with field redaction   |
 | Errors             | RFC 7807 `application/problem+json` filter (uniform error shape)      |
 | Rate limit         | `@nestjs/throttler` with Redis storage — consistent across pods       |
+| Background jobs    | BullMQ (`@nestjs/bullmq`) on Redis; worker process is a separate entrypoint |
 | Testing            | Vitest + Fastify `inject()` + Testcontainers Postgres                 |
 | Linter / Formatter | Biome                                                                 |
 | Container          | Multi-stage Docker, distroless runtime                                |
@@ -110,6 +111,7 @@ Mirror its shape when adding a new bounded context.
 | ----------------------- | ---------------------------------------- |
 | Install                 | `pnpm install`                           |
 | Dev server              | `pnpm dev`                               |
+| Dev worker              | `pnpm dev:worker`                        |
 | Typecheck               | `pnpm typecheck`                         |
 | Lint (autofix)          | `pnpm lint`                              |
 | Lint (CI)               | `pnpm lint:ci`                           |
@@ -160,7 +162,6 @@ own variants.
 - Throttler / rate limiter with Redis storage
 - OpenTelemetry SDK and exporter wiring
 - Refresh-token rotation
-- BullMQ + worker entrypoint (process separate)
 - Helm chart
 
 ## Contributing inside this repo
