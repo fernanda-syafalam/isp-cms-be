@@ -1,9 +1,4 @@
-import {
-  type ArgumentsHost,
-  HttpException,
-  HttpStatus,
-  NotFoundException,
-} from '@nestjs/common';
+import { type ArgumentsHost, HttpException, HttpStatus, NotFoundException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { PinoLogger } from 'nestjs-pino';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -47,10 +42,7 @@ describe('AllExceptionsFilter', () => {
   beforeEach(async () => {
     logger = { error: vi.fn(), setContext: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
-      providers: [
-        AllExceptionsFilter,
-        { provide: PinoLogger, useValue: logger },
-      ],
+      providers: [AllExceptionsFilter, { provide: PinoLogger, useValue: logger }],
     }).compile();
     filter = moduleRef.get(AllExceptionsFilter);
   });
