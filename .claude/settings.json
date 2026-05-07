@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(pnpm install)",
+      "Bash(pnpm install:*)",
+      "Bash(pnpm add:*)",
+      "Bash(pnpm remove:*)",
+      "Bash(pnpm dev)",
+      "Bash(pnpm dev:*)",
+      "Bash(pnpm start)",
+      "Bash(pnpm start:*)",
+      "Bash(pnpm format)",
+      "Bash(pnpm format:*)",
+      "Bash(pnpm db:*)",
+      "Bash(pnpm drizzle-kit:*)",
+      "Bash(pnpm vitest:*)",
+      "Bash(pnpm biome:*)",
+      "Bash(pnpm exec biome:*)",
+      "Bash(pnpm exec vitest:*)",
+      "Bash(pnpm exec drizzle-kit:*)",
+      "Bash(npx drizzle-kit:*)",
+      "Bash(npx vitest:*)",
+      "Bash(npx biome:*)",
+
+      "Bash(docker compose up:*)",
+      "Bash(docker compose down:*)",
+      "Bash(docker compose restart:*)",
+      "Bash(docker compose exec:*)",
+      "Bash(docker compose run:*)",
+      "Bash(docker compose build:*)",
+
+      "Bash(git fetch:*)",
+      "Bash(git pull:*)",
+      "Bash(git checkout:*)",
+      "Bash(git restore:*)",
+      "Bash(git rebase main)",
+      "Bash(git rebase origin/main)",
+      "Bash(git switch:*)",
+
+      "Bash(gh pr create:*)",
+      "Bash(gh pr edit:*)",
+      "Bash(gh pr checkout:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh pr status)",
+      "Bash(gh pr ready)",
+      "Bash(gh pr comment:*)",
+      "Bash(gh pr review:*)",
+      "Bash(gh issue list:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh repo view:*)",
+      "Bash(gh api repos/fernanda-syafalam/boilerplate-nestjs/*)"
+    ]
+  }
+}
