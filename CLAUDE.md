@@ -13,6 +13,11 @@ Tooling, infrastructure, and the first reference modules are in place:
 - `AuthModule` under `/v1/auth` — login + JWT issuance, `JwtAuthGuard`
   registered globally so every endpoint requires a JWT unless
   `@Public()` is applied; `@CurrentUser` decorator for handlers
+- `AppLoggerModule` (nestjs-pino) — JSON logs in prod, pino-pretty in
+  dev; redacts password / token / authorization fields; every line
+  carries the Fastify request id
+- `AllExceptionsFilter` — uniform `application/problem+json` (RFC 7807)
+  responses; never leaks server-side stack traces to the client
 - Env validation via zod parsed at startup; `ZodValidationPipe`
   global; URI versioning enabled
 - `AppModule` is a pure composition root

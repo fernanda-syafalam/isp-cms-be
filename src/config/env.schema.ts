@@ -26,6 +26,10 @@ export const envSchema = z.object({
   // values so a placeholder secret never leaks into production.
   JWT_SECRET: z.string().min(32),
   JWT_EXPIRES_IN: z.string().default('15m'),
+
+  LOG_LEVEL: z
+    .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
+    .default('info'),
 });
 
 export type Env = z.infer<typeof envSchema>;

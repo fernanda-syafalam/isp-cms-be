@@ -10,3 +10,6 @@ process.env.NODE_ENV = process.env.NODE_ENV ?? 'test';
 process.env.DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://app:app@localhost:5432/app';
 process.env.JWT_SECRET =
   process.env.JWT_SECRET ?? 'test-secret-must-be-at-least-32-characters-long';
+// Silence pino during tests; flip to 'info' or 'debug' if a failure
+// needs request-line diagnostics.
+process.env.LOG_LEVEL = process.env.LOG_LEVEL ?? 'silent';

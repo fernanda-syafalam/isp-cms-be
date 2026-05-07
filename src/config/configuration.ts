@@ -20,6 +20,7 @@ export const appConfig = registerAs('app', () => {
       secret: env.JWT_SECRET,
       expiresIn: env.JWT_EXPIRES_IN,
     },
+    logLevel: env.LOG_LEVEL,
   } as const;
 });
 

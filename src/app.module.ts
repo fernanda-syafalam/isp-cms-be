@@ -1,11 +1,13 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD, APP_PIPE } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_PIPE } from '@nestjs/core';
 import { ZodValidationPipe } from 'nestjs-zod';
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { appConfig } from './config/configuration';
 import { envSchema } from './config/env.schema';
 import { DrizzleModule } from './infrastructure/database/drizzle.module';
+import { AppLoggerModule } from './infrastructure/logger/logger.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
 import { UsersModule } from './modules/users/users.module';
@@ -24,12 +26,17 @@ import { UsersModule } from './modules/users/users.module';
       // app boot with bad config and crash later.
       validate: (raw) => envSchema.parse(raw),
     }),
+    AppLoggerModule,
     DrizzleModule,
     AuthModule,
     HealthModule,
     UsersModule,
   ],
   providers: [
+    // Global error filter -> RFC 7807 application/problem+json. Wired
+    // through APP_FILTER (instead of useGlobalFilters in main.ts) so
+    // PinoLogger gets injected properly.
+    { provide: APP_FILTER, useClass: AllExceptionsFilter },
     // Default-deny: every endpoint requires a JWT unless `@Public()` is
     // applied. Pilar 4.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
