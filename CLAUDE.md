@@ -5,18 +5,19 @@ for the v2 Best Practices doc and the two ADRs accepted in this repo.
 
 ## Repo state (as of 2026-05-07)
 
-⚠️ **The repo is still in default `nest new` state.** The target stack
-defined in the ADRs has **not yet been implemented**. Every PR to `main`
-should advance reality toward the aspiration, not preserve the default.
+Tooling has been migrated to the target stack. Application code is
+still the `nest new` placeholder (`AppController` returning
+"Hello World!"); real modules will be added under `src/modules/*` per
+Pilar 1.
 
-| Aspect             | Current state              | Target state                                            | Reference       |
-| ------------------ | -------------------------- | ------------------------------------------------------- | --------------- |
-| HTTP adapter       | `@nestjs/platform-express` | `@nestjs/platform-fastify`                              | v2 doc, Pilar 1 |
-| ORM                | (none)                     | Drizzle + drizzle-kit                                   | ADR-0001        |
-| Validation         | (none)                     | zod via nestjs-zod                                      | ADR-0002        |
-| Test runner        | Jest                       | Vitest                                                  | ADR-0002        |
-| Linter / Formatter | ESLint + Prettier          | Biome                                                   | ADR-0002        |
-| Folder layout      | `src/app.*` flat           | `src/modules/*`, `src/infrastructure/*`, `src/common/*` | v2 doc, Pilar 1 |
+| Aspect             | Current state                                | Target state                                            | Reference       |
+| ------------------ | -------------------------------------------- | ------------------------------------------------------- | --------------- |
+| HTTP adapter       | ✅ `@nestjs/platform-fastify`                | `@nestjs/platform-fastify`                              | v2 doc, Pilar 1 |
+| ORM                | ❌ (none)                                    | Drizzle + drizzle-kit                                   | ADR-0001        |
+| Validation         | ❌ (none)                                    | zod via nestjs-zod                                      | ADR-0002        |
+| Test runner        | ✅ Vitest + SWC + Fastify `inject()` for E2E | Vitest                                                  | ADR-0002        |
+| Linter / Formatter | ✅ Biome                                     | Biome                                                   | ADR-0002        |
+| Folder layout      | ❌ `src/app.*` flat                          | `src/modules/*`, `src/infrastructure/*`, `src/common/*` | v2 doc, Pilar 1 |
 
 ## Target stack (single source of truth)
 
@@ -103,6 +104,11 @@ src/
 - A BullMQ worker without a concurrency limit will exhaust the DB pool
 - Migrations in `onApplicationBootstrap` race across replicas — run
   them in the pipeline only
+- Do **not** turn on Biome's `style/useImportType` rule. It auto-flips
+  class imports used only for DI (`import { AppService }`) into
+  `import type`, which the compiler erases — Nest then fails to
+  resolve the provider at runtime. Rule is intentionally `"off"` in
+  `biome.json`.
 
 ## PR conventions
 
