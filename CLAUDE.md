@@ -5,22 +5,27 @@ for the v2 Best Practices doc and the two ADRs accepted in this repo.
 
 ## Repo state (as of 2026-05-07)
 
-Tooling has been migrated to the target stack. The first real module
-(`HealthModule` exposing `/healthz` and `/readyz`) lives under
-`src/modules/health/` per Pilar 1; `AppModule` is a pure composition
-root. Env validation is wired (zod schema parsed at startup via
-`ConfigModule.forRoot`), and `ZodValidationPipe` is registered globally
-so future DTOs created with `createZodDto()` are validated automatically.
-Domain modules will follow the same shape.
+Tooling and the first reference domain module are in place. The
+boilerplate now has:
+
+- `HealthModule` (`/healthz`, `/readyz` with real DB ping)
+- `UsersModule` under `/v1/users` — full Pilar 1 + 3 + 4 + 5 example:
+  controller / service / repository / zod DTOs / Drizzle schema with
+  composite cursor index / argon2id password hashing / unit test
+  with mocked repository / integration test with real Postgres via
+  Testcontainers / cursor pagination
+- Env validation via zod parsed at startup; `ZodValidationPipe`
+  global; URI versioning enabled
+- `AppModule` is a pure composition root
 
 | Aspect             | Current state                                | Target state                                            | Reference       |
 | ------------------ | -------------------------------------------- | ------------------------------------------------------- | --------------- |
 | HTTP adapter       | ✅ `@nestjs/platform-fastify`                | `@nestjs/platform-fastify`                              | v2 doc, Pilar 1 |
-| ORM                | 🟡 Drizzle skeleton (DrizzleService + pool); no schema yet | Drizzle + drizzle-kit                                   | ADR-0001        |
-| Validation         | ✅ zod (env at startup) + global ZodValidationPipe | zod via nestjs-zod                                      | ADR-0002        |
+| ORM                | ✅ Drizzle (users schema + first migration committed)       | Drizzle + drizzle-kit                                   | ADR-0001        |
+| Validation         | ✅ zod env + global ZodValidationPipe + first DTO via createZodDto | zod via nestjs-zod                                      | ADR-0002        |
 | Test runner        | ✅ Vitest + SWC + Fastify `inject()` for E2E | Vitest                                                  | ADR-0002        |
 | Linter / Formatter | ✅ Biome                                     | Biome                                                   | ADR-0002        |
-| Folder layout      | 🟡 `src/modules/*` (HealthModule) + `src/infrastructure/database/*` | `src/modules/*`, `src/infrastructure/*`, `src/common/*` | v2 doc, Pilar 1 |
+| Folder layout      | ✅ `src/modules/*` (Health, Users) + `src/infrastructure/database/*` + `src/config/*` | `src/modules/*`, `src/infrastructure/*`, `src/common/*` | v2 doc, Pilar 1 |
 
 ## Target stack (single source of truth)
 
@@ -82,8 +87,9 @@ src/
 | Typecheck   | `pnpm typecheck`                              |
 | Lint        | `pnpm lint` (Biome, with `--write`)           |
 | Lint (CI)   | `pnpm lint:ci` (Biome, no autofix)            |
-| Test        | `pnpm test` (Vitest)                          |
-| Test e2e    | `pnpm test:e2e`                               |
+| Test (unit + e2e) | `pnpm test` (Vitest, no Docker needed)  |
+| Test e2e only     | `pnpm test:e2e`                         |
+| Test integration  | `pnpm test:int` (Testcontainers, Docker required) |
 | Build       | `pnpm build`                                  |
 | Local DB up | `pnpm db:up` (docker compose Postgres)        |
 | DB down     | `pnpm db:down`                                |
@@ -116,6 +122,9 @@ src/
   `import type`, which the compiler erases — Nest then fails to
   resolve the provider at runtime. Rule is intentionally `"off"` in
   `biome.json`.
+- `javascript.parser.unsafeParameterDecoratorsEnabled: true` in
+  `biome.json` is required because NestJS uses parameter decorators
+  (`@Body()`, `@Param()`, `@Query()`) which Biome rejects by default.
 
 ## PR conventions
 

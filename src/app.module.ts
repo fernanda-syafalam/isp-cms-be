@@ -6,6 +6,7 @@ import { appConfig } from './config/configuration';
 import { envSchema } from './config/env.schema';
 import { DrizzleModule } from './infrastructure/database/drizzle.module';
 import { HealthModule } from './modules/health/health.module';
+import { UsersModule } from './modules/users/users.module';
 
 /**
  * Composition root. Should only import other modules and wire global
@@ -23,6 +24,7 @@ import { HealthModule } from './modules/health/health.module';
     }),
     DrizzleModule,
     HealthModule,
+    UsersModule,
   ],
   providers: [
     // ZodValidationPipe is registered globally so that any DTO created
