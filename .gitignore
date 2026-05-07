@@ -55,6 +55,9 @@ pids
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
+# TypeScript incremental build cache
+*.tsbuildinfo
+
 # Claude Code per-user settings (settings.json is project-shared and committed)
 .claude/settings.local.json
 .claude/plans/
