@@ -37,7 +37,8 @@ boilerplate now has:
 - **Linter / Formatter:** Biome (rationale: ADR-0002)
 - **Database:** PostgreSQL 16+, `pg` (`node-postgres`) driver
 - **Cache / Queue:** Redis 7+, BullMQ
-- **Container:** multi-stage Docker, distroless runtime
+- **Container:** multi-stage Docker, distroless runtime (`Dockerfile` at repo root)
+- **CI:** GitHub Actions — `static`, `test`, and `integration` jobs (`.github/workflows/ci.yml`)
 - **Observability:** OpenTelemetry → Tempo / Loki / Mimir
 
 ## Required reading (do not re-discuss)
