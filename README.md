@@ -1,98 +1,174 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# boilerplate-nestjs
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Production-shaped NestJS service template. Fork it as the starting point
+for a new HTTP service that needs auth, a Postgres-backed domain layer,
+structured logging, and a green CI/Docker pipeline on day one.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+The conventions and rationale live in:
 
-## Description
+- `docs/Backend-Best-Practices-NestJS-v2.md` — the authoritative pattern
+  doc per pilar (architecture, API, DB, security, testing,
+  observability, queues, migrations, containers)
+- `docs/adr/0001-use-drizzle-orm-over-prisma.md` — why Drizzle, not Prisma
+- `docs/adr/0002-tooling-vitest-biome-zod.md` — why Vitest + Biome + zod
+- `CLAUDE.md` — project-level instructions for AI agents and engineers
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+Read those before changing conventions; raise a new ADR if you want to
+pivot.
 
-## Project setup
+## Stack
 
-```bash
-$ pnpm install
-```
+| Layer              | Choice                                                                |
+| ------------------ | --------------------------------------------------------------------- |
+| Runtime            | Node.js 22 LTS, pnpm 10                                               |
+| Framework          | NestJS 11 + Fastify adapter                                           |
+| ORM / migrations   | Drizzle ORM + drizzle-kit                                             |
+| Validation         | zod via `nestjs-zod` (env + DTO + global pipe)                        |
+| Auth               | Passport JWT (`@nestjs/passport`) + argon2id password hashing         |
+| Logging            | nestjs-pino (JSON in prod, pino-pretty in dev) with field redaction   |
+| Errors             | RFC 7807 `application/problem+json` filter (uniform error shape)      |
+| Testing            | Vitest + Fastify `inject()` + Testcontainers Postgres                 |
+| Linter / Formatter | Biome                                                                 |
+| Container          | Multi-stage Docker, distroless runtime                                |
+| CI                 | GitHub Actions (typecheck/lint/build, unit/e2e, integration)          |
+| Database           | PostgreSQL 16+ via `pg` (`node-postgres`)                             |
 
-## Compile and run the project
+## Quick start
 
-```bash
-# development
-$ pnpm run start
-
-# watch mode
-$ pnpm run start:dev
-
-# production mode
-$ pnpm run start:prod
-```
-
-## Run tests
+Prerequisites: Node 22, pnpm 10 (handled automatically by `corepack`),
+Docker (only for Postgres + integration tests).
 
 ```bash
-# unit tests
-$ pnpm run test
+git clone <this-repo> my-service
+cd my-service
 
-# e2e tests
-$ pnpm run test:e2e
+cp .env.example .env
+# Edit .env — at minimum set JWT_SECRET to 32+ random characters.
 
-# test coverage
-$ pnpm run test:cov
+pnpm install
+pnpm db:up           # boots a local Postgres on :5432
+pnpm db:migrate      # applies the committed migrations
+pnpm dev             # starts the service on http://localhost:3000
 ```
 
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+Smoke check:
 
 ```bash
-$ pnpm install -g @nestjs/mau
-$ mau deploy
+curl -s localhost:3000/healthz
+curl -s localhost:3000/readyz
+
+curl -X POST localhost:3000/v1/users \
+  -H 'content-type: application/json' \
+  -d '{"email":"a@b.test","fullName":"A","password":"correct-horse-battery-staple"}'
+
+curl -X POST localhost:3000/v1/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"email":"a@b.test","password":"correct-horse-battery-staple"}'
+
+# Use the accessToken from the previous response:
+curl localhost:3000/v1/auth/me -H "authorization: Bearer <token>"
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+## Folder layout
 
-## Resources
+```
+src/
+├── modules/<bounded-context>/
+│   ├── dto/                  # zod schemas + createZodDto
+│   ├── *.controller.ts       # HTTP only — no business logic
+│   ├── *.service.ts          # @Injectable — business logic
+│   ├── *.repository.ts       # Drizzle access layer (sole DB gate)
+│   ├── *.module.ts           # wiring
+│   └── *.spec.ts             # unit tests co-located
+├── common/                   # decorators, filters, guards, pipes
+├── config/                   # env.schema.ts, configuration.ts
+├── infrastructure/           # database, logger, redis, queue, ...
+├── app.module.ts             # composition root only
+└── main.ts                   # FastifyAdapter bootstrap
+```
 
-Check out a few resources that may come in handy when working with NestJS:
+The `users` module is the canonical reference end-to-end example.
+Mirror its shape when adding a new bounded context.
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+## Endpoints today
 
-## Support
+| Endpoint              | Auth      | Notes                                       |
+| --------------------- | --------- | ------------------------------------------- |
+| `GET /healthz`        | `@Public` | Liveness — dependency-free                  |
+| `GET /readyz`         | `@Public` | Readiness — pings the database              |
+| `POST /v1/auth/login` | `@Public` | Returns `{ accessToken, user }` (15 min TTL)|
+| `GET /v1/auth/me`     | JWT       | Echoes the current user                     |
+| `POST /v1/users`      | `@Public` | Self-registration (argon2id hashed)         |
+| `GET /v1/users`       | JWT       | Cursor pagination                           |
+| `GET /v1/users/:id`   | JWT       | Single user                                 |
+| `DELETE /v1/users/:id`| JWT       | Soft delete                                 |
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+## Common scripts
 
-## Stay in touch
+| Task                    | Command                                  |
+| ----------------------- | ---------------------------------------- |
+| Install                 | `pnpm install`                           |
+| Dev server              | `pnpm dev`                               |
+| Typecheck               | `pnpm typecheck`                         |
+| Lint (autofix)          | `pnpm lint`                              |
+| Lint (CI)               | `pnpm lint:ci`                           |
+| Test (unit + e2e)       | `pnpm test`                              |
+| Test with coverage      | `pnpm test:cov`                          |
+| Test integration (DB)   | `pnpm test:int`                          |
+| Build                   | `pnpm build`                             |
+| Local Postgres up/down  | `pnpm db:up` / `pnpm db:down`            |
+| Generate migration      | `pnpm db:generate`                       |
+| Apply migrations        | `pnpm db:migrate`                        |
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+## Container & deploy
+
+A multi-stage `Dockerfile` produces a distroless image that runs as
+non-root:
+
+```bash
+docker build -t boilerplate-nestjs:dev .
+docker run --rm -p 3000:3000 \
+  -e NODE_ENV=production \
+  -e DATABASE_URL=postgres://... \
+  -e JWT_SECRET=... \
+  boilerplate-nestjs:dev
+```
+
+Kubernetes manifests are in `k8s/` and are pinned to v2 doc Pilar 9
+defaults: separate liveness/readiness probes, non-root, resource
+requests/limits, an HPA on CPU, and a `terminationGracePeriodSeconds`
+that gives in-flight work time to drain. Tag the image with the commit
+SHA — never `:latest`.
+
+## CI
+
+`.github/workflows/ci.yml` runs three parallel jobs on every PR:
+
+- **Typecheck + Lint + Build** — `pnpm typecheck`, `pnpm lint:ci`, `pnpm build`
+- **Unit + E2E** — `pnpm test:cov`; coverage artifact uploaded
+- **Integration (Testcontainers)** — `pnpm test:int` against a real Postgres
+
+Concurrency cancels superseded runs on the same ref.
+
+## What is NOT in this template (yet)
+
+These will land as separate PRs and matching ADR/doc updates when
+they do. Add them to a service that needs them, do not invent your
+own variants.
+
+- Throttler / rate limiter with Redis storage
+- OpenTelemetry SDK and exporter wiring
+- Refresh-token rotation and `RolesGuard` for coarse RBAC
+- BullMQ + worker entrypoint (process separate)
+- Helm chart
+
+## Contributing inside this repo
+
+Branch protection is on `main`; every change goes through a PR.
+Commits and file contents are written in **English**; chat and review
+discussion can be in Bahasa Indonesia. Conventional commit subjects
+(`feat(scope): …`, `fix(scope): …`) are required.
 
 ## License
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+UNLICENSED — internal use only.

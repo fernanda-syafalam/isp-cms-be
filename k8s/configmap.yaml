@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: boilerplate-nestjs-config
+data:
+  NODE_ENV: production
+  PORT: "3000"
+  LOG_LEVEL: info
+  DATABASE_POOL_SIZE: "10"
+  JWT_EXPIRES_IN: 15m
