@@ -594,6 +594,97 @@ export **class** AppModule {}
 
 Storage Redis penting karena kalau in-memory, rate limit reset per instance — useless di K8s dengan banyak replica.
 
+### Idempotency-Key untuk endpoint state-changing
+
+Header `Idempotency-Key` (UUID yang dihasilkan client per attempt) membuat retry POST aman — tidak ada double-charge atau double-create kalau client retry karena timeout. Implementasi standar tim ada empat aturan:
+
+1. **Fingerprint** = SHA-256 dari `(method, url, userId, idempotency-key)`. **Body di-hash terpisah** dan disimpan dalam cache value — supaya kita bisa deteksi "key sama tapi body berbeda" dan tolak dengan 422.
+2. **Cache hit (body cocok)** → replay status + body dari cache (TTL 24 jam, sesuaikan dengan window retry yang masuk akal).
+3. **Cache hit (body berbeda)** → 422 Idempotency conflict. Client salah pakai key yang sama untuk request semantik berbeda.
+4. **In-flight protection** dengan Redis `SET NX EX` (TTL pendek ~30 detik) untuk cegah double-execution oleh dua request paralel dengan key sama.
+
+```ts
+// src/common/interceptors/idempotency.interceptor.ts
+import {
+  CallHandler, ExecutionContext, Injectable, NestInterceptor,
+  HttpException, HttpStatus,
+} from '@nestjs/common';
+import { InjectRedis } from '@nestjs-modules/ioredis';
+import { Observable, of, switchMap } from 'rxjs';
+import type { FastifyRequest, FastifyReply } from 'fastify';
+import type Redis from 'ioredis';
+import { createHash } from 'crypto';
+
+interface CachedResponse { status: number; body: unknown; bodyHash: string; }
+
+@Injectable()
+export class IdempotencyInterceptor implements NestInterceptor {
+  private readonly RESULT_TTL_S = 24 * 60 * 60;
+  private readonly LOCK_TTL_S = 30;
+
+  constructor(@InjectRedis() private readonly redis: Redis) {}
+
+  async intercept(ctx: ExecutionContext, next: CallHandler): Promise<Observable<unknown>> {
+    const req = ctx.switchToHttp().getRequest<FastifyRequest & { user?: { id: string } }>();
+    if (!['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method)) return next.handle();
+
+    const key = req.headers['idempotency-key'];
+    if (!key || typeof key !== 'string') return next.handle();
+
+    const bodyHash = sha256(JSON.stringify(req.body ?? {}));
+    const fp = `idem:${sha256(`${req.method}|${req.url}|${req.user?.id ?? 'anon'}|${key}`)}`;
+
+    // Replay if seen before.
+    const cached = await this.redis.get(fp);
+    if (cached) {
+      const parsed = JSON.parse(cached) as CachedResponse;
+      if (parsed.bodyHash !== bodyHash) {
+        throw new HttpException(
+          { title: 'Idempotency conflict', detail: 'Idempotency-Key reused with different body' },
+          HttpStatus.UNPROCESSABLE_ENTITY,
+        );
+      }
+      ctx.switchToHttp().getResponse<FastifyReply>().status(parsed.status);
+      return of(parsed.body);
+    }
+
+    // First time — acquire lock to prevent parallel double-execution.
+    const lockKey = `${fp}:lock`;
+    const acquired = await this.redis.set(lockKey, '1', 'EX', this.LOCK_TTL_S, 'NX');
+    if (!acquired) {
+      throw new HttpException(
+        { title: 'Request in flight', detail: 'A request with this Idempotency-Key is already being processed' },
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    return next.handle().pipe(
+      switchMap(async (body) => {
+        const reply = ctx.switchToHttp().getResponse<FastifyReply>();
+        const value: CachedResponse = { status: reply.statusCode, body, bodyHash };
+        await this.redis.set(fp, JSON.stringify(value), 'EX', this.RESULT_TTL_S);
+        await this.redis.del(lockKey);
+        return body;
+      }),
+    );
+  }
+}
+
+function sha256(s: string): string {
+  return createHash('sha256').update(s).digest('hex');
+}
+```
+
+Pasang **per controller**, bukan global:
+
+```ts
+@Controller({ path: 'payments', version: '1' })
+@UseInterceptors(IdempotencyInterceptor)
+export class PaymentsController { /* ... */ }
+```
+
+Endpoint read-only (GET) tidak butuh idempotency dan global pasti menambah satu Redis ronde untuk semua request — boros.
+
 ### Pagination cursor-based
 
 *// src/common/pagination/cursor-pagination.dto.ts*\
@@ -926,7 +1017,67 @@ export **class** UsersService {\
 }\
 }
 
-Aturan caching: - **TTL pendek (10–120 detik)** untuk read yang sering tapi data tidak super dinamis. Lebih panjang hanya kalau ada strategi invalidasi yang jelas. - **Invalidate on write** atau pakai cache-aside (set saat read, hapus saat write). - **Jangan cache data per-user dengan key generik.** Selalu include user-id atau scope di key. - **Cache stampede protection** — kalau hot key, pakai cache.wrap() atau implementasi lock.
+Aturan caching: - **TTL pendek (10–120 detik)** untuk read yang sering tapi data tidak super dinamis. Lebih panjang hanya kalau ada strategi invalidasi yang jelas. - **Invalidate on write** atau pakai cache-aside (set saat read, hapus saat write). - **Jangan cache data per-user dengan key generik.** Selalu include user-id atau scope di key. - **Cache stampede protection** — kalau hot key, pakai pattern singleflight di bawah.
+
+### Cache stampede protection (singleflight)
+
+Saat hot key expire, ratusan request paralel trigger query DB bersamaan ("thundering herd"). Mitigasi: **singleflight** — hanya 1 request yang fetch ke DB, sisanya tunggu hasil. Implementasi pakai Redis `SET NX` sebagai distributed lock pendek.
+
+```ts
+// src/common/cache/singleflight.ts
+import type Redis from 'ioredis';
+
+export async function getWithSingleflight<T>(
+  redis: Redis,
+  key: string,
+  fetcher: () => Promise<T>,
+  ttlMs: number,
+  opts: { lockMs?: number; pollMs?: number; maxRetries?: number } = {},
+): Promise<T> {
+  const lockMs = opts.lockMs ?? 5_000;
+  const pollMs = opts.pollMs ?? 50;
+  const maxRetries = opts.maxRetries ?? Math.ceil(lockMs / pollMs);
+
+  for (let i = 0; i <= maxRetries; i++) {
+    const cached = await redis.get(key);
+    if (cached) return JSON.parse(cached) as T;
+
+    const lockKey = `${key}:lock`;
+    const acquired = await redis.set(lockKey, '1', 'PX', lockMs, 'NX');
+    if (acquired) {
+      try {
+        const value = await fetcher();
+        await redis.set(key, JSON.stringify(value), 'PX', ttlMs);
+        return value;
+      } finally {
+        await redis.del(lockKey);
+      }
+    }
+
+    // Another request is fetching — wait briefly & retry cache lookup.
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+
+  // Lock holder crashed mid-fetch; do the work ourselves rather than 503.
+  return fetcher();
+}
+```
+
+Service contoh:
+```ts
+async findById(id: string): Promise<User | null> {
+  return getWithSingleflight(
+    this.redis,
+    `user:${id}`,
+    () => this.repo.findById(id),
+    60_000,
+  );
+}
+```
+
+**Trade-off:** lock = 1 round-trip Redis tambahan untuk setiap cache miss. Worth it untuk hot key (top 10 entitas yang re-baca tinggi), boros untuk yang dingin. Audit pakai Redis SLOWLOG dan key access frequency dari `redis-cli MONITOR` di staging.
+
+**Alternatif lebih canggih — XFetch (probabilistic early refresh):** refresh secara asinkron sebelum TTL benar-benar habis, sehingga key tidak pernah miss. Tidak butuh lock tapi butuh menyimpan delta + computed_at bersama nilai. Layak kalau singleflight tidak cukup untuk traffic spike yang ekstrem.
 
 ### Hindari N+1
 
@@ -1141,11 +1292,32 @@ ignoreExpiration**:** **false,**\
 }\
 \
 **async** **validate**(payload**:** JwtPayload)**:** Promise**\<**AuthUser**\>** {\
+*// Cache user object 60s — tanpa cache, setiap request hit DB. Untuk service high-RPS itu mahal._\
+**const** cacheKey **=** \`auth:user:**\${**payload**.**sub**}**\`**;**\
+**const** cached **=** **await** **this.**cache**.get\<**AuthUser**\>**(cacheKey)**;**\
+**if** (cached) **return** cached**;**\
+\
 **const** user **=** **await** **this.**users**.findById**(payload**.**sub)**;**\
 **if** (**!**user **\|\|** user**.**deletedAt) **throw** **new** **UnauthorizedException**()**;**\
-**return** { id**:** user**.**id**,** email**:** user**.**email**,** role**:** user**.**role }**;**\
+\
+**const** auth**:** AuthUser **=** { id**:** user**.**id**,** email**:** user**.**email**,** role**:** user**.**role }**;**\
+**await** **this.**cache**.set**(cacheKey**,** auth**,** 60_000)**;** *// 60s_\
+**return** auth**;**\
 }\
 }
+
+**Trade-off cache TTL.** Tanpa cache, setiap request HTTP butuh 1 query DB untuk lookup user dari `payload.sub` — di service high-RPS ini bottleneck. Dengan TTL 60 detik, DB hit turun ~99%, tapi revoke (mis. user deleted, role downgrade) butuh menunggu sampai 60 detik. Untuk operasi sensitif (admin dashboard, finansial), invalidate cache eksplisit di service:
+
+```ts
+// di UsersService saat update role / soft-delete
+async changeRole(id: string, role: AuthUser['role']): Promise<User> {
+  const updated = await this.repo.update(id, { role });
+  await this.cache.del(`auth:user:${id}`); // force re-validate next request
+  return updated;
+}
+```
+
+**Alternatif "trust-claim mode"** untuk endpoint pure-read tanpa lookup DB: percaya saja claim JWT (`payload.role`, `payload.sub`) dan skip lookup. JWT TTL 15 menit jadi worst-case staleness 15 menit. Hanya pakai untuk endpoint yang efek revoke-nya masih bisa diterima 15 menit terlambat — bukan untuk financial atau admin operations.
 
 ### Hash password (argon2id)
 
