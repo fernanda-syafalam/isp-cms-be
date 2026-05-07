@@ -1,4 +1,5 @@
 import { Controller, Get, HttpCode, HttpStatus, ServiceUnavailableException } from '@nestjs/common';
+import { Public } from '../../common/decorators/public.decorator';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 
 interface LivenessStatus {
@@ -23,6 +24,8 @@ interface ReadinessStatus {
  *   Redis and any future critical dependency must be added here as
  *   they land.
  */
+// Health probes must be reachable without a JWT — K8s reads them.
+@Public()
 @Controller()
 export class HealthController {
   constructor(private readonly drizzle: DrizzleService) {}

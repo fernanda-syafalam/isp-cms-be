@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { z } from 'zod';
+import { Public } from '../../common/decorators/public.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UserResponseDto } from './dto/user-response.dto';
 import { UsersService } from './users.service';
@@ -24,6 +25,10 @@ const CursorQuerySchema = z.object({
 export class UsersController {
   constructor(private readonly users: UsersService) {}
 
+  // Self-registration is the simplest reference flow — leave it public
+  // for now. In a real service this might be admin-only, behind an
+  // invite token, or hidden behind a separate signup module.
+  @Public()
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @ZodSerializerDto(UserResponseDto)

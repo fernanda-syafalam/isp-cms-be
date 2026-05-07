@@ -21,6 +21,11 @@ export const envSchema = z.object({
 
   DATABASE_URL: z.string().min(1),
   DATABASE_POOL_SIZE: z.coerce.number().int().positive().default(10),
+
+  // 32+ char keeps brute-force out of reach. The schema rejects shorter
+  // values so a placeholder secret never leaks into production.
+  JWT_SECRET: z.string().min(32),
+  JWT_EXPIRES_IN: z.string().default('15m'),
 });
 
 export type Env = z.infer<typeof envSchema>;

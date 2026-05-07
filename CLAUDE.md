@@ -5,15 +5,14 @@ for the v2 Best Practices doc and the two ADRs accepted in this repo.
 
 ## Repo state (as of 2026-05-07)
 
-Tooling and the first reference domain module are in place. The
-boilerplate now has:
+Tooling, infrastructure, and the first reference modules are in place:
 
-- `HealthModule` (`/healthz`, `/readyz` with real DB ping)
-- `UsersModule` under `/v1/users` — full Pilar 1 + 3 + 4 + 5 example:
-  controller / service / repository / zod DTOs / Drizzle schema with
-  composite cursor index / argon2id password hashing / unit test
-  with mocked repository / integration test with real Postgres via
-  Testcontainers / cursor pagination
+- `HealthModule` (`/healthz`, `/readyz` with real DB ping) — `@Public()`
+- `UsersModule` under `/v1/users` — full Pilar 1+3+4+5 example with
+  argon2id hashing, cursor pagination, unit + integration tests
+- `AuthModule` under `/v1/auth` — login + JWT issuance, `JwtAuthGuard`
+  registered globally so every endpoint requires a JWT unless
+  `@Public()` is applied; `@CurrentUser` decorator for handlers
 - Env validation via zod parsed at startup; `ZodValidationPipe`
   global; URI versioning enabled
 - `AppModule` is a pure composition root
