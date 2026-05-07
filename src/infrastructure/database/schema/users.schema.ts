@@ -10,9 +10,14 @@ export const users = pgTable(
     fullName: varchar('full_name', { length: 120 }).notNull(),
     passwordHash: varchar('password_hash', { length: 255 }).notNull(),
     role: userRole('role').notNull().default('customer'),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    // Millisecond precision matches what JS Date / cursor encoding can
+    // represent, so cursor pagination predicates (lt(createdAt) etc.)
+    // never miss rows whose stored microseconds differ from the
+    // millisecond round-trip. Postgres default is microsecond — using
+    // (3) here is a deliberate choice for cursor stability.
+    createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true, precision: 3 }),
   },
   (t) => [
     // Composite cursor pagination key — see UsersRepository.listPage.
