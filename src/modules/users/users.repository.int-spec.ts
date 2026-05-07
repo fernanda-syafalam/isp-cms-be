@@ -37,9 +37,9 @@ describe('UsersRepository (integration)', () => {
         full_name varchar(120) NOT NULL,
         password_hash varchar(255) NOT NULL,
         role user_role NOT NULL DEFAULT 'customer',
-        created_at timestamptz NOT NULL DEFAULT now(),
-        updated_at timestamptz NOT NULL DEFAULT now(),
-        deleted_at timestamptz
+        created_at timestamptz(3) NOT NULL DEFAULT now(),
+        updated_at timestamptz(3) NOT NULL DEFAULT now(),
+        deleted_at timestamptz(3)
       );
       CREATE INDEX users_created_at_id_idx ON users (created_at, id);
     `);
