@@ -22,6 +22,11 @@ export const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   DATABASE_POOL_SIZE: z.coerce.number().int().positive().default(10),
 
+  REDIS_URL: z.string().min(1).default('redis://localhost:6379'),
+
+  THROTTLER_TTL_MS: z.coerce.number().int().positive().default(60_000),
+  THROTTLER_LIMIT: z.coerce.number().int().positive().default(100),
+
   // 32+ char keeps brute-force out of reach. The schema rejects shorter
   // values so a placeholder secret never leaks into production.
   JWT_SECRET: z.string().min(32),

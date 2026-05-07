@@ -16,6 +16,13 @@ export const appConfig = registerAs('app', () => {
       url: env.DATABASE_URL,
       poolSize: env.DATABASE_POOL_SIZE,
     },
+    redis: {
+      url: env.REDIS_URL,
+    },
+    throttler: {
+      ttlMs: env.THROTTLER_TTL_MS,
+      limit: env.THROTTLER_LIMIT,
+    },
     jwt: {
       secret: env.JWT_SECRET,
       expiresIn: env.JWT_EXPIRES_IN,

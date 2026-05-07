@@ -18,6 +18,10 @@ Tooling, infrastructure, and the first reference modules are in place:
   carries the Fastify request id
 - `AllExceptionsFilter` — uniform `application/problem+json` (RFC 7807)
   responses; never leaks server-side stack traces to the client
+- `RedisModule` (ioredis) — single shared client for the throttler
+  today, ready to back BullMQ + cache later
+- `ThrottlerGuard` global, Redis-backed (Pilar 2) — limit consistent
+  across pods, configurable via `THROTTLER_TTL_MS` / `THROTTLER_LIMIT`
 - Env validation via zod parsed at startup; `ZodValidationPipe`
   global; URI versioning enabled
 - `AppModule` is a pure composition root

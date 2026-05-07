@@ -3,6 +3,7 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
 import { DrizzleService } from '../src/infrastructure/database/drizzle.service';
+import { RedisService } from '../src/infrastructure/redis/redis.service';
 
 /**
  * E2E happy-path test. Overrides DrizzleService with a stub so the
@@ -25,6 +26,16 @@ describe('Health (e2e)', () => {
         onModuleInit: () => Promise.resolve(),
         onModuleDestroy: () => Promise.resolve(),
       })
+      .overrideProvider(RedisService)
+      .useValue({
+        // Throttler storage reads `client` directly; provide a no-op
+        // ioredis-like stub so the throttler treats every request as
+        // under the rate limit.
+        client: { call: async () => null, get: async () => null, set: async () => 'OK' },
+        ping: async () => true,
+        onModuleInit: () => Promise.resolve(),
+        onModuleDestroy: () => Promise.resolve(),
+      })
       .compile();
 
     app = moduleFixture.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
@@ -42,9 +53,12 @@ describe('Health (e2e)', () => {
     expect(res.json()).toEqual({ status: 'ok' });
   });
 
-  it('GET /readyz returns 200 with database ok', async () => {
+  it('GET /readyz returns 200 with database + redis ok', async () => {
     const res = await app.inject({ method: 'GET', url: '/readyz' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ status: 'ok', checks: { database: 'ok' } });
+    expect(res.json()).toEqual({
+      status: 'ok',
+      checks: { database: 'ok', redis: 'ok' },
+    });
   });
 });
