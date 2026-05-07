@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: boilerplate-nestjs
+  labels:
+    app.kubernetes.io/name: boilerplate-nestjs
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: boilerplate-nestjs
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

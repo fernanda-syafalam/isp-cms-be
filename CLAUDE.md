@@ -43,7 +43,8 @@ Tooling, infrastructure, and the first reference modules are in place:
 - **Cache / Queue:** Redis 7+, BullMQ
 - **Container:** multi-stage Docker, distroless runtime (`Dockerfile` at repo root)
 - **CI:** GitHub Actions — `static`, `test`, and `integration` jobs (`.github/workflows/ci.yml`)
-- **Observability:** OpenTelemetry → Tempo / Loki / Mimir
+- **K8s manifests:** `k8s/` — Deployment + Service + HPA + ConfigMap + Secret template (Pilar 9 defaults)
+- **Observability:** nestjs-pino (live) → OpenTelemetry → Tempo / Loki / Mimir (planned)
 
 ## Required reading (do not re-discuss)
 
