@@ -36,9 +36,7 @@ describe('Auth (e2e)', () => {
 
     const fakeRepo = {
       findById: vi.fn(async (id: string) => (id === storedUser.id ? storedUser : null)),
-      findByEmail: vi.fn(async (email: string) =>
-        email === storedUser.email ? storedUser : null,
-      ),
+      findByEmail: vi.fn(async (email: string) => (email === storedUser.email ? storedUser : null)),
       create: vi.fn(),
       listPage: vi.fn(),
       softDelete: vi.fn(),
