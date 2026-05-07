@@ -1,3 +1,8 @@
+// MUST be imported before any NestJS / Node module that should be
+// instrumented — auto-instrumentation patches modules at load time.
+// See src/observability/tracing.ts. Common Pitfall #19 in the v2 doc.
+import './observability/tracing';
+
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Http2ServerRequest } from 'node:http2';
