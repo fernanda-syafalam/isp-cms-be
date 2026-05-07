@@ -13,3 +13,7 @@ process.env.JWT_SECRET =
 // Silence pino during tests; flip to 'info' or 'debug' if a failure
 // needs request-line diagnostics.
 process.env.LOG_LEVEL = process.env.LOG_LEVEL ?? 'silent';
+process.env.REDIS_URL = process.env.REDIS_URL ?? 'redis://localhost:6379';
+// Effectively disable rate limiting during tests; limit cases are
+// covered by unit tests, not by exhausting the real throttler.
+process.env.THROTTLER_LIMIT = process.env.THROTTLER_LIMIT ?? '1000000';

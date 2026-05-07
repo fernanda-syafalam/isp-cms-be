@@ -27,6 +27,7 @@ pivot.
 | Auth               | Passport JWT (`@nestjs/passport`) + argon2id password hashing         |
 | Logging            | nestjs-pino (JSON in prod, pino-pretty in dev) with field redaction   |
 | Errors             | RFC 7807 `application/problem+json` filter (uniform error shape)      |
+| Rate limit         | `@nestjs/throttler` with Redis storage — consistent across pods       |
 | Testing            | Vitest + Fastify `inject()` + Testcontainers Postgres                 |
 | Linter / Formatter | Biome                                                                 |
 | Container          | Multi-stage Docker, distroless runtime                                |
@@ -46,7 +47,7 @@ cp .env.example .env
 # Edit .env — at minimum set JWT_SECRET to 32+ random characters.
 
 pnpm install
-pnpm db:up           # boots a local Postgres on :5432
+pnpm db:up           # boots local Postgres + Redis via docker compose
 pnpm db:migrate      # applies the committed migrations
 pnpm dev             # starts the service on http://localhost:3000
 ```

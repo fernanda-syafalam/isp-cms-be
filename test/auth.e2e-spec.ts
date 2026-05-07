@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../src/app.module';
 import { DrizzleService } from '../src/infrastructure/database/drizzle.service';
 import type { User } from '../src/infrastructure/database/schema/users.schema';
+import { RedisService } from '../src/infrastructure/redis/redis.service';
 import { UsersRepository } from '../src/modules/users/users.repository';
 
 /**
@@ -47,6 +48,13 @@ describe('Auth (e2e)', () => {
     })
       .overrideProvider(DrizzleService)
       .useValue({
+        ping: async () => true,
+        onModuleInit: () => Promise.resolve(),
+        onModuleDestroy: () => Promise.resolve(),
+      })
+      .overrideProvider(RedisService)
+      .useValue({
+        client: { call: async () => null, get: async () => null, set: async () => 'OK' },
         ping: async () => true,
         onModuleInit: () => Promise.resolve(),
         onModuleDestroy: () => Promise.resolve(),

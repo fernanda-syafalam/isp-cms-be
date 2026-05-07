@@ -1,13 +1,17 @@
+import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_PIPE } from '@nestjs/core';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { ZodValidationPipe } from 'nestjs-zod';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
-import { appConfig } from './config/configuration';
+import { type AppConfig, appConfig } from './config/configuration';
 import { envSchema } from './config/env.schema';
 import { DrizzleModule } from './infrastructure/database/drizzle.module';
 import { AppLoggerModule } from './infrastructure/logger/logger.module';
+import { RedisModule } from './infrastructure/redis/redis.module';
+import { RedisService } from './infrastructure/redis/redis.service';
 import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
 import { UsersModule } from './modules/users/users.module';
@@ -28,6 +32,32 @@ import { UsersModule } from './modules/users/users.module';
     }),
     AppLoggerModule,
     DrizzleModule,
+    RedisModule,
+    // Rate limit per IP, backed by Redis so the limit is consistent
+    // across pods. In-memory storage resets per replica and is useless
+    // in K8s — see Pilar 2.
+    //
+    // Tests use the in-memory default to stay offline; the real Redis
+    // wiring is exercised by hand or in a future integration suite
+    // when the throttler logic itself needs coverage.
+    ThrottlerModule.forRootAsync({
+      inject: [ConfigService, RedisService],
+      useFactory: (config: ConfigService<{ app: AppConfig }, true>, redis: RedisService) => {
+        const throttlers = [
+          {
+            ttl: config.get('app.throttler.ttlMs', { infer: true }),
+            limit: config.get('app.throttler.limit', { infer: true }),
+          },
+        ];
+        if (config.get('app.nodeEnv', { infer: true }) === 'test') {
+          return { throttlers };
+        }
+        return {
+          throttlers,
+          storage: new ThrottlerStorageRedisService(redis.client),
+        };
+      },
+    }),
     AuthModule,
     HealthModule,
     UsersModule,
@@ -40,6 +70,9 @@ import { UsersModule } from './modules/users/users.module';
     // Default-deny: every endpoint requires a JWT unless `@Public()` is
     // applied. Pilar 4.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    // Per-IP rate limit. ThrottlerGuard runs after JwtAuthGuard so
+    // unauthenticated traffic still counts against the same bucket.
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
     // ZodValidationPipe is registered globally so that any DTO created
     // with `createZodDto()` is validated automatically. Non-zod DTOs
     // pass through unchanged.
