@@ -16,11 +16,11 @@ Domain modules will follow the same shape.
 | Aspect             | Current state                                | Target state                                            | Reference       |
 | ------------------ | -------------------------------------------- | ------------------------------------------------------- | --------------- |
 | HTTP adapter       | ✅ `@nestjs/platform-fastify`                | `@nestjs/platform-fastify`                              | v2 doc, Pilar 1 |
-| ORM                | ❌ (none)                                    | Drizzle + drizzle-kit                                   | ADR-0001        |
+| ORM                | 🟡 Drizzle skeleton (DrizzleService + pool); no schema yet | Drizzle + drizzle-kit                                   | ADR-0001        |
 | Validation         | ✅ zod (env at startup) + global ZodValidationPipe | zod via nestjs-zod                                      | ADR-0002        |
 | Test runner        | ✅ Vitest + SWC + Fastify `inject()` for E2E | Vitest                                                  | ADR-0002        |
 | Linter / Formatter | ✅ Biome                                     | Biome                                                   | ADR-0002        |
-| Folder layout      | 🟡 `src/modules/*` started (HealthModule)    | `src/modules/*`, `src/infrastructure/*`, `src/common/*` | v2 doc, Pilar 1 |
+| Folder layout      | 🟡 `src/modules/*` (HealthModule) + `src/infrastructure/database/*` | `src/modules/*`, `src/infrastructure/*`, `src/common/*` | v2 doc, Pilar 1 |
 
 ## Target stack (single source of truth)
 
@@ -75,15 +75,19 @@ src/
 
 ## Common commands
 
-| Task       | Current                  | Target (post-migration)                 |
-| ---------- | ------------------------ | --------------------------------------- |
-| Install    | `pnpm install`           | `pnpm install`                          |
-| Dev server | `pnpm start:dev`         | `pnpm dev`                              |
-| Test       | `pnpm test` (Jest)       | `pnpm test` (Vitest)                    |
-| Lint       | `pnpm lint` (ESLint)     | `pnpm biome check --write`              |
-| Format     | `pnpm format` (Prettier) | (handled by Biome)                      |
-| Build      | `pnpm build`             | `pnpm build`                            |
-| DB migrate | (n/a)                    | `pnpm drizzle-kit generate` + `migrate` |
+| Task        | Command                                       |
+| ----------- | --------------------------------------------- |
+| Install     | `pnpm install`                                |
+| Dev server  | `pnpm dev`                                    |
+| Typecheck   | `pnpm typecheck`                              |
+| Lint        | `pnpm lint` (Biome, with `--write`)           |
+| Lint (CI)   | `pnpm lint:ci` (Biome, no autofix)            |
+| Test        | `pnpm test` (Vitest)                          |
+| Test e2e    | `pnpm test:e2e`                               |
+| Build       | `pnpm build`                                  |
+| Local DB up | `pnpm db:up` (docker compose Postgres)        |
+| DB down     | `pnpm db:down`                                |
+| DB migrate  | `pnpm db:generate` then `pnpm db:migrate`     |
 
 ## Agent routing (project override)
 
