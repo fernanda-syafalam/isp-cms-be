@@ -33,6 +33,13 @@ export const envSchema = z.object({
   JWT_EXPIRES_IN: z.string().default('15m'),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
+
+  // OpenTelemetry. Endpoint absent -> SDK is a no-op (instrumentation
+  // still loads but spans / metrics are dropped) so engineers can run
+  // pnpm dev without a local collector.
+  OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
+  OTEL_SERVICE_NAME: z.string().min(1).default('boilerplate-nestjs'),
+  SERVICE_VERSION: z.string().default('0.0.0'),
 });
 
 export type Env = z.infer<typeof envSchema>;
