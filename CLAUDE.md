@@ -5,10 +5,10 @@ for the v2 Best Practices doc and the two ADRs accepted in this repo.
 
 ## Repo state (as of 2026-05-07)
 
-Tooling has been migrated to the target stack. Application code is
-still the `nest new` placeholder (`AppController` returning
-"Hello World!"); real modules will be added under `src/modules/*` per
-Pilar 1.
+Tooling has been migrated to the target stack. The first real module
+(`HealthModule` exposing `/healthz` and `/readyz`) lives under
+`src/modules/health/` per Pilar 1; `AppModule` is now a pure composition
+root. Domain modules will follow the same shape.
 
 | Aspect             | Current state                                | Target state                                            | Reference       |
 | ------------------ | -------------------------------------------- | ------------------------------------------------------- | --------------- |
@@ -17,7 +17,7 @@ Pilar 1.
 | Validation         | ❌ (none)                                    | zod via nestjs-zod                                      | ADR-0002        |
 | Test runner        | ✅ Vitest + SWC + Fastify `inject()` for E2E | Vitest                                                  | ADR-0002        |
 | Linter / Formatter | ✅ Biome                                     | Biome                                                   | ADR-0002        |
-| Folder layout      | ❌ `src/app.*` flat                          | `src/modules/*`, `src/infrastructure/*`, `src/common/*` | v2 doc, Pilar 1 |
+| Folder layout      | 🟡 `src/modules/*` started (HealthModule)    | `src/modules/*`, `src/infrastructure/*`, `src/common/*` | v2 doc, Pilar 1 |
 
 ## Target stack (single source of truth)
 

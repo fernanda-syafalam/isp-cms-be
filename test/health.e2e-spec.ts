@@ -3,7 +3,7 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
 
-describe('AppController (e2e)', () => {
+describe('Health (e2e)', () => {
   let app: NestFastifyApplication;
 
   beforeAll(async () => {
@@ -21,9 +21,15 @@ describe('AppController (e2e)', () => {
     await app.close();
   });
 
-  it('GET / returns "Hello World!"', async () => {
-    const res = await app.inject({ method: 'GET', url: '/' });
+  it('GET /healthz returns 200 with status ok (liveness)', async () => {
+    const res = await app.inject({ method: 'GET', url: '/healthz' });
     expect(res.statusCode).toBe(200);
-    expect(res.body).toBe('Hello World!');
+    expect(res.json()).toEqual({ status: 'ok' });
+  });
+
+  it('GET /readyz returns 200 with status ok (readiness)', async () => {
+    const res = await app.inject({ method: 'GET', url: '/readyz' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ status: 'ok' });
   });
 });
