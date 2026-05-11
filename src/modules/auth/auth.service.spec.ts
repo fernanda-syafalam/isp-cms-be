@@ -6,11 +6,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { User } from '../../infrastructure/database/schema/users.schema';
 import { UsersRepository } from '../users/users.repository';
 import { AuthService } from './auth.service';
+import { RefreshTokenService } from './refresh-token.service';
 
 describe('AuthService', () => {
   let service: AuthService;
-  let repo: { findByEmail: ReturnType<typeof vi.fn> };
+  let repo: {
+    findByEmail: ReturnType<typeof vi.fn>;
+    findById: ReturnType<typeof vi.fn>;
+  };
   let jwt: { signAsync: ReturnType<typeof vi.fn> };
+  let refresh: {
+    mint: ReturnType<typeof vi.fn>;
+    rotate: ReturnType<typeof vi.fn>;
+    revoke: ReturnType<typeof vi.fn>;
+  };
 
   const password = 'correct-horse-battery-staple';
   let user: User;
@@ -27,40 +36,93 @@ describe('AuthService', () => {
       updatedAt: new Date('2026-01-01T00:00:00Z'),
       deletedAt: null,
     };
-    repo = { findByEmail: vi.fn() };
+    repo = { findByEmail: vi.fn(), findById: vi.fn() };
     jwt = { signAsync: vi.fn().mockResolvedValue('signed.jwt.value') };
+    refresh = {
+      mint: vi.fn().mockResolvedValue({ token: 'refresh-A', expiresInSeconds: 604_800 }),
+      rotate: vi.fn(),
+      revoke: vi.fn(),
+    };
 
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
         { provide: UsersRepository, useValue: repo },
         { provide: JwtService, useValue: jwt },
+        { provide: RefreshTokenService, useValue: refresh },
       ],
     }).compile();
     service = moduleRef.get(AuthService);
   });
 
-  it('returns access token + user when credentials are valid', async () => {
-    repo.findByEmail.mockResolvedValue(user);
-    const out = await service.login(user.email, password);
-    expect(out.accessToken).toBe('signed.jwt.value');
-    expect(out.user).toEqual({ id: user.id, email: user.email, role: user.role });
-    expect(jwt.signAsync).toHaveBeenCalledWith({ sub: user.id, role: user.role });
+  describe('login', () => {
+    it('returns access + refresh token pair on valid credentials', async () => {
+      repo.findByEmail.mockResolvedValue(user);
+      const out = await service.login(user.email, password);
+      expect(out.accessToken).toBe('signed.jwt.value');
+      expect(out.refreshToken).toBe('refresh-A');
+      expect(out.refreshExpiresInSeconds).toBe(604_800);
+      expect(out.user).toEqual({ id: user.id, email: user.email, role: user.role });
+      expect(jwt.signAsync).toHaveBeenCalledWith({ sub: user.id, role: user.role });
+      expect(refresh.mint).toHaveBeenCalledWith(user.id);
+    });
+
+    it('rejects with 401 when email is unknown', async () => {
+      repo.findByEmail.mockResolvedValue(null);
+      await expect(service.login('nope@b.test', password)).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      expect(jwt.signAsync).not.toHaveBeenCalled();
+      expect(refresh.mint).not.toHaveBeenCalled();
+    });
+
+    it('rejects with 401 when password does not match', async () => {
+      repo.findByEmail.mockResolvedValue(user);
+      await expect(service.login(user.email, 'wrong-password')).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      expect(jwt.signAsync).not.toHaveBeenCalled();
+      expect(refresh.mint).not.toHaveBeenCalled();
+    });
   });
 
-  it('rejects with 401 when email is unknown', async () => {
-    repo.findByEmail.mockResolvedValue(null);
-    await expect(service.login('nope@b.test', password)).rejects.toBeInstanceOf(
-      UnauthorizedException,
-    );
-    expect(jwt.signAsync).not.toHaveBeenCalled();
+  describe('refresh', () => {
+    it('rotates the refresh token and returns a fresh pair', async () => {
+      refresh.rotate.mockResolvedValue({
+        userId: user.id,
+        refresh: { token: 'refresh-B', expiresInSeconds: 604_800 },
+      });
+      repo.findById.mockResolvedValue(user);
+
+      const out = await service.refresh('refresh-A');
+
+      expect(refresh.rotate).toHaveBeenCalledWith('refresh-A');
+      expect(out.refreshToken).toBe('refresh-B');
+      expect(out.accessToken).toBe('signed.jwt.value');
+      expect(out.user.id).toBe(user.id);
+    });
+
+    it('rejects with 401 when the rotated user no longer exists', async () => {
+      refresh.rotate.mockResolvedValue({
+        userId: user.id,
+        refresh: { token: 'refresh-B', expiresInSeconds: 604_800 },
+      });
+      repo.findById.mockResolvedValue(null);
+
+      await expect(service.refresh('refresh-A')).rejects.toBeInstanceOf(UnauthorizedException);
+    });
+
+    it('lets RefreshTokenService.rotate raise (unknown / replayed token)', async () => {
+      refresh.rotate.mockRejectedValue(new UnauthorizedException('invalid refresh token'));
+      await expect(service.refresh('stale-token')).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(jwt.signAsync).not.toHaveBeenCalled();
+    });
   });
 
-  it('rejects with 401 when password does not match', async () => {
-    repo.findByEmail.mockResolvedValue(user);
-    await expect(service.login(user.email, 'wrong-password')).rejects.toBeInstanceOf(
-      UnauthorizedException,
-    );
-    expect(jwt.signAsync).not.toHaveBeenCalled();
+  describe('logout', () => {
+    it('revokes the supplied refresh token', async () => {
+      await service.logout('refresh-Z');
+      expect(refresh.revoke).toHaveBeenCalledWith('refresh-Z');
+    });
   });
 });

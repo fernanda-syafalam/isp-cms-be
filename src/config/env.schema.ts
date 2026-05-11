@@ -31,6 +31,13 @@ export const envSchema = z.object({
   // values so a placeholder secret never leaks into production.
   JWT_SECRET: z.string().min(32),
   JWT_EXPIRES_IN: z.string().default('15m'),
+  // Refresh tokens are opaque (not JWTs) and stored hashed in Redis;
+  // the value here controls Redis TTL.
+  REFRESH_TOKEN_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(7 * 24 * 60 * 60),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 

@@ -10,9 +10,11 @@ Tooling, infrastructure, and the first reference modules are in place:
 - `HealthModule` (`/healthz`, `/readyz` with real DB ping) — `@Public()`
 - `UsersModule` under `/v1/users` — full Pilar 1+3+4+5 example with
   argon2id hashing, cursor pagination, unit + integration tests
-- `AuthModule` under `/v1/auth` — login + JWT issuance, `JwtAuthGuard`
-  registered globally so every endpoint requires a JWT unless
-  `@Public()` is applied; `@CurrentUser` decorator for handlers
+- `AuthModule` under `/v1/auth` — login + JWT issuance + opaque
+  refresh-token rotation (single-use, 7-day TTL, stored hashed in
+  Redis); endpoints `login` / `refresh` / `logout` / `me`.
+  `JwtAuthGuard` registered globally so every endpoint requires a JWT
+  unless `@Public()` is applied; `@CurrentUser` decorator for handlers
 - `RolesGuard` global, opt-in via `@Roles('admin', ...)` for coarse
   RBAC; resource ownership stays in the service
 - `AuditInterceptor` global, opt-in via `@Audit('action.name')` —

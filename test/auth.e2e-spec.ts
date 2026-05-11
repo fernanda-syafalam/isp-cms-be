@@ -54,7 +54,29 @@ describe('Auth (e2e)', () => {
       })
       .overrideProvider(RedisService)
       .useValue({
-        client: { call: async () => null, get: async () => null, set: async () => 'OK' },
+        // Minimal in-memory ioredis stand-in covering the calls
+        // RefreshTokenService + the throttler stub make. Refresh token
+        // rotation is a state machine across two POSTs, so a no-op
+        // stub would let rotated tokens "still work" — use a real Map
+        // so the test catches actual rotation semantics.
+        client: (() => {
+          const store = new Map<string, string>();
+          return {
+            call: async () => null,
+            get: async (k: string) => store.get(k) ?? null,
+            set: async (k: string, v: string) => {
+              store.set(k, v);
+              return 'OK';
+            },
+            getdel: async (k: string) => {
+              const v = store.get(k);
+              if (v === undefined) return null;
+              store.delete(k);
+              return v;
+            },
+            del: async (k: string) => (store.delete(k) ? 1 : 0),
+          };
+        })(),
         ping: async () => true,
         onModuleInit: () => Promise.resolve(),
         onModuleDestroy: () => Promise.resolve(),
@@ -116,5 +138,68 @@ describe('Auth (e2e)', () => {
       email: storedUser.email,
       role: storedUser.role,
     });
+  });
+
+  it('refresh flow: rotates the refresh token and rejects the old one', async () => {
+    const login = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: storedUser.email, password: 'correct-horse-battery-staple' },
+      headers: { 'content-type': 'application/json' },
+    });
+    const loginBody = login.json() as {
+      accessToken: string;
+      refreshToken: string;
+      refreshExpiresInSeconds: number;
+    };
+    expect(typeof loginBody.refreshToken).toBe('string');
+    expect(loginBody.refreshExpiresInSeconds).toBeGreaterThan(0);
+
+    // First rotation succeeds.
+    const r1 = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/refresh',
+      payload: { refreshToken: loginBody.refreshToken },
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(r1.statusCode).toBe(200);
+    const r1Body = r1.json() as { accessToken: string; refreshToken: string };
+    expect(r1Body.refreshToken).not.toBe(loginBody.refreshToken);
+    expect(typeof r1Body.accessToken).toBe('string');
+
+    // Replaying the original token after rotation must be rejected.
+    const replay = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/refresh',
+      payload: { refreshToken: loginBody.refreshToken },
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(replay.statusCode).toBe(401);
+  });
+
+  it('logout revokes the refresh token so it cannot be refreshed again', async () => {
+    const login = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: storedUser.email, password: 'correct-horse-battery-staple' },
+      headers: { 'content-type': 'application/json' },
+    });
+    const { refreshToken } = login.json() as { refreshToken: string };
+
+    const logout = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/logout',
+      payload: { refreshToken },
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(logout.statusCode).toBe(204);
+
+    const refresh = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/refresh',
+      payload: { refreshToken },
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(refresh.statusCode).toBe(401);
   });
 });
