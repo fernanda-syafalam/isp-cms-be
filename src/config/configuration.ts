@@ -26,6 +26,7 @@ export const appConfig = registerAs('app', () => {
     jwt: {
       secret: env.JWT_SECRET,
       expiresIn: env.JWT_EXPIRES_IN,
+      refreshTokenTtlSeconds: env.REFRESH_TOKEN_TTL_SECONDS,
     },
     logLevel: env.LOG_LEVEL,
   } as const;

@@ -98,7 +98,9 @@ Mirror its shape when adding a new bounded context.
 | --------------------- | --------- | ------------------------------------------- |
 | `GET /healthz`        | `@Public` | Liveness — dependency-free                  |
 | `GET /readyz`         | `@Public` | Readiness — pings the database              |
-| `POST /v1/auth/login` | `@Public` | Returns `{ accessToken, user }` (15 min TTL)|
+| `POST /v1/auth/login` | `@Public` | Returns `{ accessToken, refreshToken, refreshExpiresInSeconds, user }` (access 15 min, refresh 7 d) |
+| `POST /v1/auth/refresh` | `@Public` | Rotates the refresh token, returns a new pair. Old refresh is invalid after this call |
+| `POST /v1/auth/logout` | `@Public` | Revokes the supplied refresh token. Access JWT remains valid until its TTL |
 | `GET /v1/auth/me`     | JWT       | Echoes the current user                     |
 | `POST /v1/users`      | `@Public` | Self-registration (argon2id hashed)         |
 | `GET /v1/users`       | JWT       | Cursor pagination                           |
@@ -161,7 +163,7 @@ own variants.
 
 - Throttler / rate limiter with Redis storage
 - OpenTelemetry SDK and exporter wiring
-- Refresh-token rotation
+- Token family / theft detection (current rotation is single-use; family-level revocation on replay is a follow-up for higher-assurance services)
 - Helm chart
 
 ## Contributing inside this repo
