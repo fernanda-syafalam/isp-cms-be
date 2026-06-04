@@ -11,7 +11,7 @@ import { EMAIL_QUEUE } from './email.constants';
  * business action (e.g. `order-confirm:<orderId>`). BullMQ uses the
  * `jobId` to reject duplicates at insert time. A second-line check
  * (a `sent_emails` table) is recommended in production but kept out of
- * this boilerplate to focus on the queue pattern itself — see Pilar 7.
+ * this service to focus on the queue pattern itself — see Pilar 7.
  */
 export interface SendEmailJob {
   to: string;

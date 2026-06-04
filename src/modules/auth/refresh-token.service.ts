@@ -26,7 +26,7 @@ export interface MintedRefreshToken {
  *      Respond 401 either way.
  *   3. Mint a fresh refresh token, return it to the client.
  *
- * Out of scope for the boilerplate (left as follow-up for services
+ * Out of scope for this service (left as follow-up for services
  * that need higher assurance):
  *   - Token "family" theft detection: when a stolen token is replayed
  *     after the legitimate user has already rotated it, the entire

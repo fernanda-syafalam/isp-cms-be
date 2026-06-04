@@ -58,7 +58,7 @@ export const envSchema = z.object({
   // still loads but spans / metrics are dropped) so engineers can run
   // pnpm dev without a local collector.
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
-  OTEL_SERVICE_NAME: z.string().min(1).default('boilerplate-nestjs'),
+  OTEL_SERVICE_NAME: z.string().min(1).default('isp-cms-be'),
   SERVICE_VERSION: z.string().default('0.0.0'),
 });
 

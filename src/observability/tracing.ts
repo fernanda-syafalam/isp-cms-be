@@ -25,7 +25,7 @@ import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic
  * env.schema.ts still validates them for the rest of the app.
  */
 const otlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
-const serviceName = process.env.OTEL_SERVICE_NAME ?? 'boilerplate-nestjs';
+const serviceName = process.env.OTEL_SERVICE_NAME ?? 'isp-cms-be';
 const serviceVersion = process.env.SERVICE_VERSION ?? '0.0.0';
 
 export const otelSdk = new NodeSDK({

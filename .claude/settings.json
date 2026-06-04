@@ -49,7 +49,7 @@
       "Bash(gh issue list:*)",
       "Bash(gh issue view:*)",
       "Bash(gh repo view:*)",
-      "Bash(gh api repos/fernanda-syafalam/boilerplate-nestjs/*)"
+      "Bash(gh api repos/fernanda-syafalam/isp-cms-be/*)"
     ]
   }
 }

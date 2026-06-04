@@ -68,3 +68,6 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 .claude/settings.local.json
 .claude/plans/
 .claude/cache/
+
+# Personal/global Claude skills must not live in the repo
+.claude/skills/
