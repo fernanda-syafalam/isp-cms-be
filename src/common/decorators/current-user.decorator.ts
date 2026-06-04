@@ -4,6 +4,7 @@ import type { FastifyRequest } from 'fastify';
 export interface AuthUser {
   id: string;
   email: string;
+  fullName: string;
   role: 'admin' | 'staff' | 'customer';
 }
 

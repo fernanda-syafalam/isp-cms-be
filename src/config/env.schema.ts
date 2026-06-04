@@ -41,6 +41,19 @@ export const envSchema = z.object({
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 
+  // CORS — comma-separated list of allowed origins for the browser SPA.
+  // No wildcard is allowed when credentials:true (ADR-0002 / cookie model).
+  CORS_ORIGINS: z.string().default('http://localhost:5173'),
+
+  // Cookie settings for the httpOnly refresh_token cookie.
+  COOKIE_SECURE: z
+    .string()
+    .transform((v) => v === 'true' || v === '1')
+    .pipe(z.boolean())
+    .default(false),
+  COOKIE_DOMAIN: z.string().optional(),
+  COOKIE_SAMESITE: z.enum(['lax', 'strict', 'none']).default('lax'),
+
   // OpenTelemetry. Endpoint absent -> SDK is a no-op (instrumentation
   // still loads but spans / metrics are dropped) so engineers can run
   // pnpm dev without a local collector.

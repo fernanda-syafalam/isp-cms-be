@@ -62,8 +62,16 @@ describe('AuthService', () => {
       expect(out.accessToken).toBe('signed.jwt.value');
       expect(out.refreshToken).toBe('refresh-A');
       expect(out.refreshExpiresInSeconds).toBe(604_800);
-      expect(out.user).toEqual({ id: user.id, email: user.email, role: user.role });
-      expect(jwt.signAsync).toHaveBeenCalledWith({ sub: user.id, role: user.role });
+      expect(out.user).toEqual({
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+      });
+      expect(jwt.signAsync).toHaveBeenCalledWith({
+        sub: user.id,
+        role: user.role,
+      });
       expect(refresh.mint).toHaveBeenCalledWith(user.id);
     });
 

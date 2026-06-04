@@ -6,6 +6,7 @@ import './observability/tracing';
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Http2ServerRequest } from 'node:http2';
+import fastifyCookie from '@fastify/cookie';
 import { VersioningType } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
@@ -43,10 +44,47 @@ async function bootstrap(): Promise<void> {
   // Required so SIGTERM in K8s triggers OnModuleDestroy hooks.
   app.enableShutdownHooks();
 
-  // Read port via ConfigService so the value comes from the validated
-  // env schema (parsed + coerced), not an ad-hoc process.env read.
+  // Read port and cookie/CORS config via ConfigService so values come
+  // from the validated env schema (parsed + coerced), not ad-hoc
+  // process.env reads.
   const config = app.get(ConfigService<{ app: AppConfig }, true>);
   const port = config.get('app.port', { infer: true });
+  const corsOrigins = config.get('app.cors.origins', { infer: true });
+  const cookieSecure = config.get('app.cookie.secure', { infer: true });
+  const cookieDomain = config.get('app.cookie.domain', { infer: true });
+  const cookieSameSite = config.get('app.cookie.sameSite', { infer: true });
+
+  // Register @fastify/cookie BEFORE listen so that cookie parsing is
+  // available on every request. Plugin defaults apply to all setCookie
+  // calls unless overridden per-call in the controller.
+  //
+  // Cast is required: two copies of the `fastify` types exist in the tree —
+  // the root one @fastify/cookie is compiled against, and the one bundled
+  // under @nestjs/platform-fastify that the adapter uses. They are
+  // structurally identical at runtime, so we cast the plugin to the exact
+  // parameter type `app.register` expects. Standard pattern for Fastify
+  // plugins under the NestJS adapter.
+  await app.register(fastifyCookie as unknown as Parameters<typeof app.register>[0], {
+    defaults: {
+      secure: cookieSecure,
+      sameSite: cookieSameSite,
+      // domain is optional — omit when undefined to avoid sending an explicit
+      // Domain=undefined attribute which some browsers reject.
+      ...(cookieDomain ? { domain: cookieDomain } : {}),
+    },
+  });
+
+  // CORS — credentials:true requires an explicit origin allowlist.
+  // Wildcard '*' with credentials is rejected by browsers and we
+  // enforce it at config level (no wildcard in CORS_ORIGINS schema).
+  app.enableCors({
+    origin: corsOrigins,
+    credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    exposedHeaders: ['Content-Range', 'X-Request-Id'],
+  });
+
   // Bind to 0.0.0.0 — without this, the container is unreachable from outside the pod.
   await app.listen(port, '0.0.0.0');
 }

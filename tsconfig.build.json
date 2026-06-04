@@ -1,7 +1,8 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "rootDir": "src"
+    "rootDir": "src",
+    "tsBuildInfoFile": "./dist/tsconfig.build.tsbuildinfo"
   },
   "exclude": [
     "node_modules",
@@ -11,6 +12,7 @@
     "vitest.config.ts",
     "vitest.int.config.ts",
     "drizzle.config.ts",
+    "src/infrastructure/database/seed.ts",
     "**/*spec.ts",
     "**/*.int-spec.ts"
   ]

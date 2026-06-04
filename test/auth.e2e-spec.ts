@@ -1,3 +1,4 @@
+import fastifyCookie from '@fastify/cookie';
 import { VersioningType } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -86,6 +87,10 @@ describe('Auth (e2e)', () => {
       .compile();
 
     app = moduleFixture.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+    // Register @fastify/cookie just like main.ts so the controller can read
+    // req.cookies and call reply.setCookie / clearCookie. Without it the
+    // cookie-based refresh flow 500s. Cast: see the note in main.ts.
+    await app.register(fastifyCookie as unknown as Parameters<typeof app.register>[0]);
     app.enableVersioning({ type: VersioningType.URI });
     await app.init();
     await app.getHttpAdapter().getInstance().ready();
@@ -95,11 +100,22 @@ describe('Auth (e2e)', () => {
     await app.close();
   });
 
+  /** Pull a Set-Cookie value out of a light-my-request response. */
+  function getCookie(
+    res: { cookies: Array<{ name: string; value: string }> },
+    name: string,
+  ): string | undefined {
+    return res.cookies.find((c) => c.name === name)?.value;
+  }
+
   it('POST /v1/auth/login returns 200 + accessToken on valid credentials', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/auth/login',
-      payload: { email: storedUser.email, password: 'correct-horse-battery-staple' },
+      payload: {
+        email: storedUser.email,
+        password: 'correct-horse-battery-staple',
+      },
       headers: { 'content-type': 'application/json' },
     });
     expect(res.statusCode).toBe(200);
@@ -125,7 +141,10 @@ describe('Auth (e2e)', () => {
 
   it('GET /v1/auth/me returns the current user when the bearer is valid', async () => {
     const jwt = app.get(JwtService);
-    const token = await jwt.signAsync({ sub: storedUser.id, role: storedUser.role });
+    const token = await jwt.signAsync({
+      sub: storedUser.id,
+      role: storedUser.role,
+    });
 
     const res = await app.inject({
       method: 'GET',
@@ -136,6 +155,7 @@ describe('Auth (e2e)', () => {
     expect(res.json()).toEqual({
       id: storedUser.id,
       email: storedUser.email,
+      fullName: storedUser.fullName,
       role: storedUser.role,
     });
   });
@@ -144,35 +164,40 @@ describe('Auth (e2e)', () => {
     const login = await app.inject({
       method: 'POST',
       url: '/v1/auth/login',
-      payload: { email: storedUser.email, password: 'correct-horse-battery-staple' },
+      payload: {
+        email: storedUser.email,
+        password: 'correct-horse-battery-staple',
+      },
       headers: { 'content-type': 'application/json' },
     });
+    // The access token comes back in the body; the refresh token is set as an
+    // httpOnly cookie, never in the JSON body.
     const loginBody = login.json() as {
       accessToken: string;
-      refreshToken: string;
-      refreshExpiresInSeconds: number;
+      refreshToken?: string;
     };
-    expect(typeof loginBody.refreshToken).toBe('string');
-    expect(loginBody.refreshExpiresInSeconds).toBeGreaterThan(0);
+    expect(typeof loginBody.accessToken).toBe('string');
+    expect(loginBody.refreshToken).toBeUndefined();
+    const c0 = getCookie(login, 'refresh_token');
+    expect(typeof c0).toBe('string');
 
-    // First rotation succeeds.
+    // First rotation succeeds and issues a different refresh cookie.
     const r1 = await app.inject({
       method: 'POST',
       url: '/v1/auth/refresh',
-      payload: { refreshToken: loginBody.refreshToken },
-      headers: { 'content-type': 'application/json' },
+      headers: { cookie: `refresh_token=${c0}` },
     });
     expect(r1.statusCode).toBe(200);
-    const r1Body = r1.json() as { accessToken: string; refreshToken: string };
-    expect(r1Body.refreshToken).not.toBe(loginBody.refreshToken);
-    expect(typeof r1Body.accessToken).toBe('string');
+    const c1 = getCookie(r1, 'refresh_token');
+    expect(typeof c1).toBe('string');
+    expect(c1).not.toBe(c0);
+    expect(typeof (r1.json() as { accessToken: string }).accessToken).toBe('string');
 
-    // Replaying the original token after rotation must be rejected.
+    // Replaying the original cookie after rotation must be rejected.
     const replay = await app.inject({
       method: 'POST',
       url: '/v1/auth/refresh',
-      payload: { refreshToken: loginBody.refreshToken },
-      headers: { 'content-type': 'application/json' },
+      headers: { cookie: `refresh_token=${c0}` },
     });
     expect(replay.statusCode).toBe(401);
   });
@@ -181,24 +206,27 @@ describe('Auth (e2e)', () => {
     const login = await app.inject({
       method: 'POST',
       url: '/v1/auth/login',
-      payload: { email: storedUser.email, password: 'correct-horse-battery-staple' },
+      payload: {
+        email: storedUser.email,
+        password: 'correct-horse-battery-staple',
+      },
       headers: { 'content-type': 'application/json' },
     });
-    const { refreshToken } = login.json() as { refreshToken: string };
+    const cookie = getCookie(login, 'refresh_token');
+    expect(typeof cookie).toBe('string');
 
     const logout = await app.inject({
       method: 'POST',
       url: '/v1/auth/logout',
-      payload: { refreshToken },
-      headers: { 'content-type': 'application/json' },
+      headers: { cookie: `refresh_token=${cookie}` },
     });
     expect(logout.statusCode).toBe(204);
 
+    // The same cookie can no longer be exchanged after logout revoked it.
     const refresh = await app.inject({
       method: 'POST',
       url: '/v1/auth/refresh',
-      payload: { refreshToken },
-      headers: { 'content-type': 'application/json' },
+      headers: { cookie: `refresh_token=${cookie}` },
     });
     expect(refresh.statusCode).toBe(401);
   });

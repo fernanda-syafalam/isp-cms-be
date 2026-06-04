@@ -29,6 +29,15 @@ export const appConfig = registerAs('app', () => {
       refreshTokenTtlSeconds: env.REFRESH_TOKEN_TTL_SECONDS,
     },
     logLevel: env.LOG_LEVEL,
+    cors: {
+      // Split here so downstream code gets a ready-to-use string array.
+      origins: env.CORS_ORIGINS.split(',').map((o) => o.trim()),
+    },
+    cookie: {
+      secure: env.COOKIE_SECURE,
+      domain: env.COOKIE_DOMAIN,
+      sameSite: env.COOKIE_SAMESITE,
+    },
   } as const;
 });
 

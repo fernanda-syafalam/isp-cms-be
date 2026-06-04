@@ -10,8 +10,15 @@ interface JwtPayload {
   role: AuthUser['role'];
 }
 
+/**
+ * Internal result carrying both the access token and the raw refresh
+ * token + TTL so the controller can set the httpOnly cookie. Neither
+ * `refreshToken` nor `refreshExpiresInSeconds` is ever sent in the
+ * JSON body — the controller extracts them before building the response.
+ */
 export interface LoginResult {
   accessToken: string;
+  /** Raw opaque refresh token — MUST be placed in httpOnly cookie, not JSON body. */
   refreshToken: string;
   refreshExpiresInSeconds: number;
   user: AuthUser;
@@ -44,7 +51,7 @@ export class AuthService {
       accessToken,
       refreshToken: refresh.token,
       refreshExpiresInSeconds: refresh.expiresInSeconds,
-      user: { id: user.id, email: user.email, role: user.role },
+      user: { id: user.id, email: user.email, fullName: user.fullName, role: user.role },
     };
   }
 
@@ -65,7 +72,7 @@ export class AuthService {
       accessToken,
       refreshToken: refresh.token,
       refreshExpiresInSeconds: refresh.expiresInSeconds,
-      user: { id: user.id, email: user.email, role: user.role },
+      user: { id: user.id, email: user.email, fullName: user.fullName, role: user.role },
     };
   }
 
