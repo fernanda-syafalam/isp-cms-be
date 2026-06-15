@@ -4,6 +4,7 @@
 // references across files.
 export * from './branches.schema';
 export * from './contracts.schema';
+export * from './coverage.schema';
 export * from './customers.schema';
 export * from './inventory.schema';
 export * from './invoices.schema';

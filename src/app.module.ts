@@ -18,6 +18,7 @@ import { RedisService } from './infrastructure/redis/redis.service';
 import { AuthModule } from './modules/auth/auth.module';
 import { BranchesModule } from './modules/branches/branches.module';
 import { ContractsModule } from './modules/contracts/contracts.module';
+import { CoverageModule } from './modules/coverage/coverage.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { EmailModule } from './modules/email/email.module';
 import { HealthModule } from './modules/health/health.module';
@@ -82,6 +83,7 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     AuthModule,
     BranchesModule,
     ContractsModule,
+    CoverageModule,
     CustomersModule,
     EmailModule,
     HealthModule,
