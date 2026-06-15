@@ -214,4 +214,24 @@ describe('CustomersRepository (integration)', () => {
       repo.setStatus('00000000-0000-0000-0000-0000000000ff', 'aktif', {}),
     ).rejects.toThrow();
   });
+
+  it('resolves a customer by email and a representative via findFirst (portal)', async () => {
+    await repo.create({
+      fullName: 'Zaki',
+      phone: '0813',
+      email: 'zaki@example.com',
+      address: 'Jl. Z',
+      planId,
+    });
+    await repo.create({ fullName: 'Ani', phone: '0812', address: 'Jl. A', planId });
+
+    const byEmail = await repo.findByEmail('zaki@example.com');
+    expect(byEmail?.fullName).toBe('Zaki');
+    expect(byEmail?.planName).toBe('Home 20');
+    expect(await repo.findByEmail('nobody@example.com')).toBeNull();
+
+    // findFirst is deterministic (alphabetical by full_name).
+    const first = await repo.findFirst();
+    expect(first?.fullName).toBe('Ani');
+  });
 });

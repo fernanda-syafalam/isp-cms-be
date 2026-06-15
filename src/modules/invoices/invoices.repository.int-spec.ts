@@ -193,4 +193,28 @@ describe('InvoicesRepository (integration)', () => {
     expect(ledger.items[0]?.amount).toBe(222_000);
     expect(ledger.items[0]?.method).toBe('transfer');
   });
+
+  it('scopes invoices and payments to one customer for the portal', async () => {
+    const jun = await repo.create(newInvoice({ periodStart: '2026-06-01' }));
+    await repo.create(newInvoice({ periodStart: '2026-07-01' }));
+    await repo.createPayment({
+      invoiceId: jun.id,
+      invoiceNo: jun.invoiceNo,
+      customerId,
+      customerName: 'Budi',
+      amount: 222_000,
+      method: 'qris',
+    });
+
+    const invoicesForCustomer = await repo.listByCustomer(customerId);
+    expect(invoicesForCustomer).toHaveLength(2);
+
+    const paymentsForCustomer = await repo.listPaymentsByCustomer(customerId);
+    expect(paymentsForCustomer).toHaveLength(1);
+    expect(paymentsForCustomer[0]?.method).toBe('qris');
+
+    const other = '00000000-0000-0000-0000-0000000000ff';
+    expect(await repo.listByCustomer(other)).toHaveLength(0);
+    expect(await repo.listPaymentsByCustomer(other)).toHaveLength(0);
+  });
 });

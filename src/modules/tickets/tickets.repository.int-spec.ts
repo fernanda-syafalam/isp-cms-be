@@ -184,4 +184,22 @@ describe('TicketsRepository (integration)', () => {
     expect(events.total).toBe(2);
     expect(events.items.map((e) => e.kind)).toEqual(['created', 'comment']);
   });
+
+  it('scopes tickets to one customer for the portal, newest first', async () => {
+    await repo.create(
+      newTicket({ subject: 'Lambat', createdAt: new Date('2026-06-14T00:00:00.000Z') }),
+    );
+    await repo.create(
+      newTicket({ subject: 'Mati total', createdAt: new Date('2026-06-15T00:00:00.000Z') }),
+    );
+    // A ticket for nobody must not leak into a customer's list.
+    await repo.create(newTicket({ customerId: null, customerName: 'Unknown' }));
+
+    const mine = await repo.listByCustomer(customerId);
+    expect(mine).toHaveLength(2);
+    expect(mine[0]?.subject).toBe('Mati total');
+
+    const other = '00000000-0000-0000-0000-0000000000ff';
+    expect(await repo.listByCustomer(other)).toHaveLength(0);
+  });
 });

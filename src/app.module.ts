@@ -32,6 +32,7 @@ import { LeadsModule } from './modules/leads/leads.module';
 import { MonitoringModule } from './modules/monitoring/monitoring.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { PlansModule } from './modules/plans/plans.module';
+import { PortalModule } from './modules/portal/portal.module';
 import { ResellersModule } from './modules/resellers/resellers.module';
 import { RouterResourcesModule } from './modules/router-resources/router-resources.module';
 import { RoutersModule } from './modules/routers/routers.module';
@@ -105,6 +106,7 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     MonitoringModule,
     NotificationsModule,
     PlansModule,
+    PortalModule,
     ResellersModule,
     RouterResourcesModule,
     RoutersModule,

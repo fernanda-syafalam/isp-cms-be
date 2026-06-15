@@ -54,6 +54,15 @@ export class InvoicesRepository {
     return row ?? null;
   }
 
+  // A single customer's invoices, newest first — the portal "me" snapshot.
+  async listByCustomer(customerId: string): Promise<Invoice[]> {
+    return this.db
+      .select()
+      .from(invoices)
+      .where(eq(invoices.customerId, customerId))
+      .orderBy(desc(invoices.createdAt));
+  }
+
   async create(input: NewInvoice): Promise<Invoice> {
     const [row] = await this.db.insert(invoices).values(input).returning();
     if (!row) {
@@ -195,6 +204,15 @@ export class InvoicesRepository {
       .offset(filter.offset);
     const [totals] = await this.db.select({ value: count() }).from(payments);
     return { items, total: totals?.value ?? 0 };
+  }
+
+  // A single customer's recorded payments, newest first (portal snapshot).
+  async listPaymentsByCustomer(customerId: string): Promise<Payment[]> {
+    return this.db
+      .select()
+      .from(payments)
+      .where(eq(payments.customerId, customerId))
+      .orderBy(desc(payments.paidAt));
   }
 
   async createPayment(input: NewPayment): Promise<Payment> {
