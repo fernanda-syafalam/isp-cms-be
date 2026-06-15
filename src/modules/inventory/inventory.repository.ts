@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { count, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, sql } from 'drizzle-orm';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type InventoryItem,
@@ -56,6 +56,18 @@ export class InventoryRepository {
       .select()
       .from(inventoryItems)
       .where(eq(inventoryItems.id, id))
+      .limit(1);
+    return row ?? null;
+  }
+
+  // The next ONU available to hand out: oldest warehouse stock first
+  // (FIFO), so the install cascade consumes physical inventory deterministically.
+  async findAvailableOnu(): Promise<InventoryItem | null> {
+    const [row] = await this.db
+      .select()
+      .from(inventoryItems)
+      .where(and(eq(inventoryItems.kind, 'onu'), eq(inventoryItems.status, 'warehouse')))
+      .orderBy(asc(inventoryItems.createdAt))
       .limit(1);
     return row ?? null;
   }
