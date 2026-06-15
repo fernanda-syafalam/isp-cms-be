@@ -24,6 +24,7 @@ import { InventoryModule } from './modules/inventory/inventory.module';
 import { InvoicesModule } from './modules/invoices/invoices.module';
 import { LeadsModule } from './modules/leads/leads.module';
 import { PlansModule } from './modules/plans/plans.module';
+import { ResellersModule } from './modules/resellers/resellers.module';
 import { SlaCreditsModule } from './modules/sla-credits/sla-credits.module';
 import { TicketsModule } from './modules/tickets/tickets.module';
 import { UsersModule } from './modules/users/users.module';
@@ -82,6 +83,7 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     InvoicesModule,
     LeadsModule,
     PlansModule,
+    ResellersModule,
     SlaCreditsModule,
     TicketsModule,
     UsersModule,
