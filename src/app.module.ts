@@ -25,6 +25,7 @@ import { LeadsModule } from './modules/leads/leads.module';
 import { PlansModule } from './modules/plans/plans.module';
 import { TicketsModule } from './modules/tickets/tickets.module';
 import { UsersModule } from './modules/users/users.module';
+import { VouchersModule } from './modules/vouchers/vouchers.module';
 import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
 
 /**
@@ -80,6 +81,7 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     PlansModule,
     TicketsModule,
     UsersModule,
+    VouchersModule,
     WorkOrdersModule,
   ],
   providers: [
