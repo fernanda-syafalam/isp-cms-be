@@ -17,6 +17,7 @@ import { RedisModule } from './infrastructure/redis/redis.module';
 import { RedisService } from './infrastructure/redis/redis.service';
 import { AccountingModule } from './modules/accounting/accounting.module';
 import { AcsModule } from './modules/acs/acs.module';
+import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { BranchesModule } from './modules/branches/branches.module';
 import { ContractsModule } from './modules/contracts/contracts.module';
@@ -89,6 +90,7 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     QueueModule,
     AccountingModule,
     AcsModule,
+    AuditModule,
     AuthModule,
     BranchesModule,
     ContractsModule,
