@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PlansRepository } from '../plans/plans.repository';
 import {
   type CustomerListFilter,
@@ -6,6 +7,7 @@ import {
   CustomersRepository,
 } from './customers.repository';
 import type { CreateCustomerInput } from './dto/create-customer.dto';
+import type { ChangePlanInput, RelocateInput, SetOnuWifiInput } from './dto/customer-actions.dto';
 import type { CustomerResponse } from './dto/customer-response.dto';
 import type { UpdateCustomerInput } from './dto/update-customer.dto';
 import type { UpdateKycInput } from './dto/update-kyc.dto';
@@ -17,8 +19,10 @@ export class CustomersService {
   constructor(
     private readonly repo: CustomersRepository,
     // Plans is the source of truth for a customer's plan. We only read it
-    // (validate the FK before insert), so depend on the repository.
+    // (validate the FK + read price for proration), so depend on the repo.
     private readonly plans: PlansRepository,
+    // WhatsApp dunning reminders go through the notifications module.
+    private readonly notifications: NotificationsService,
   ) {}
 
   async list(filter: CustomerListFilter): Promise<{ items: CustomerResponse[]; total: number }> {
@@ -104,6 +108,64 @@ export class CustomersService {
   async requestDataDeletion(id: string): Promise<void> {
     await this.repo.requestDataDeletion(id);
     this.logger.log({ customerId: id }, 'data deletion requested');
+  }
+
+  // --- Subscriber actions ---------------------------------------------
+
+  /** Move the customer to a new address + service area. */
+  async relocate(id: string, input: RelocateInput): Promise<CustomerResponse> {
+    const row = await this.repo.relocate(id, { address: input.address, areaName: input.areaName });
+    this.logger.log({ customerId: id }, 'customer relocated');
+    return toCustomerResponse(row);
+  }
+
+  /** Reboot the customer's ONU — acknowledgment only (GenieACS owns the device). */
+  async rebootOnu(id: string): Promise<CustomerResponse> {
+    const row = await this.requireById(id);
+    this.logger.log({ customerId: id }, 'onu reboot requested');
+    return toCustomerResponse(row);
+  }
+
+  /** Set the ONU WiFi — acknowledgment only (credentials not persisted here). */
+  async setOnuWifi(id: string, _input: SetOnuWifiInput): Promise<CustomerResponse> {
+    const row = await this.requireById(id);
+    this.logger.log({ customerId: id }, 'onu wifi set');
+    return toCustomerResponse(row);
+  }
+
+  /** Fire a WhatsApp billing reminder to the customer. */
+  async notifyWhatsapp(id: string): Promise<CustomerResponse> {
+    const row = await this.requireById(id);
+    await this.notifications.send({ event: 'due_soon', to: row.phone });
+    this.logger.log({ customerId: id }, 'whatsapp reminder sent');
+    return toCustomerResponse(row);
+  }
+
+  /**
+   * Change the plan. planName re-derives from the join; an upgrade adds the
+   * monthly price delta to the outstanding balance (proration). A formal
+   * proration invoice line is a follow-up.
+   */
+  async changePlan(id: string, input: ChangePlanInput): Promise<CustomerResponse> {
+    const customer = await this.requireById(id);
+    const newPlan = await this.plans.findById(input.planId);
+    if (!newPlan) throw new BadRequestException('plan not found');
+
+    const oldPlan = await this.plans.findById(customer.planId);
+    const delta = oldPlan ? Math.max(0, newPlan.priceMonthly - oldPlan.priceMonthly) : 0;
+
+    await this.repo.updateProfile(id, { planId: input.planId });
+    if (delta > 0) {
+      await this.repo.setBilling(id, { outstanding: customer.outstanding + delta });
+    }
+    this.logger.log({ customerId: id, planId: input.planId, delta }, 'customer plan changed');
+    return this.findById(id);
+  }
+
+  private async requireById(id: string): Promise<CustomerRow> {
+    const row = await this.repo.findById(id);
+    if (!row) throw new NotFoundException('customer not found');
+    return row;
   }
 
   private async transition(

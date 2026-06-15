@@ -15,6 +15,7 @@ import { Audit } from '../../common/decorators/audit.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CustomersService } from './customers.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
+import { ChangePlanDto, RelocateDto, SetOnuWifiDto } from './dto/customer-actions.dto';
 import { CustomerResponseDto } from './dto/customer-response.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { UpdateKycDto } from './dto/update-kyc.dto';
@@ -132,5 +133,47 @@ export class CustomersController {
   @HttpCode(HttpStatus.ACCEPTED)
   requestDataDeletion(@Param('id') id: string): Promise<void> {
     return this.customers.requestDataDeletion(id);
+  }
+
+  // --- Subscriber actions ---------------------------------------------
+
+  @Roles('admin', 'staff')
+  @Audit('customer.relocate')
+  @Post(':id/relocate')
+  @ZodSerializerDto(CustomerResponseDto)
+  relocate(@Param('id') id: string, @Body() body: RelocateDto) {
+    return this.customers.relocate(id, body);
+  }
+
+  @Roles('admin', 'staff')
+  @Audit('customer.change_plan')
+  @Post(':id/change-plan')
+  @ZodSerializerDto(CustomerResponseDto)
+  changePlan(@Param('id') id: string, @Body() body: ChangePlanDto) {
+    return this.customers.changePlan(id, body);
+  }
+
+  @Roles('admin', 'staff')
+  @Audit('customer.onu_reboot')
+  @Post(':id/onu/reboot')
+  @ZodSerializerDto(CustomerResponseDto)
+  rebootOnu(@Param('id') id: string) {
+    return this.customers.rebootOnu(id);
+  }
+
+  @Roles('admin', 'staff')
+  @Audit('customer.onu_wifi')
+  @Post(':id/onu/wifi')
+  @ZodSerializerDto(CustomerResponseDto)
+  setOnuWifi(@Param('id') id: string, @Body() body: SetOnuWifiDto) {
+    return this.customers.setOnuWifi(id, body);
+  }
+
+  @Roles('admin', 'staff')
+  @Audit('customer.notify_whatsapp')
+  @Post(':id/notify/whatsapp')
+  @ZodSerializerDto(CustomerResponseDto)
+  notifyWhatsapp(@Param('id') id: string) {
+    return this.customers.notifyWhatsapp(id);
   }
 }
