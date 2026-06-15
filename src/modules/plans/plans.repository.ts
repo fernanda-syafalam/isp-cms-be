@@ -26,6 +26,13 @@ export class PlansRepository {
     return row ?? null;
   }
 
+  // Resolve a plan from its display name — used when a caller references a
+  // plan by name (e.g. converting a lead, which stores planName).
+  async findByName(name: string): Promise<Plan | null> {
+    const [row] = await this.db.select().from(plans).where(eq(plans.name, name)).limit(1);
+    return row ?? null;
+  }
+
   async create(input: NewPlan): Promise<Plan> {
     const [row] = await this.db.insert(plans).values(input).returning();
     if (!row) {

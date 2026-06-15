@@ -20,6 +20,7 @@ import { CustomersModule } from './modules/customers/customers.module';
 import { EmailModule } from './modules/email/email.module';
 import { HealthModule } from './modules/health/health.module';
 import { InvoicesModule } from './modules/invoices/invoices.module';
+import { LeadsModule } from './modules/leads/leads.module';
 import { PlansModule } from './modules/plans/plans.module';
 import { TicketsModule } from './modules/tickets/tickets.module';
 import { UsersModule } from './modules/users/users.module';
@@ -73,6 +74,7 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     EmailModule,
     HealthModule,
     InvoicesModule,
+    LeadsModule,
     PlansModule,
     TicketsModule,
     UsersModule,
