@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { and, asc, count, eq, getTableColumns, ilike, or, sql } from 'drizzle-orm';
+import { and, asc, count, eq, getTableColumns, ilike, isNotNull, or, sql } from 'drizzle-orm';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type Customer,
@@ -73,6 +73,29 @@ export class CustomersRepository {
   async findById(id: string): Promise<CustomerRow | null> {
     const [row] = await this.baseSelect().where(eq(customers.id, id)).limit(1);
     return row ?? null;
+  }
+
+  // How many customers are linked to a reseller name. Customers reference a
+  // reseller by name (not FK), so the count is derived here for the
+  // resellers module.
+  async countByResellerName(resellerName: string): Promise<number> {
+    const [row] = await this.db
+      .select({ value: count() })
+      .from(customers)
+      .where(eq(customers.resellerName, resellerName));
+    return row?.value ?? 0;
+  }
+
+  // Bulk customer counts grouped by reseller name (skips unlinked).
+  async countsByResellerName(): Promise<Array<{ resellerName: string; count: number }>> {
+    const rows = await this.db
+      .select({ resellerName: customers.resellerName, value: count() })
+      .from(customers)
+      .where(isNotNull(customers.resellerName))
+      .groupBy(customers.resellerName);
+    return rows.flatMap((r) =>
+      r.resellerName ? [{ resellerName: r.resellerName, count: r.value }] : [],
+    );
   }
 
   // Resolve a customer id from an exact full-name match (first hit). Used
