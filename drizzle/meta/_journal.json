@@ -57,6 +57,13 @@
       "when": 1781494006805,
       "tag": "0007_bored_johnny_blaze",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1781494724575,
+      "tag": "0008_lazy_kronos",
+      "breakpoints": true
     }
   ]
 }
