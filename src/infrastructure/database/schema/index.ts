@@ -7,6 +7,7 @@ export * from './customers.schema';
 export * from './inventory.schema';
 export * from './invoices.schema';
 export * from './leads.schema';
+export * from './notifications.schema';
 export * from './plans.schema';
 export * from './resellers.schema';
 export * from './routers.schema';
