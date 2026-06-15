@@ -118,4 +118,11 @@ describe('MonitoringRepository (integration)', () => {
     expect(found?.acknowledged).toBe(true);
     await expect(repo.acknowledge('00000000-0000-0000-0000-0000000000ff')).rejects.toThrow();
   });
+
+  it('counts only unacknowledged alerts for the dashboard badge', async () => {
+    await repo.ensureSeeded(METRICS, ALERTS);
+    expect(await repo.countUnacknowledged()).toBe(2);
+    await repo.acknowledge(A2);
+    expect(await repo.countUnacknowledged()).toBe(1);
+  });
 });

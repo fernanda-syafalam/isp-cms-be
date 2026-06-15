@@ -234,4 +234,73 @@ describe('CustomersRepository (integration)', () => {
     const first = await repo.findFirst();
     expect(first?.fullName).toBe('Ani');
   });
+
+  it('aggregates status counts, new-since and at-risk for the dashboard', async () => {
+    const a = await repo.create({ fullName: 'Aktif', phone: '08', address: 'Jl', planId });
+    await repo.setStatus(a.id, 'aktif', {});
+    const i = await repo.create({ fullName: 'Isolir', phone: '08', address: 'Jl', planId });
+    await repo.setStatus(i.id, 'isolir', {});
+    // A prospek carrying a balance — at risk despite not being isolated.
+    const p = await repo.create({ fullName: 'Prospek', phone: '08', address: 'Jl', planId });
+    await db.update(customers).set({ outstanding: 50_000 }).where(eq(customers.id, p.id));
+    const b = await repo.create({ fullName: 'Berhenti', phone: '08', address: 'Jl', planId });
+    await repo.setStatus(b.id, 'berhenti', {});
+
+    expect(await repo.countByStatus()).toEqual({
+      prospek: 1,
+      instalasi: 0,
+      aktif: 1,
+      isolir: 1,
+      berhenti: 1,
+    });
+    // All four were just created; a far-future cutoff sees none.
+    expect(await repo.countCreatedSince(new Date('2000-01-01T00:00:00.000Z'))).toBe(4);
+    expect(await repo.countCreatedSince(new Date('2999-01-01T00:00:00.000Z'))).toBe(0);
+    // At risk = isolir OR outstanding > 0 -> the isolir + the prospek-with-debt.
+    expect(await repo.countAtRisk()).toBe(2);
+  });
+
+  it('groups new and churned subscribers by month, honoring the since bound', async () => {
+    await db.insert(customers).values([
+      // Added: Feb x2 (the churned rows, created earlier), Mar x2, May x1.
+      mk('Mar1', { createdAt: new Date('2026-03-10T00:00:00.000Z') }),
+      mk('Mar2', { createdAt: new Date('2026-03-20T00:00:00.000Z') }),
+      mk('May1', { createdAt: new Date('2026-05-05T00:00:00.000Z') }),
+      // Churned: berhenti updated in Apr and Jun.
+      mk('AprC', {
+        status: 'berhenti',
+        createdAt: new Date('2026-02-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-04-01T00:00:00.000Z'),
+      }),
+      mk('JunC', {
+        status: 'berhenti',
+        createdAt: new Date('2026-02-02T00:00:00.000Z'),
+        updatedAt: new Date('2026-06-01T00:00:00.000Z'),
+      }),
+      // Before the window — excluded by the since bound.
+      mk('Old', { createdAt: new Date('2025-12-15T00:00:00.000Z') }),
+    ]);
+
+    const since = new Date('2026-01-01T00:00:00.000Z');
+    const byMonth = (rows: Array<{ month: string; count: number }>) =>
+      [...rows].sort((x, y) => x.month.localeCompare(y.month));
+
+    expect(byMonth(await repo.countCreatedByMonth(since))).toEqual([
+      { month: '2026-02', count: 2 },
+      { month: '2026-03', count: 2 },
+      { month: '2026-05', count: 1 },
+    ]);
+    expect(byMonth(await repo.countChurnedByMonth(since))).toEqual([
+      { month: '2026-04', count: 1 },
+      { month: '2026-06', count: 1 },
+    ]);
+  });
+
+  // Insert helper for the month-grouping aggregates (explicit timestamps).
+  function mk(
+    fullName: string,
+    over: Partial<typeof customers.$inferInsert> = {},
+  ): typeof customers.$inferInsert {
+    return { fullName, phone: '08', address: 'Jl', planId, ...over };
+  }
 });

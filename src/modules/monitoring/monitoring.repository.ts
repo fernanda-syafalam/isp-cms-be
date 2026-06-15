@@ -74,4 +74,15 @@ export class MonitoringRepository {
       throw new NotFoundException('alert not found');
     }
   }
+
+  // --- Analytics support ----------------------------------------------
+
+  /** Open NOC alerts not yet acknowledged — the dashboard "alerts" badge. */
+  async countUnacknowledged(): Promise<number> {
+    const [row] = await this.db
+      .select({ value: count() })
+      .from(alerts)
+      .where(eq(alerts.acknowledged, false));
+    return row?.value ?? 0;
+  }
 }

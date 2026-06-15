@@ -7,6 +7,7 @@ import {
   eq,
   getTableColumns,
   gt,
+  gte,
   ilike,
   inArray,
   isNotNull,
@@ -316,6 +317,77 @@ export class CustomersRepository {
     if (result.rowCount === 0) {
       throw new NotFoundException('customer not found');
     }
+  }
+
+  // --- Analytics support ----------------------------------------------
+  // Aggregate reads for the dashboard/reports rollup. The analytics module
+  // owns no table, so every count it needs is derived here (Pilar 3).
+
+  /** Subscriber counts grouped by lifecycle status (every status present). */
+  async countByStatus(): Promise<Record<Customer['status'], number>> {
+    const rows = await this.db
+      .select({ status: customers.status, value: count() })
+      .from(customers)
+      .groupBy(customers.status);
+    const result: Record<Customer['status'], number> = {
+      prospek: 0,
+      instalasi: 0,
+      aktif: 0,
+      isolir: 0,
+      berhenti: 0,
+    };
+    for (const row of rows) {
+      result[row.status] = row.value;
+    }
+    return result;
+  }
+
+  /** Customers created on/after `since` — the "new this period" KPI. */
+  async countCreatedSince(since: Date): Promise<number> {
+    const [row] = await this.db
+      .select({ value: count() })
+      .from(customers)
+      .where(gte(customers.createdAt, since));
+    return row?.value ?? 0;
+  }
+
+  /** Churn-risk subscribers: isolated or carrying a balance. */
+  async countAtRisk(): Promise<number> {
+    const [row] = await this.db
+      .select({ value: count() })
+      .from(customers)
+      .where(or(eq(customers.status, 'isolir'), gt(customers.outstanding, 0)));
+    return row?.value ?? 0;
+  }
+
+  /** New subscribers per calendar month (UTC, YYYY-MM) since `since`. */
+  async countCreatedByMonth(since: Date): Promise<Array<{ month: string; count: number }>> {
+    const rows = await this.db
+      .select({
+        month: sql<string>`to_char(${customers.createdAt} at time zone 'UTC', 'YYYY-MM')`,
+        value: count(),
+      })
+      .from(customers)
+      .where(gte(customers.createdAt, since))
+      .groupBy(sql`to_char(${customers.createdAt} at time zone 'UTC', 'YYYY-MM')`);
+    return rows.map((row) => ({ month: row.month, count: row.value }));
+  }
+
+  /**
+   * Churned subscribers per calendar month (YYYY-MM) since `since`, keyed by
+   * the time the status moved to `berhenti` (its updated_at — there is no
+   * dedicated churn timestamp yet).
+   */
+  async countChurnedByMonth(since: Date): Promise<Array<{ month: string; count: number }>> {
+    const rows = await this.db
+      .select({
+        month: sql<string>`to_char(${customers.updatedAt} at time zone 'UTC', 'YYYY-MM')`,
+        value: count(),
+      })
+      .from(customers)
+      .where(and(eq(customers.status, 'berhenti'), gte(customers.updatedAt, since)))
+      .groupBy(sql`to_char(${customers.updatedAt} at time zone 'UTC', 'YYYY-MM')`);
+    return rows.map((row) => ({ month: row.month, count: row.value }));
   }
 
   // Shared update path: always bumps updated_at, throws NotFound when the

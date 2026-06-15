@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { count, desc, eq, sql } from 'drizzle-orm';
+import { count, desc, eq, inArray, sql } from 'drizzle-orm';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import { type Lead, type NewLead, leads } from '../../infrastructure/database/schema/leads.schema';
 
@@ -45,6 +45,24 @@ export class LeadsRepository {
       throw new Error('leads.insert returned no row');
     }
     return row;
+  }
+
+  // --- Analytics support ----------------------------------------------
+
+  /**
+   * Open sales pipeline: the summed estimated value and count of leads still
+   * in play (stages new/survey/quote — won/lost are terminal). Powers the
+   * dashboard command-center.
+   */
+  async activePipeline(): Promise<{ value: number; count: number }> {
+    const [row] = await this.db
+      .select({
+        value: sql<string>`coalesce(sum(${leads.estValue}), 0)`,
+        value_count: count(),
+      })
+      .from(leads)
+      .where(inArray(leads.stage, ['new', 'survey', 'quote']));
+    return { value: Number(row?.value ?? 0), count: row?.value_count ?? 0 };
   }
 
   async setStage(id: string, stage: Lead['stage']): Promise<Lead> {

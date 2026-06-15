@@ -51,6 +51,17 @@ export class SlaCreditsRepository {
     return row;
   }
 
+  // --- Analytics support ----------------------------------------------
+
+  /** SLA credits awaiting application — the dashboard command-center badge. */
+  async countPending(): Promise<number> {
+    const [row] = await this.db
+      .select({ value: count() })
+      .from(slaCredits)
+      .where(eq(slaCredits.status, 'pending'));
+    return row?.value ?? 0;
+  }
+
   async apply(id: string): Promise<SlaCredit> {
     const [row] = await this.db
       .update(slaCredits)

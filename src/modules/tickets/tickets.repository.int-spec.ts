@@ -202,4 +202,19 @@ describe('TicketsRepository (integration)', () => {
     const other = '00000000-0000-0000-0000-0000000000ff';
     expect(await repo.listByCustomer(other)).toHaveLength(0);
   });
+
+  it('counts tickets by status with every status present', async () => {
+    await repo.create(newTicket());
+    await repo.create(newTicket({ status: 'in_progress' }));
+    await repo.create(newTicket({ status: 'resolved' }));
+    await repo.create(newTicket({ status: 'resolved' }));
+    await repo.create(newTicket({ status: 'breached' }));
+
+    expect(await repo.countByStatus()).toEqual({
+      open: 1,
+      in_progress: 1,
+      resolved: 2,
+      breached: 1,
+    });
+  });
 });

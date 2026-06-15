@@ -217,4 +217,62 @@ describe('InvoicesRepository (integration)', () => {
     expect(await repo.listByCustomer(other)).toHaveLength(0);
     expect(await repo.listPaymentsByCustomer(other)).toHaveLength(0);
   });
+
+  it('lists every unpaid invoice oldest-due first for the receivables rollup', async () => {
+    await repo.create(
+      newInvoice({ periodStart: '2026-05-01', status: 'overdue', dueDate: '2026-05-10' }),
+    );
+    await repo.create(
+      newInvoice({ periodStart: '2026-06-01', status: 'pending', dueDate: '2026-06-10' }),
+    );
+    await repo.create(
+      newInvoice({ periodStart: '2026-07-01', status: 'paid', dueDate: '2026-07-10' }),
+    );
+    await repo.create(
+      newInvoice({ periodStart: '2026-08-01', status: 'draft', dueDate: '2026-08-10' }),
+    );
+
+    const unpaid = await repo.listUnpaid();
+    // Only pending + overdue, sorted by due date ascending.
+    expect(unpaid.map((i) => i.status)).toEqual(['overdue', 'pending']);
+    expect(unpaid.map((i) => i.dueDate)).toEqual(['2026-05-10', '2026-06-10']);
+  });
+
+  it('sums settled cash per month from payments, honoring the since cutoff', async () => {
+    const inv = await repo.create(newInvoice());
+    await db.insert(payments).values([
+      mkPayment(inv, 100_000, 'transfer', '2026-04-15T00:00:00.000Z'),
+      mkPayment(inv, 50_000, 'qris', '2026-04-20T00:00:00.000Z'),
+      mkPayment(inv, 200_000, 'va', '2026-06-01T00:00:00.000Z'),
+      // Before the cutoff — excluded.
+      mkPayment(inv, 999_000, 'cash', '2025-12-01T00:00:00.000Z'),
+    ]);
+
+    const since = new Date('2026-01-01T00:00:00.000Z');
+    const byMonth = (await repo.revenueByMonth(since)).sort((a, b) =>
+      a.month.localeCompare(b.month),
+    );
+    expect(byMonth).toEqual([
+      { month: '2026-04', revenue: 150_000 },
+      { month: '2026-06', revenue: 200_000 },
+    ]);
+  });
+
+  // Payment-ledger insert helper with an explicit paid_at (month grouping).
+  function mkPayment(
+    inv: { id: string; invoiceNo: string },
+    amount: number,
+    method: typeof payments.$inferInsert.method,
+    paidAt: string,
+  ): typeof payments.$inferInsert {
+    return {
+      invoiceId: inv.id,
+      invoiceNo: inv.invoiceNo,
+      customerId,
+      customerName: 'Budi',
+      amount,
+      method,
+      paidAt: new Date(paidAt),
+    };
+  }
 });

@@ -92,6 +92,27 @@ export class TicketsRepository {
     return row;
   }
 
+  // --- Analytics support ----------------------------------------------
+
+  /** Ticket counts grouped by status (every status present). Powers the
+   * dashboard open-count, status breakdown, and SLA-compliance ratio. */
+  async countByStatus(): Promise<Record<Ticket['status'], number>> {
+    const rows = await this.db
+      .select({ status: tickets.status, value: count() })
+      .from(tickets)
+      .groupBy(tickets.status);
+    const result: Record<Ticket['status'], number> = {
+      open: 0,
+      in_progress: 0,
+      resolved: 0,
+      breached: 0,
+    };
+    for (const row of rows) {
+      result[row.status] = row.value;
+    }
+    return result;
+  }
+
   // --- Timeline -------------------------------------------------------
 
   async addEvent(input: NewTicketEvent): Promise<TicketEvent> {

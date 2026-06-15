@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type Invoice,
@@ -191,6 +191,34 @@ export class InvoicesRepository {
         and(eq(invoices.status, 'paid'), sql`to_char(${invoices.paidAt}, 'YYYY-MM') = ${period}`),
       )
       .orderBy(asc(invoices.paidAt));
+  }
+
+  // --- Analytics support ----------------------------------------------
+
+  /**
+   * Every unpaid invoice (pending + overdue), oldest due date first. The
+   * analytics rollup derives total receivables, the overdue slice, and the
+   * aging buckets from this single read.
+   */
+  async listUnpaid(): Promise<Invoice[]> {
+    return this.db
+      .select()
+      .from(invoices)
+      .where(inArray(invoices.status, [...UNPAID_STATUSES]))
+      .orderBy(asc(invoices.dueDate));
+  }
+
+  /** Settled cash per calendar month (UTC, YYYY-MM) since `since`, from payments. */
+  async revenueByMonth(since: Date): Promise<Array<{ month: string; revenue: number }>> {
+    const rows = await this.db
+      .select({
+        month: sql<string>`to_char(${payments.paidAt} at time zone 'UTC', 'YYYY-MM')`,
+        revenue: sql<string>`coalesce(sum(${payments.amount}), 0)`,
+      })
+      .from(payments)
+      .where(gte(payments.paidAt, since))
+      .groupBy(sql`to_char(${payments.paidAt} at time zone 'UTC', 'YYYY-MM')`);
+    return rows.map((row) => ({ month: row.month, revenue: Number(row.revenue) }));
   }
 
   // --- Payments ledger ------------------------------------------------
