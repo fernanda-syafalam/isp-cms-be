@@ -1,5 +1,16 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { and, asc, count, eq, getTableColumns, ilike, isNotNull, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  count,
+  eq,
+  getTableColumns,
+  ilike,
+  inArray,
+  isNotNull,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type Customer,
@@ -210,6 +221,24 @@ export class CustomersRepository {
     if (result.rowCount === 0) {
       throw new NotFoundException('customer not found');
     }
+  }
+
+  // Provisioned subscribers (aktif/isolir) joined with plan name + speed —
+  // the input the usage module computes data-consumption from.
+  async findForUsage(): Promise<
+    Array<{ id: string; fullName: string; planName: string; planSpeedMbps: number }>
+  > {
+    return this.db
+      .select({
+        id: customers.id,
+        fullName: customers.fullName,
+        planName: plans.name,
+        planSpeedMbps: plans.speedMbps,
+      })
+      .from(customers)
+      .innerJoin(plans, eq(customers.planId, plans.id))
+      .where(inArray(customers.status, ['aktif', 'isolir']))
+      .orderBy(asc(customers.fullName));
   }
 
   // --- Provisioning support (work orders) -----------------------------

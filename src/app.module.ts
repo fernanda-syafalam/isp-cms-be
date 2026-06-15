@@ -34,6 +34,7 @@ import { RoutersModule } from './modules/routers/routers.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { SlaCreditsModule } from './modules/sla-credits/sla-credits.module';
 import { TicketsModule } from './modules/tickets/tickets.module';
+import { UsageModule } from './modules/usage/usage.module';
 import { UsersModule } from './modules/users/users.module';
 import { VouchersModule } from './modules/vouchers/vouchers.module';
 import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
@@ -100,6 +101,7 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     SettingsModule,
     SlaCreditsModule,
     TicketsModule,
+    UsageModule,
     UsersModule,
     VouchersModule,
     WorkOrdersModule,
