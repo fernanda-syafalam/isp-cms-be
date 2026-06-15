@@ -52,6 +52,15 @@ export class TicketsRepository {
     return row ?? null;
   }
 
+  // A single customer's tickets, newest first — the portal "me" snapshot.
+  async listByCustomer(customerId: string): Promise<Ticket[]> {
+    return this.db
+      .select()
+      .from(tickets)
+      .where(eq(tickets.customerId, customerId))
+      .orderBy(desc(tickets.createdAt));
+  }
+
   // Resolve a ticket id from its human code (e.g. TKT-2001) — used when a
   // module references a ticket by code (SLA credits).
   async findIdByCode(code: string): Promise<string | null> {

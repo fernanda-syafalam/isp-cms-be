@@ -41,6 +41,8 @@ describe('CustomersService', () => {
     repo = {
       list: vi.fn(),
       findById: vi.fn(),
+      findByEmail: vi.fn(),
+      findFirst: vi.fn(),
       create: vi.fn(),
       updateProfile: vi.fn(),
       setStatus: vi.fn(),
@@ -61,6 +63,35 @@ describe('CustomersService', () => {
       ],
     }).compile();
     service = moduleRef.get(CustomersService);
+  });
+
+  describe('resolveForPortal', () => {
+    it('matches the session email when a subscriber has it', async () => {
+      repo.findByEmail.mockResolvedValue({ ...sampleRow, email: 'budi@example.com' });
+
+      const result = await service.resolveForPortal('budi@example.com');
+
+      expect(repo.findByEmail).toHaveBeenCalledWith('budi@example.com');
+      expect(repo.findFirst).not.toHaveBeenCalled();
+      expect(result.email).toBe('budi@example.com');
+    });
+
+    it('falls back to a representative customer when no email matches', async () => {
+      repo.findByEmail.mockResolvedValue(null);
+      repo.findFirst.mockResolvedValue(sampleRow);
+
+      const result = await service.resolveForPortal('staff@example.com');
+
+      expect(repo.findFirst).toHaveBeenCalledTimes(1);
+      expect(result.id).toBe(sampleRow.id);
+    });
+
+    it('throws 404 when there are no customers at all', async () => {
+      repo.findByEmail.mockResolvedValue(null);
+      repo.findFirst.mockResolvedValue(null);
+
+      await expect(service.resolveForPortal(null)).rejects.toBeInstanceOf(NotFoundException);
+    });
   });
 
   describe('create', () => {

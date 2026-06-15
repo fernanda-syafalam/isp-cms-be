@@ -41,6 +41,12 @@ export class TicketsService {
     return toTicketResponse(row);
   }
 
+  /** A customer's tickets, newest first — for the self-service portal. */
+  async listByCustomer(customerId: string): Promise<TicketResponse[]> {
+    const rows = await this.repo.listByCustomer(customerId);
+    return rows.map(toTicketResponse);
+  }
+
   async create(input: CreateTicketInput, author: string): Promise<TicketResponse> {
     const customerId = await this.customers.findIdByFullName(input.customerName);
     const createdAt = new Date();

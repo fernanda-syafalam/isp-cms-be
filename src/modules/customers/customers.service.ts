@@ -36,6 +36,19 @@ export class CustomersService {
     return toCustomerResponse(row);
   }
 
+  /**
+   * Resolve the subscriber behind a portal session. A real backend resolves
+   * strictly from the auth token; here we match the user's email and fall
+   * back to a representative customer so staff/admin can preview the portal
+   * (mock-first, ADR-0003).
+   */
+  async resolveForPortal(email: string | null): Promise<CustomerResponse> {
+    const row =
+      (email ? await this.repo.findByEmail(email) : null) ?? (await this.repo.findFirst());
+    if (!row) throw new NotFoundException('no customer found');
+    return toCustomerResponse(row);
+  }
+
   async create(input: CreateCustomerInput): Promise<CustomerResponse> {
     await this.requirePlan(input.planId);
     const row = await this.repo.create({

@@ -46,6 +46,18 @@ export class InvoicesService {
     return { items: items.map(toPaymentResponse), total };
   }
 
+  /** A customer's invoices, newest first — for the self-service portal. */
+  async invoicesByCustomer(customerId: string): Promise<InvoiceResponse[]> {
+    const rows = await this.repo.listByCustomer(customerId);
+    return rows.map(toInvoiceResponse);
+  }
+
+  /** A customer's recorded payments, newest first — for the portal. */
+  async paymentsByCustomer(customerId: string): Promise<PaymentResponse[]> {
+    const rows = await this.repo.listPaymentsByCustomer(customerId);
+    return rows.map(toPaymentResponse);
+  }
+
   /**
    * Settle an invoice: mark it paid, write a ledger entry, then refresh
    * the customer's outstanding balance and reactivate them from isolir if
