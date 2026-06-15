@@ -132,6 +132,49 @@ describe('CustomersService', () => {
     });
   });
 
+  describe('onboard', () => {
+    it('opens the customer in instalasi with the chosen area', async () => {
+      plans.findById.mockResolvedValue({ id: PLAN_ID, name: 'Home 20' });
+      repo.create.mockResolvedValue({ ...sampleRow, status: 'instalasi', areaName: 'Bangsri' });
+
+      const result = await service.onboard({
+        fullName: 'Budi Santoso',
+        phone: '081234567890',
+        email: '',
+        address: 'Jl. Mawar 1',
+        areaName: 'Bangsri',
+        planId: PLAN_ID,
+      });
+
+      expect(plans.findById).toHaveBeenCalledWith(PLAN_ID);
+      expect(repo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          areaName: 'Bangsri',
+          status: 'instalasi',
+          email: null,
+          planId: PLAN_ID,
+        }),
+      );
+      expect(result.status).toBe('instalasi');
+      expect(result.areaName).toBe('Bangsri');
+    });
+
+    it('rejects an unknown plan with 400 before creating', async () => {
+      plans.findById.mockResolvedValue(null);
+      await expect(
+        service.onboard({
+          fullName: 'X',
+          phone: '081200000000',
+          email: '',
+          address: 'Jl. Y',
+          areaName: 'Bangsri',
+          planId: PLAN_ID,
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(repo.create).not.toHaveBeenCalled();
+    });
+  });
+
   describe('update', () => {
     it('passes only provided fields and validates plan when planId changes', async () => {
       plans.findById.mockResolvedValue({ id: PLAN_ID, name: 'Home 20' });

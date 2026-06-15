@@ -31,6 +31,7 @@ import { InvoicesModule } from './modules/invoices/invoices.module';
 import { LeadsModule } from './modules/leads/leads.module';
 import { MonitoringModule } from './modules/monitoring/monitoring.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { PlansModule } from './modules/plans/plans.module';
 import { PortalModule } from './modules/portal/portal.module';
 import { ResellersModule } from './modules/resellers/resellers.module';
@@ -105,6 +106,7 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     LeadsModule,
     MonitoringModule,
     NotificationsModule,
+    OnboardingModule,
     PlansModule,
     PortalModule,
     ResellersModule,

@@ -228,4 +228,27 @@ describe('WorkOrdersService', () => {
       expect(result.type).toBe('repair');
     });
   });
+
+  describe('scheduleInstallForCustomer', () => {
+    it('creates an install order linked to the customer with the chosen schedule', async () => {
+      repo.create.mockResolvedValue(installWo);
+      const scheduledAt = new Date('2026-06-20T00:00:00.000Z');
+
+      const result = await service.scheduleInstallForCustomer({
+        customerId: CUSTOMER_ID,
+        customerName: 'Budi Santoso',
+        technician: 'Teknisi Andi',
+        scheduledAt,
+      });
+
+      expect(repo.create).toHaveBeenCalledWith({
+        type: 'install',
+        customerId: CUSTOMER_ID,
+        customerName: 'Budi Santoso',
+        technician: 'Teknisi Andi',
+        scheduledAt,
+      });
+      expect(result.type).toBe('install');
+    });
+  });
 });
