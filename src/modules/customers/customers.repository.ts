@@ -3,6 +3,7 @@ import { and, asc, count, eq, getTableColumns, ilike, or, sql } from 'drizzle-or
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type Customer,
+  type CustomerConnection,
   type NewCustomer,
   customers,
 } from '../../infrastructure/database/schema/customers.schema';
@@ -182,6 +183,35 @@ export class CustomersRepository {
     const result = await this.db
       .update(customers)
       .set({ ...patch, updatedAt: sql`now()` })
+      .where(eq(customers.id, id));
+    if (result.rowCount === 0) {
+      throw new NotFoundException('customer not found');
+    }
+  }
+
+  // --- Provisioning support (work orders) -----------------------------
+
+  /** Plan price + name for a single customer, for first-invoice billing. */
+  async findBillingInfo(
+    id: string,
+  ): Promise<{ fullName: string; planPriceMonthly: number } | null> {
+    const [row] = await this.db
+      .select({
+        fullName: customers.fullName,
+        planPriceMonthly: plans.priceMonthly,
+      })
+      .from(customers)
+      .innerJoin(plans, eq(customers.planId, plans.id))
+      .where(eq(customers.id, id))
+      .limit(1);
+    return row ?? null;
+  }
+
+  /** Mark a customer active and attach the provisioned connection. */
+  async markInstalled(id: string, connection: CustomerConnection): Promise<void> {
+    const result = await this.db
+      .update(customers)
+      .set({ status: 'aktif', connection, updatedAt: sql`now()` })
       .where(eq(customers.id, id));
     if (result.rowCount === 0) {
       throw new NotFoundException('customer not found');
