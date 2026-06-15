@@ -22,6 +22,7 @@ import { BranchesModule } from './modules/branches/branches.module';
 import { ContractsModule } from './modules/contracts/contracts.module';
 import { CoverageModule } from './modules/coverage/coverage.module';
 import { CustomersModule } from './modules/customers/customers.module';
+import { DevicesModule } from './modules/devices/devices.module';
 import { EmailModule } from './modules/email/email.module';
 import { HealthModule } from './modules/health/health.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
@@ -92,6 +93,7 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     ContractsModule,
     CoverageModule,
     CustomersModule,
+    DevicesModule,
     EmailModule,
     HealthModule,
     InventoryModule,
