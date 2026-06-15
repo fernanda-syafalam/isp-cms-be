@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { CustomersModule } from '../customers/customers.module';
+import { BillingAutomationService } from './billing-automation.service';
 import { BillingController } from './billing.controller';
 import { InvoicesController } from './invoices.controller';
 import { InvoicesRepository } from './invoices.repository';
@@ -12,7 +13,7 @@ import { PaymentsController } from './payments.controller';
   // balance / payment-driven reactivation.
   imports: [CustomersModule],
   controllers: [InvoicesController, PaymentsController, BillingController],
-  providers: [InvoicesService, InvoicesRepository],
+  providers: [InvoicesService, InvoicesRepository, BillingAutomationService],
   exports: [InvoicesService, InvoicesRepository],
 })
 export class InvoicesModule {}

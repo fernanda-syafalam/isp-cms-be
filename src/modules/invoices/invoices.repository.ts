@@ -106,6 +106,72 @@ export class InvoicesRepository {
     return row?.value ?? 0;
   }
 
+  // --- Billing automation ---------------------------------------------
+
+  /** Flip pending invoices past their due date to overdue + apply the late fee. */
+  async markOverduePastDue(lateFee: number): Promise<number> {
+    const result = await this.db
+      .update(invoices)
+      .set({ status: 'overdue', lateFee, updatedAt: sql`now()` })
+      .where(and(eq(invoices.status, 'pending'), sql`${invoices.dueDate} < current_date`));
+    return result.rowCount ?? 0;
+  }
+
+  async countOverdueAll(): Promise<number> {
+    const [row] = await this.db
+      .select({ value: count() })
+      .from(invoices)
+      .where(eq(invoices.status, 'overdue'));
+    return row?.value ?? 0;
+  }
+
+  /** Pending invoices due within `days` (upcoming dunning candidates). */
+  async countPendingDueSoon(days: number): Promise<number> {
+    const [row] = await this.db
+      .select({ value: count() })
+      .from(invoices)
+      .where(
+        and(eq(invoices.status, 'pending'), sql`${invoices.dueDate} <= current_date + ${days}`),
+      );
+    return row?.value ?? 0;
+  }
+
+  async markRemindedOverdue(): Promise<number> {
+    const result = await this.db
+      .update(invoices)
+      .set({ lastRemindedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(eq(invoices.status, 'overdue'));
+    return result.rowCount ?? 0;
+  }
+
+  async markRemindedDueSoon(days: number): Promise<number> {
+    const result = await this.db
+      .update(invoices)
+      .set({ lastRemindedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(
+        and(eq(invoices.status, 'pending'), sql`${invoices.dueDate} <= current_date + ${days}`),
+      );
+    return result.rowCount ?? 0;
+  }
+
+  async markRemindedByIds(ids: string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    const result = await this.db
+      .update(invoices)
+      .set({ lastRemindedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(and(inArray(invoices.id, ids), inArray(invoices.status, ['pending', 'overdue'])));
+    return result.rowCount ?? 0;
+  }
+
+  /** Distinct customers that currently have an overdue invoice. */
+  async customerIdsWithOverdue(): Promise<string[]> {
+    const rows = await this.db
+      .selectDistinct({ customerId: invoices.customerId })
+      .from(invoices)
+      .where(eq(invoices.status, 'overdue'));
+    return rows.map((r) => r.customerId);
+  }
+
   // Paid invoices settled within a YYYY-MM period (cash-basis) — the source
   // of the accounting journal. Ordered by settlement time.
   async findPaidInPeriod(period: string): Promise<Invoice[]> {
