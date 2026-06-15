@@ -5,4 +5,5 @@
 export * from './customers.schema';
 export * from './invoices.schema';
 export * from './plans.schema';
+export * from './tickets.schema';
 export * from './users.schema';

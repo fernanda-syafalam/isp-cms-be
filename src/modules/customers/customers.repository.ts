@@ -74,6 +74,17 @@ export class CustomersRepository {
     return row ?? null;
   }
 
+  // Resolve a customer id from an exact full-name match (first hit). Used
+  // by modules that reference a subscriber by name (e.g. tickets).
+  async findIdByFullName(fullName: string): Promise<string | null> {
+    const [row] = await this.db
+      .select({ id: customers.id })
+      .from(customers)
+      .where(eq(customers.fullName, fullName))
+      .limit(1);
+    return row?.id ?? null;
+  }
+
   async create(input: NewCustomer): Promise<CustomerRow> {
     const [inserted] = await this.db
       .insert(customers)
