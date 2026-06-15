@@ -63,6 +63,27 @@ export class CustomersService {
     return toCustomerResponse(row);
   }
 
+  /**
+   * Create a subscriber through the onboarding wizard. Unlike create() —
+   * which always starts `prospek` — onboarding records the chosen service
+   * area and opens the customer in `instalasi` (a linked install work order
+   * is scheduled by the onboarding flow).
+   */
+  async onboard(input: CreateCustomerInput & { areaName: string }): Promise<CustomerResponse> {
+    await this.requirePlan(input.planId);
+    const row = await this.repo.create({
+      fullName: input.fullName,
+      phone: input.phone,
+      email: normalizeEmail(input.email),
+      address: input.address,
+      areaName: input.areaName,
+      planId: input.planId,
+      status: 'instalasi',
+    });
+    this.logger.log({ customerId: row.id }, 'customer onboarded');
+    return toCustomerResponse(row);
+  }
+
   async update(id: string, input: UpdateCustomerInput): Promise<CustomerResponse> {
     if (input.planId) await this.requirePlan(input.planId);
     const row = await this.repo.updateProfile(id, {

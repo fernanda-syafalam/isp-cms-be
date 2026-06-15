@@ -123,6 +123,30 @@ export class WorkOrdersService {
   }
 
   /**
+   * Schedule an install work order from onboarding — linked to the new
+   * subscriber, with the technician and install date chosen in the wizard.
+   */
+  async scheduleInstallForCustomer(input: {
+    customerId: string;
+    customerName: string;
+    technician: string;
+    scheduledAt: Date;
+  }): Promise<WorkOrderResponse> {
+    const wo = await this.repo.create({
+      type: 'install',
+      customerId: input.customerId,
+      customerName: input.customerName,
+      technician: input.technician,
+      scheduledAt: input.scheduledAt,
+    });
+    this.logger.log(
+      { workOrderId: wo.id, customerId: input.customerId },
+      'install scheduled from onboarding',
+    );
+    return toWorkOrderResponse(wo);
+  }
+
+  /**
    * Schedule an install work order for a freshly-converted lead. customerId
    * is null — the subscriber is linked when onboarding completes (matches
    * the FE convert flow).
