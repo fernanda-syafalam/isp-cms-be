@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { and, count, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type Invoice,
@@ -104,6 +104,18 @@ export class InvoicesRepository {
       .from(invoices)
       .where(and(eq(invoices.customerId, customerId), eq(invoices.status, 'overdue')));
     return row?.value ?? 0;
+  }
+
+  // Paid invoices settled within a YYYY-MM period (cash-basis) — the source
+  // of the accounting journal. Ordered by settlement time.
+  async findPaidInPeriod(period: string): Promise<Invoice[]> {
+    return this.db
+      .select()
+      .from(invoices)
+      .where(
+        and(eq(invoices.status, 'paid'), sql`to_char(${invoices.paidAt}, 'YYYY-MM') = ${period}`),
+      )
+      .orderBy(asc(invoices.paidAt));
   }
 
   // --- Payments ledger ------------------------------------------------
