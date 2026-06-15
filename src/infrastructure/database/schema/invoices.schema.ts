@@ -96,8 +96,53 @@ export const payments = pgTable(
   ],
 );
 
+// Online gateway rails (QRIS / Virtual Account / e-wallet). Mirror what
+// Midtrans/Xendit expose; mock-first but contract-ready.
+export const paymentChannel = pgEnum('payment_channel', [
+  'qris',
+  'va_bca',
+  'va_mandiri',
+  'va_bri',
+  'va_bni',
+  'gopay',
+  'ovo',
+  'dana',
+  'shopeepay',
+]);
+
+export const paymentIntentStatus = pgEnum('payment_intent_status', ['pending', 'paid', 'expired']);
+
+// A pending gateway charge for an invoice. A real gateway returns a VA number
+// or QR payload and fires a settlement webhook; here `confirm` simulates that
+// webhook and reuses the invoice settlement path (mark paid + ledger entry).
+export const paymentIntents = pgTable(
+  'payment_intents',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    invoiceId: uuid('invoice_id')
+      .notNull()
+      .references(() => invoices.id),
+    // Denormalized snapshots so the intent renders without joins.
+    invoiceNo: varchar('invoice_no', { length: 32 }).notNull(),
+    customerName: varchar('customer_name', { length: 120 }).notNull(),
+    amount: integer('amount').notNull(),
+    channel: paymentChannel('channel').notNull(),
+    status: paymentIntentStatus('status').notNull().default('pending'),
+    // Exactly one of these is set per channel: VA rails get a number, QR /
+    // e-wallet rails get a payload.
+    vaNumber: varchar('va_number', { length: 40 }),
+    qrPayload: varchar('qr_payload', { length: 512 }),
+    expiresAt: timestamp('expires_at', { withTimezone: true, precision: 3 }).notNull(),
+    paidAt: timestamp('paid_at', { withTimezone: true, precision: 3 }),
+    createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+  },
+  (t) => [index('payment_intents_invoice_id_idx').on(t.invoiceId)],
+);
+
 // Domain types derived from the schema — never hand-written (Pilar 3).
 export type Invoice = typeof invoices.$inferSelect;
 export type NewInvoice = typeof invoices.$inferInsert;
 export type Payment = typeof payments.$inferSelect;
 export type NewPayment = typeof payments.$inferInsert;
+export type PaymentIntent = typeof paymentIntents.$inferSelect;
+export type NewPaymentIntent = typeof paymentIntents.$inferInsert;

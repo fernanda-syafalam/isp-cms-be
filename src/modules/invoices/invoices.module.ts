@@ -5,6 +5,9 @@ import { BillingController } from './billing.controller';
 import { InvoicesController } from './invoices.controller';
 import { InvoicesRepository } from './invoices.repository';
 import { InvoicesService } from './invoices.service';
+import { PaymentIntentsController } from './payment-intents.controller';
+import { PaymentIntentsRepository } from './payment-intents.repository';
+import { PaymentIntentsService } from './payment-intents.service';
 import { PaymentsController } from './payments.controller';
 
 @Module({
@@ -12,8 +15,19 @@ import { PaymentsController } from './payments.controller';
   // read active customers + plan price and to write the outstanding
   // balance / payment-driven reactivation.
   imports: [CustomersModule],
-  controllers: [InvoicesController, PaymentsController, BillingController],
-  providers: [InvoicesService, InvoicesRepository, BillingAutomationService],
+  controllers: [
+    InvoicesController,
+    PaymentsController,
+    PaymentIntentsController,
+    BillingController,
+  ],
+  providers: [
+    InvoicesService,
+    InvoicesRepository,
+    BillingAutomationService,
+    PaymentIntentsService,
+    PaymentIntentsRepository,
+  ],
   exports: [InvoicesService, InvoicesRepository],
 })
 export class InvoicesModule {}
