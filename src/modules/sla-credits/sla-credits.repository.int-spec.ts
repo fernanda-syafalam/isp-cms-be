@@ -98,4 +98,12 @@ describe('SlaCreditsRepository (integration)', () => {
 
     await expect(repo.apply('00000000-0000-0000-0000-0000000000ff')).rejects.toThrow();
   });
+
+  it('counts only pending credits for the command-center badge', async () => {
+    await repo.create(newCredit());
+    await repo.create(newCredit({ status: 'pending' }));
+    await repo.create(newCredit({ status: 'applied' }));
+    await repo.create(newCredit({ status: 'void' }));
+    expect(await repo.countPending()).toBe(2);
+  });
 });

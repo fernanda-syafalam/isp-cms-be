@@ -87,4 +87,24 @@ export class DevicesRepository {
       throw new NotFoundException('device not found');
     }
   }
+
+  // --- Analytics support ----------------------------------------------
+
+  /** Device counts grouped by status (every status present). Powers the
+   * dashboard "devices online / total" KPI. */
+  async countByStatus(): Promise<Record<Device['status'], number>> {
+    const rows = await this.db
+      .select({ status: devices.status, value: count() })
+      .from(devices)
+      .groupBy(devices.status);
+    const result: Record<Device['status'], number> = {
+      online: 0,
+      degraded: 0,
+      offline: 0,
+    };
+    for (const row of rows) {
+      result[row.status] = row.value;
+    }
+    return result;
+  }
 }

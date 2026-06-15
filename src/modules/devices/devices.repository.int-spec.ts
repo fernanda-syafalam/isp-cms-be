@@ -126,4 +126,14 @@ describe('DevicesRepository (integration)', () => {
     expect((await repo.list({ limit: 50, offset: 0 })).total).toBe(0);
     await expect(repo.remove('00000000-0000-0000-0000-0000000000ff')).rejects.toThrow();
   });
+
+  it('counts devices by status with every status present', async () => {
+    await repo.ensureSeeded([
+      onu({ name: 'D1', status: 'online' }),
+      onu({ name: 'D2', status: 'online' }),
+      onu({ name: 'D3', status: 'degraded' }),
+      onu({ name: 'D4', status: 'offline' }),
+    ]);
+    expect(await repo.countByStatus()).toEqual({ online: 2, degraded: 1, offline: 1 });
+  });
 });

@@ -93,4 +93,19 @@ describe('LeadsRepository (integration)', () => {
     expect(moved.stage).toBe('quote');
     await expect(repo.setStage('00000000-0000-0000-0000-0000000000ff', 'won')).rejects.toThrow();
   });
+
+  it('sums value and counts only the active pipeline (new/survey/quote)', async () => {
+    await repo.create(newLead({ stage: 'new', estValue: 100_000 }));
+    await repo.create(newLead({ stage: 'survey', estValue: 200_000 }));
+    await repo.create(newLead({ stage: 'quote', estValue: 300_000 }));
+    // Terminal stages are excluded.
+    await repo.create(newLead({ stage: 'won', estValue: 999_000 }));
+    await repo.create(newLead({ stage: 'lost', estValue: 999_000 }));
+
+    expect(await repo.activePipeline()).toEqual({ value: 600_000, count: 3 });
+  });
+
+  it('reports an empty pipeline as zero value and count', async () => {
+    expect(await repo.activePipeline()).toEqual({ value: 0, count: 0 });
+  });
 });
