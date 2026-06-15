@@ -16,6 +16,7 @@ import { QueueModule } from './infrastructure/queue/queue.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
 import { RedisService } from './infrastructure/redis/redis.service';
 import { AuthModule } from './modules/auth/auth.module';
+import { ContractsModule } from './modules/contracts/contracts.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { EmailModule } from './modules/email/email.module';
 import { HealthModule } from './modules/health/health.module';
@@ -73,6 +74,7 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     }),
     QueueModule,
     AuthModule,
+    ContractsModule,
     CustomersModule,
     EmailModule,
     HealthModule,
