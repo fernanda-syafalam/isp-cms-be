@@ -92,6 +92,13 @@
       "when": 1781497582025,
       "tag": "0012_quick_champions",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1781498234603,
+      "tag": "0013_common_sprite",
+      "breakpoints": true
     }
   ]
 }

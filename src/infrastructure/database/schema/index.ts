@@ -9,6 +9,7 @@ export * from './invoices.schema';
 export * from './leads.schema';
 export * from './plans.schema';
 export * from './resellers.schema';
+export * from './routers.schema';
 export * from './sla-credits.schema';
 export * from './tickets.schema';
 export * from './users.schema';
