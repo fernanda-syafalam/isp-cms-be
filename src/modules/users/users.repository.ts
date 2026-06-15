@@ -84,6 +84,23 @@ export class UsersRepository {
     };
   }
 
+  /**
+   * Patch the mutable profile fields of a non-deleted user. Bumps
+   * updated_at. Throws NotFound when the id is absent or soft-deleted so
+   * the service never has to re-query to detect a missing row.
+   */
+  async update(id: string, patch: Partial<Pick<NewUser, 'fullName' | 'role'>>): Promise<User> {
+    const [row] = await this.db
+      .update(users)
+      .set({ ...patch, updatedAt: sql`now()` })
+      .where(and(eq(users.id, id), isNull(users.deletedAt)))
+      .returning();
+    if (!row) {
+      throw new NotFoundException('user not found');
+    }
+    return row;
+  }
+
   async softDelete(id: string): Promise<void> {
     const result = await this.db
       .update(users)

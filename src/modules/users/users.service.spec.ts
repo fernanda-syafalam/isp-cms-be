@@ -24,6 +24,7 @@ describe('UsersService', () => {
     findByEmail: ReturnType<typeof vi.fn>;
     create: ReturnType<typeof vi.fn>;
     listPage: ReturnType<typeof vi.fn>;
+    update: ReturnType<typeof vi.fn>;
     softDelete: ReturnType<typeof vi.fn>;
   };
 
@@ -33,6 +34,7 @@ describe('UsersService', () => {
       findByEmail: vi.fn(),
       create: vi.fn(),
       listPage: vi.fn(),
+      update: vi.fn(),
       softDelete: vi.fn(),
     };
     const moduleRef: TestingModule = await Test.createTestingModule({
@@ -75,6 +77,32 @@ describe('UsersService', () => {
     });
   });
 
+  describe('update', () => {
+    it('patches the profile and returns the updated user', async () => {
+      const updated = {
+        ...sampleUser,
+        fullName: 'New Name',
+        role: 'staff' as const,
+      };
+      repo.update.mockResolvedValue(updated);
+
+      await expect(
+        service.update(sampleUser.id, { fullName: 'New Name', role: 'staff' }),
+      ).resolves.toEqual(updated);
+      expect(repo.update).toHaveBeenCalledWith(sampleUser.id, {
+        fullName: 'New Name',
+        role: 'staff',
+      });
+    });
+
+    it('propagates 404 from the repository for a missing user', async () => {
+      repo.update.mockRejectedValue(new NotFoundException('user not found'));
+      await expect(service.update('missing', { role: 'admin' })).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+  });
+
   describe('findById', () => {
     it('returns the user when present', async () => {
       repo.findById.mockResolvedValue(sampleUser);
@@ -93,7 +121,10 @@ describe('UsersService', () => {
     // case so cost is bounded.
     it('produces a hash that argon2.verify accepts', async () => {
       repo.findByEmail.mockResolvedValue(null);
-      repo.create.mockImplementation(async (input) => ({ ...sampleUser, ...input }));
+      repo.create.mockImplementation(async (input) => ({
+        ...sampleUser,
+        ...input,
+      }));
 
       const created = await service.create({
         email: 'verify@test',
