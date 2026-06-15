@@ -32,6 +32,7 @@ import { InvoicesModule } from './modules/invoices/invoices.module';
 import { LeadsModule } from './modules/leads/leads.module';
 import { MonitoringModule } from './modules/monitoring/monitoring.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { OdpModule } from './modules/odp/odp.module';
 import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { PlansModule } from './modules/plans/plans.module';
 import { PortalModule } from './modules/portal/portal.module';
@@ -43,6 +44,7 @@ import { SecurityModule } from './modules/security/security.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { SlaCreditsModule } from './modules/sla-credits/sla-credits.module';
 import { TicketsModule } from './modules/tickets/tickets.module';
+import { TopologyModule } from './modules/topology/topology.module';
 import { UsageModule } from './modules/usage/usage.module';
 import { UsersModule } from './modules/users/users.module';
 import { VouchersModule } from './modules/vouchers/vouchers.module';
@@ -108,6 +110,7 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     LeadsModule,
     MonitoringModule,
     NotificationsModule,
+    OdpModule,
     OnboardingModule,
     PlansModule,
     PortalModule,
@@ -119,6 +122,7 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     SettingsModule,
     SlaCreditsModule,
     TicketsModule,
+    TopologyModule,
     UsageModule,
     UsersModule,
     VouchersModule,
