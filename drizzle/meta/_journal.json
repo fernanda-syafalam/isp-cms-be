@@ -71,6 +71,13 @@
       "when": 1781495784256,
       "tag": "0009_nervous_tusk",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1781496361548,
+      "tag": "0010_melodic_serpent_society",
+      "breakpoints": true
     }
   ]
 }

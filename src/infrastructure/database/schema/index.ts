@@ -7,6 +7,7 @@ export * from './inventory.schema';
 export * from './invoices.schema';
 export * from './leads.schema';
 export * from './plans.schema';
+export * from './sla-credits.schema';
 export * from './tickets.schema';
 export * from './users.schema';
 export * from './vouchers.schema';
