@@ -1,9 +1,9 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: boilerplate-nestjs
+  name: isp-cms-be
   labels:
-    app.kubernetes.io/name: boilerplate-nestjs
+    app.kubernetes.io/name: isp-cms-be
 spec:
   replicas: 3
   strategy:
@@ -13,11 +13,11 @@ spec:
       maxUnavailable: 0
   selector:
     matchLabels:
-      app.kubernetes.io/name: boilerplate-nestjs
+      app.kubernetes.io/name: isp-cms-be
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: boilerplate-nestjs
+        app.kubernetes.io/name: isp-cms-be
     spec:
       # Spread replicas across nodes so a node failure does not take
       # the whole service down.
@@ -29,7 +29,7 @@ spec:
                 topologyKey: kubernetes.io/hostname
                 labelSelector:
                   matchLabels:
-                    app.kubernetes.io/name: boilerplate-nestjs
+                    app.kubernetes.io/name: isp-cms-be
       # Give in-flight HTTP requests time to drain on SIGTERM.
       terminationGracePeriodSeconds: 60
       securityContext:
@@ -45,9 +45,9 @@ spec:
               containerPort: 3000
           envFrom:
             - configMapRef:
-                name: boilerplate-nestjs-config
+                name: isp-cms-be-config
             - secretRef:
-                name: boilerplate-nestjs-secrets
+                name: isp-cms-be-secrets
           resources:
             requests:
               cpu: 200m

@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Query,
 } from '@nestjs/common';
@@ -15,6 +16,7 @@ import { Audit } from '../../common/decorators/audit.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
 import { UserResponseDto } from './dto/user-response.dto';
 import { UsersService } from './users.service';
 
@@ -59,6 +61,16 @@ export class UsersController {
       ),
       nextCursor: page.nextCursor,
     };
+  }
+
+  // Edit a staff/user record (name + role). Admin-only + audited — a
+  // role change is privileged. Email/password are not editable here.
+  @Roles('admin')
+  @Audit('user.update')
+  @Patch(':id')
+  @ZodSerializerDto(UserResponseDto)
+  update(@Param('id') id: string, @Body() body: UpdateUserDto) {
+    return this.users.update(id, body);
   }
 
   // Soft-delete is admin-only and audited. Demonstrates the Pilar 4

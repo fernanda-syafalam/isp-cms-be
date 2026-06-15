@@ -71,6 +71,36 @@ describe('UsersRepository (integration)', () => {
     expect(byEmail?.id).toBe(created.id);
   });
 
+  it('updates mutable fields and bumps updated_at', async () => {
+    const created = await repo.create({
+      email: 'up@b.test',
+      fullName: 'Before',
+      passwordHash: 'hash',
+    });
+
+    const updated = await repo.update(created.id, {
+      fullName: 'After',
+      role: 'staff',
+    });
+
+    expect(updated.fullName).toBe('After');
+    expect(updated.role).toBe('staff');
+    expect(updated.updatedAt.getTime()).toBeGreaterThanOrEqual(created.updatedAt.getTime());
+    // email is untouched
+    expect(updated.email).toBe('up@b.test');
+  });
+
+  it('rejects update of a missing / soft-deleted user', async () => {
+    const created = await repo.create({
+      email: 'gone@b.test',
+      fullName: 'Gone',
+      passwordHash: 'hash',
+    });
+    await repo.softDelete(created.id);
+
+    await expect(repo.update(created.id, { fullName: 'X' })).rejects.toThrow();
+  });
+
   it('soft delete hides the row from finders', async () => {
     const created = await repo.create({
       email: 'sd@b.test',

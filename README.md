@@ -1,4 +1,4 @@
-# boilerplate-nestjs
+# isp-cms-be
 
 Production-shaped NestJS service template. Fork it as the starting point
 for a new HTTP service that needs auth, a Postgres-backed domain layer,
@@ -131,12 +131,12 @@ A multi-stage `Dockerfile` produces a distroless image that runs as
 non-root:
 
 ```bash
-docker build -t boilerplate-nestjs:dev .
+docker build -t isp-cms-be:dev .
 docker run --rm -p 3000:3000 \
   -e NODE_ENV=production \
   -e DATABASE_URL=postgres://... \
   -e JWT_SECRET=... \
-  boilerplate-nestjs:dev
+  isp-cms-be:dev
 ```
 
 Kubernetes manifests are in `k8s/` and are pinned to v2 doc Pilar 9

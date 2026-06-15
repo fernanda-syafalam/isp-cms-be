@@ -1,6 +1,6 @@
-# Project Instructions — boilerplate-nestjs
+# Project Instructions — isp-cms-be
 
-NestJS service boilerplate. Goal: become the reference implementation
+NestJS service. Goal: become the reference implementation
 for the v2 Best Practices doc and the two ADRs accepted in this repo.
 
 ## Repo state (as of 2026-05-07)

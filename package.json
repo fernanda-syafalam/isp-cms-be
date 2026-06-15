@@ -1,7 +1,7 @@
 {
-  "name": "boilerplate-nestjs",
+  "name": "isp-cms-be",
   "version": "0.1.0",
-  "description": "NestJS service boilerplate (Fastify + Vitest + Biome). See docs/Backend-Best-Practices-NestJS-v2.md and docs/adr/.",
+  "description": "NestJS service (Fastify + Vitest + Biome). See docs/Backend-Best-Practices-NestJS-v2.md and docs/adr/.",
   "author": "",
   "private": true,
   "license": "UNLICENSED",

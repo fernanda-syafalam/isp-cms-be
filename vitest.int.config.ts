@@ -26,7 +26,7 @@ export default defineConfig({
     // Integration tests share a Postgres container per file via
     // beforeAll; running them in parallel would race on the shared
     // database name unless we randomise it. Single thread keeps the
-    // boilerplate readable.
+    // config readable.
     pool: 'forks',
     poolOptions: { forks: { singleFork: true } },
     testTimeout: 60_000,

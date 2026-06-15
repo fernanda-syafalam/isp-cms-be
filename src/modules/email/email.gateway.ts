@@ -11,7 +11,7 @@ export interface SendEmailResult {
 }
 
 /**
- * Outbound email port. The boilerplate ships with a logging stub —
+ * Outbound email port. This service ships with a logging stub —
  * production deployments swap this provider for a real SES / SendGrid /
  * Mailgun / Resend adapter. Keep the interface narrow so swapping does
  * not ripple into every caller.

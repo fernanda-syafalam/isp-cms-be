@@ -44,7 +44,7 @@ export default defineConfig({
         'dist/**',
         'coverage/**',
       ],
-      // Pragmatic thresholds for the boilerplate phase. v2 doc Pilar 5
+      // Pragmatic thresholds for this service phase. v2 doc Pilar 5
       // calls for 80% lines on production services; raise these when
       // the codebase has more business logic to cover.
       thresholds: {

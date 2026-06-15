@@ -2,6 +2,7 @@ import { ConflictException, Injectable, Logger, NotFoundException } from '@nestj
 import * as argon2 from 'argon2';
 import type { User } from '../../infrastructure/database/schema/users.schema';
 import type { CreateUserInput } from './dto/create-user.dto';
+import type { UpdateUserInput } from './dto/update-user.dto';
 import type { CursorPage } from './users.repository';
 import { UsersRepository } from './users.repository';
 
@@ -51,6 +52,12 @@ export class UsersService {
 
   async list(cursor: string | undefined, limit: number): Promise<CursorPage<User>> {
     return this.repo.listPage(cursor, limit);
+  }
+
+  async update(id: string, input: UpdateUserInput): Promise<User> {
+    const user = await this.repo.update(id, input);
+    this.logger.log({ userId: user.id, role: user.role }, 'user updated');
+    return user;
   }
 
   async softDelete(id: string): Promise<void> {

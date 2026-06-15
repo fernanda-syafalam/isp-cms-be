@@ -47,7 +47,7 @@ requests have time to finish. The app handles SIGTERM via NestJS
 `enableShutdownHooks()` which closes the Postgres pool cleanly. There
 is no `preStop` hook — the distroless image has no shell. If a load
 balancer needs explicit deregistration, add an HTTP `preStop.httpGet`
-endpoint to the controller (out of scope for the boilerplate).
+endpoint to the controller (out of scope for this service).
 
 ## What is NOT here
 
@@ -55,5 +55,5 @@ endpoint to the controller (out of scope for the boilerplate).
 - NetworkPolicy — depends on cluster CNI defaults
 - ServiceMonitor / PodMonitor — once Prometheus / OTel is wired
 - PodDisruptionBudget — once replica count is stable
-- Helm chart — separate repository when the boilerplate forks become
+- Helm chart — separate repository when forks become
   multiple services
