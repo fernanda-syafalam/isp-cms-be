@@ -26,6 +26,7 @@ import { LeadsModule } from './modules/leads/leads.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { PlansModule } from './modules/plans/plans.module';
 import { ResellersModule } from './modules/resellers/resellers.module';
+import { RouterResourcesModule } from './modules/router-resources/router-resources.module';
 import { RoutersModule } from './modules/routers/routers.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { SlaCreditsModule } from './modules/sla-credits/sla-credits.module';
@@ -88,6 +89,7 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     NotificationsModule,
     PlansModule,
     ResellersModule,
+    RouterResourcesModule,
     RoutersModule,
     SettingsModule,
     SlaCreditsModule,

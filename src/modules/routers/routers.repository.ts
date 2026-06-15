@@ -51,6 +51,18 @@ export class RoutersRepository {
     return row;
   }
 
+  // Move the cached secret count by delta (floored at 0). Maintained by the
+  // PPPoE-secrets module as secrets are created/deleted.
+  async adjustSecretCount(id: string, delta: number): Promise<void> {
+    await this.db
+      .update(routers)
+      .set({
+        secretCount: sql`greatest(0, ${routers.secretCount} + ${delta})`,
+        updatedAt: sql`now()`,
+      })
+      .where(eq(routers.id, id));
+  }
+
   // Record a successful sync: refresh lastSyncAt and mark online.
   async markSynced(id: string): Promise<Router> {
     const [row] = await this.db
