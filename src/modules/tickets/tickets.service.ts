@@ -1,6 +1,8 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { Ticket, TicketEvent } from '../../infrastructure/database/schema/tickets.schema';
 import { CustomersRepository } from '../customers/customers.repository';
+import type { WorkOrderResponse } from '../work-orders/dto/work-order-response.dto';
+import { WorkOrdersService } from '../work-orders/work-orders.service';
 import type { AddCommentInput } from './dto/add-comment.dto';
 import type { CreateTicketInput } from './dto/create-ticket.dto';
 import type { TicketEventResponse } from './dto/ticket-event-response.dto';
@@ -24,6 +26,8 @@ export class TicketsService {
     private readonly repo: TicketsRepository,
     // Resolve the subscriber id from the typed-in customer name.
     private readonly customers: CustomersRepository,
+    // Dispatch a repair work order from a ticket.
+    private readonly workOrders: WorkOrdersService,
   ) {}
 
   async list(filter: TicketListFilter): Promise<{ items: TicketResponse[]; total: number }> {
@@ -118,6 +122,23 @@ export class TicketsService {
       author,
       body: input.body,
     });
+  }
+
+  /** Dispatch a repair work order from a ticket and log it on the timeline. */
+  async createWorkOrder(id: string, author: string): Promise<WorkOrderResponse> {
+    const ticket = await this.repo.findById(id);
+    if (!ticket) throw new NotFoundException('ticket not found');
+    const wo = await this.workOrders.createFromTicket({
+      customerId: ticket.customerId,
+      customerName: ticket.customerName,
+    });
+    await this.repo.addEvent({
+      ticketId: id,
+      kind: 'workorder',
+      author,
+      body: `Work order ${wo.code} dibuat`,
+    });
+    return wo;
   }
 
   async listEvents(id: string): Promise<{ items: TicketEventResponse[]; total: number }> {

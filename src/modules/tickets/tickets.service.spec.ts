@@ -3,6 +3,7 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Ticket } from '../../infrastructure/database/schema/tickets.schema';
 import { CustomersRepository } from '../customers/customers.repository';
+import { WorkOrdersService } from '../work-orders/work-orders.service';
 import { TicketsRepository } from './tickets.repository';
 import { TicketsService } from './tickets.service';
 
@@ -27,6 +28,7 @@ describe('TicketsService', () => {
   let service: TicketsService;
   let repo: Record<string, ReturnType<typeof vi.fn>>;
   let customers: { findIdByFullName: ReturnType<typeof vi.fn> };
+  let workOrders: { createFromTicket: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     repo = {
@@ -38,11 +40,13 @@ describe('TicketsService', () => {
       listEvents: vi.fn(),
     };
     customers = { findIdByFullName: vi.fn() };
+    workOrders = { createFromTicket: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         TicketsService,
         { provide: TicketsRepository, useValue: repo },
         { provide: CustomersRepository, useValue: customers },
+        { provide: WorkOrdersService, useValue: workOrders },
       ],
     }).compile();
     service = moduleRef.get(TicketsService);
@@ -157,6 +161,34 @@ describe('TicketsService', () => {
     it('throws 404 for a missing ticket', async () => {
       repo.findById.mockResolvedValue(null);
       await expect(service.addComment('missing', { body: 'x' }, AUTHOR)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('createWorkOrder', () => {
+    it('dispatches a repair work order and logs a workorder event', async () => {
+      repo.findById.mockResolvedValue(baseTicket);
+      workOrders.createFromTicket.mockResolvedValue({ code: 'WO-9001' });
+
+      const wo = await service.createWorkOrder(baseTicket.id, AUTHOR);
+
+      expect(workOrders.createFromTicket).toHaveBeenCalledWith({
+        customerId: baseTicket.customerId,
+        customerName: baseTicket.customerName,
+      });
+      expect(repo.addEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: 'workorder',
+          body: 'Work order WO-9001 dibuat',
+        }),
+      );
+      expect(wo.code).toBe('WO-9001');
+    });
+
+    it('throws 404 for a missing ticket', async () => {
+      repo.findById.mockResolvedValue(null);
+      await expect(service.createWorkOrder('missing', AUTHOR)).rejects.toBeInstanceOf(
         NotFoundException,
       );
     });

@@ -7,3 +7,4 @@ export * from './invoices.schema';
 export * from './plans.schema';
 export * from './tickets.schema';
 export * from './users.schema';
+export * from './work-orders.schema';

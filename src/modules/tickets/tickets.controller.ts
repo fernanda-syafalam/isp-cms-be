@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { type AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { WorkOrderResponseDto } from '../work-orders/dto/work-order-response.dto';
 import { AddCommentDto } from './dto/add-comment.dto';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { TicketResponseDto } from './dto/ticket-response.dto';
@@ -73,5 +74,15 @@ export class TicketsController {
     @CurrentUser() user: AuthUser,
   ): Promise<void> {
     return this.tickets.addComment(id, body, user.fullName);
+  }
+
+  // Dispatch a repair work order from this ticket.
+  @Roles('admin', 'staff')
+  @Audit('ticket.work_order')
+  @Post(':id/work-order')
+  @HttpCode(HttpStatus.CREATED)
+  @ZodSerializerDto(WorkOrderResponseDto)
+  createWorkOrder(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.tickets.createWorkOrder(id, user.fullName);
   }
 }

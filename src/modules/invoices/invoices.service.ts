@@ -105,6 +105,33 @@ export class InvoicesService {
     return { period: periodLabel, created };
   }
 
+  /**
+   * Issue a customer's first invoice at installation time. Idempotent:
+   * skips if one already exists for the current period (the work-order
+   * `complete` flow may be retried). No-op if the customer is unknown.
+   */
+  async generateFirstInvoice(customerId: string): Promise<void> {
+    const info = await this.customers.findBillingInfo(customerId);
+    if (!info) return;
+
+    const now = new Date();
+    const { periodStart, periodEnd } = currentPeriod(now);
+    if (await this.repo.existsForPeriod(customerId, periodStart)) return;
+
+    const amount = info.planPriceMonthly;
+    await this.repo.create({
+      customerId,
+      customerName: info.fullName,
+      periodStart,
+      periodEnd,
+      dueDate: isoDate(addDays(now, DUE_DAYS)),
+      amount,
+      taxAmount: PKP ? ppnOf(amount) : 0,
+      status: 'pending',
+    });
+    this.logger.log({ customerId }, 'first invoice generated');
+  }
+
   private async refreshCustomerBilling(customerId: string): Promise<void> {
     const outstanding = await this.repo.sumUnpaidByCustomer(customerId);
     const customer = await this.customers.findById(customerId);

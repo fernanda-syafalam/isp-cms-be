@@ -23,6 +23,7 @@ import { InvoicesModule } from './modules/invoices/invoices.module';
 import { PlansModule } from './modules/plans/plans.module';
 import { TicketsModule } from './modules/tickets/tickets.module';
 import { UsersModule } from './modules/users/users.module';
+import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
 
 /**
  * Composition root. Should only import other modules and wire global
@@ -75,6 +76,7 @@ import { UsersModule } from './modules/users/users.module';
     PlansModule,
     TicketsModule,
     UsersModule,
+    WorkOrdersModule,
   ],
   providers: [
     // Global error filter -> RFC 7807 application/problem+json. Wired
