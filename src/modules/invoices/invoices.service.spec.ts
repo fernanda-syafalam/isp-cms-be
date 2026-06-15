@@ -1,0 +1,197 @@
+import { NotFoundException } from '@nestjs/common';
+import { Test, type TestingModule } from '@nestjs/testing';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Invoice } from '../../infrastructure/database/schema/invoices.schema';
+import { CustomersRepository } from '../customers/customers.repository';
+import { InvoicesRepository } from './invoices.repository';
+import { InvoicesService } from './invoices.service';
+
+const CUSTOMER_ID = '00000000-0000-0000-0000-0000000000c1';
+
+const pendingInvoice: Invoice = {
+  id: '00000000-0000-0000-0000-0000000000e1',
+  invoiceNo: 'INV-2026-100',
+  customerId: CUSTOMER_ID,
+  customerName: 'Budi Santoso',
+  periodStart: '2026-06-01',
+  periodEnd: '2026-06-30',
+  amount: 200_000,
+  lateFee: 0,
+  taxAmount: 22_000,
+  taxInvoiceNo: null,
+  status: 'pending',
+  dueDate: '2026-06-10',
+  paidAt: null,
+  lastRemindedAt: null,
+  createdAt: new Date('2026-06-01T00:00:00.000Z'),
+  updatedAt: new Date('2026-06-01T00:00:00.000Z'),
+};
+
+describe('InvoicesService', () => {
+  let service: InvoicesService;
+  let repo: Record<string, ReturnType<typeof vi.fn>>;
+  let customers: Record<string, ReturnType<typeof vi.fn>>;
+
+  beforeEach(async () => {
+    repo = {
+      list: vi.fn(),
+      findById: vi.fn(),
+      create: vi.fn(),
+      existsForPeriod: vi.fn(),
+      markPaid: vi.fn(),
+      sumUnpaidByCustomer: vi.fn(),
+      countOverdueByCustomer: vi.fn(),
+      listPayments: vi.fn(),
+      createPayment: vi.fn(),
+    };
+    customers = {
+      findActiveBillable: vi.fn(),
+      setBilling: vi.fn(),
+      findById: vi.fn(),
+    };
+    const moduleRef: TestingModule = await Test.createTestingModule({
+      providers: [
+        InvoicesService,
+        { provide: InvoicesRepository, useValue: repo },
+        { provide: CustomersRepository, useValue: customers },
+      ],
+    }).compile();
+    service = moduleRef.get(InvoicesService);
+  });
+
+  it('maps invoices and passes the total through on list', async () => {
+    repo.list.mockResolvedValue({ items: [pendingInvoice], total: 1 });
+    const result = await service.list({ limit: 50, offset: 0 });
+    expect(result.total).toBe(1);
+    expect(result.items[0]?.invoiceNo).toBe('INV-2026-100');
+    // dates project to plain calendar strings; paidAt is null
+    expect(result.items[0]?.periodStart).toBe('2026-06-01');
+    expect(result.items[0]?.paidAt).toBeNull();
+  });
+
+  it('findById throws 404 when absent', async () => {
+    repo.findById.mockResolvedValue(null);
+    await expect(service.findById('missing')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  describe('pay', () => {
+    it('settles the invoice, writes the full total to the ledger, and reactivates an isolated customer', async () => {
+      repo.findById.mockResolvedValue(pendingInvoice);
+      repo.markPaid.mockResolvedValue({
+        ...pendingInvoice,
+        status: 'paid',
+        paidAt: new Date('2026-06-15T10:00:00.000Z'),
+      });
+      repo.sumUnpaidByCustomer.mockResolvedValue(0);
+      repo.countOverdueByCustomer.mockResolvedValue(0);
+      customers.findById.mockResolvedValue({
+        id: CUSTOMER_ID,
+        status: 'isolir',
+      });
+
+      const result = await service.pay(pendingInvoice.id, {
+        method: 'transfer',
+      });
+
+      expect(repo.markPaid).toHaveBeenCalledWith(pendingInvoice.id);
+      // total = amount + lateFee + taxAmount
+      expect(repo.createPayment).toHaveBeenCalledWith(
+        expect.objectContaining({
+          amount: 222_000,
+          method: 'transfer',
+          invoiceNo: 'INV-2026-100',
+        }),
+      );
+      // no debt left + no overdue -> reactivate from isolir
+      expect(customers.setBilling).toHaveBeenCalledWith(CUSTOMER_ID, {
+        outstanding: 0,
+        status: 'aktif',
+      });
+      expect(result.status).toBe('paid');
+      expect(result.paidAt).toBe('2026-06-15T10:00:00.000Z');
+    });
+
+    it('keeps an active customer active and only refreshes the balance', async () => {
+      repo.findById.mockResolvedValue(pendingInvoice);
+      repo.markPaid.mockResolvedValue({
+        ...pendingInvoice,
+        status: 'paid',
+        paidAt: new Date(),
+      });
+      repo.sumUnpaidByCustomer.mockResolvedValue(50_000);
+      repo.countOverdueByCustomer.mockResolvedValue(1);
+      customers.findById.mockResolvedValue({
+        id: CUSTOMER_ID,
+        status: 'aktif',
+      });
+
+      await service.pay(pendingInvoice.id, { method: 'cash' });
+      expect(customers.setBilling).toHaveBeenCalledWith(CUSTOMER_ID, {
+        outstanding: 50_000,
+      });
+    });
+
+    it('is a no-op for an already-paid invoice (no duplicate ledger entry)', async () => {
+      repo.findById.mockResolvedValue({ ...pendingInvoice, status: 'paid' });
+      const result = await service.pay(pendingInvoice.id, { method: 'qris' });
+      expect(repo.markPaid).not.toHaveBeenCalled();
+      expect(repo.createPayment).not.toHaveBeenCalled();
+      expect(customers.setBilling).not.toHaveBeenCalled();
+      expect(result.status).toBe('paid');
+    });
+
+    it('throws 404 for an unknown invoice', async () => {
+      repo.findById.mockResolvedValue(null);
+      await expect(service.pay('missing', { method: 'cash' })).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('run', () => {
+    it('creates invoices only for active customers without one this period, applying PPN', async () => {
+      customers.findActiveBillable.mockResolvedValue([
+        { id: 'c1', fullName: 'Ani', planPriceMonthly: 200_000 },
+        { id: 'c2', fullName: 'Budi', planPriceMonthly: 300_000 },
+      ]);
+      repo.existsForPeriod.mockImplementation((id: string) => Promise.resolve(id === 'c2'));
+      repo.create.mockResolvedValue(pendingInvoice);
+
+      const result = await service.run();
+
+      expect(result.created).toBe(1);
+      expect(result.period).toMatch(/^\d{4}-\d{2}$/);
+      expect(repo.create).toHaveBeenCalledTimes(1);
+      expect(repo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          customerId: 'c1',
+          amount: 200_000,
+          taxAmount: 22_000, // round(200000 * 0.11)
+          status: 'pending',
+        }),
+      );
+    });
+  });
+
+  it('maps the payment ledger', async () => {
+    repo.listPayments.mockResolvedValue({
+      items: [
+        {
+          id: '00000000-0000-0000-0000-0000000000f1',
+          invoiceId: pendingInvoice.id,
+          invoiceNo: 'INV-2026-100',
+          customerId: CUSTOMER_ID,
+          customerName: 'Budi Santoso',
+          amount: 222_000,
+          method: 'transfer',
+          paidAt: new Date('2026-06-15T10:00:00.000Z'),
+          createdAt: new Date('2026-06-15T10:00:00.000Z'),
+        },
+      ],
+      total: 1,
+    });
+    const result = await service.listPayments({ limit: 50, offset: 0 });
+    expect(result.items[0]?.paidAt).toBe('2026-06-15T10:00:00.000Z');
+    expect(result.items[0]?.amount).toBe(222_000);
+  });
+});

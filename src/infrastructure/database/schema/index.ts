@@ -3,5 +3,6 @@
 // `{ schema }` into `drizzle()` so the relational query API can resolve
 // references across files.
 export * from './customers.schema';
+export * from './invoices.schema';
 export * from './plans.schema';
 export * from './users.schema';

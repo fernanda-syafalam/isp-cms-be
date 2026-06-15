@@ -19,6 +19,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { CustomersModule } from './modules/customers/customers.module';
 import { EmailModule } from './modules/email/email.module';
 import { HealthModule } from './modules/health/health.module';
+import { InvoicesModule } from './modules/invoices/invoices.module';
 import { PlansModule } from './modules/plans/plans.module';
 import { UsersModule } from './modules/users/users.module';
 
@@ -69,6 +70,7 @@ import { UsersModule } from './modules/users/users.module';
     CustomersModule,
     EmailModule,
     HealthModule,
+    InvoicesModule,
     PlansModule,
     UsersModule,
   ],

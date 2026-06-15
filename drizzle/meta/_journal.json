@@ -29,6 +29,13 @@
       "when": 1781490882531,
       "tag": "0003_flimsy_goblin_queen",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1781491798359,
+      "tag": "0004_dazzling_xavin",
+      "breakpoints": true
     }
   ]
 }
