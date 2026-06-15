@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { count, desc, eq, sql } from 'drizzle-orm';
+import { asc, count, desc, eq, sql } from 'drizzle-orm';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type NewRouter,
@@ -40,6 +40,13 @@ export class RoutersRepository {
 
   async findById(id: string): Promise<Router | null> {
     const [row] = await this.db.select().from(routers).where(eq(routers.id, id)).limit(1);
+    return row ?? null;
+  }
+
+  // The default router to provision new subscribers onto: lowest name first,
+  // so the install cascade picks one deterministically. Null when none exist.
+  async findFirst(): Promise<Router | null> {
+    const [row] = await this.db.select().from(routers).orderBy(asc(routers.name)).limit(1);
     return row ?? null;
   }
 

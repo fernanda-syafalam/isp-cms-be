@@ -1,8 +1,12 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { CustomerConnection } from '../../infrastructure/database/schema/customers.schema';
 import type { WorkOrder } from '../../infrastructure/database/schema/work-orders.schema';
-import { CustomersRepository } from '../customers/customers.repository';
+import { type CustomerRow, CustomersRepository } from '../customers/customers.repository';
+import { InventoryService } from '../inventory/inventory.service';
 import { InvoicesService } from '../invoices/invoices.service';
+import { ProfilesRepository } from '../router-resources/profiles.repository';
+import { SecretsRepository } from '../router-resources/secrets.repository';
+import { RoutersRepository } from '../routers/routers.repository';
 import type { WorkOrderResponse } from './dto/work-order-response.dto';
 import { type WorkOrderListFilter, WorkOrdersRepository } from './work-orders.repository';
 
@@ -19,6 +23,10 @@ export class WorkOrdersService {
     private readonly repo: WorkOrdersRepository,
     private readonly customers: CustomersRepository,
     private readonly invoices: InvoicesService,
+    private readonly inventory: InventoryService,
+    private readonly routers: RoutersRepository,
+    private readonly profiles: ProfilesRepository,
+    private readonly secrets: SecretsRepository,
   ) {}
 
   async list(filter: WorkOrderListFilter): Promise<{ items: WorkOrderResponse[]; total: number }> {
@@ -28,14 +36,16 @@ export class WorkOrdersService {
 
   /**
    * Complete a work order. For an install with a linked subscriber this
-   * runs the activation cascade: activate the customer + attach a
-   * provisioned GPON connection, then issue the first invoice. Idempotent
-   * — a done order returns unchanged with no re-provisioning.
+   * runs the full activation cascade:
+   *   1. consume an ONU from warehouse stock (assign it to the subscriber),
+   *   2. activate the customer + attach the provisioned GPON connection,
+   *   3. provision a PPPoE secret on the default router,
+   *   4. issue the first invoice.
+   * Idempotent — a done order returns unchanged with no re-provisioning.
    *
-   * NOTE: ONU-from-inventory consumption and the PPPoE secret on the
-   * Mikrotik router are part of the full FE cascade but are deferred until
-   * the inventory and routers modules exist; the connection here carries a
-   * synthetic ONU serial in the meantime.
+   * Each external step degrades gracefully: with no ONU in stock the
+   * connection falls back to a synthetic serial; with no router/profile the
+   * secret is skipped (logged). The customer is always activated and billed.
    */
   async complete(id: string): Promise<WorkOrderResponse> {
     const wo = await this.repo.findById(id);
@@ -47,7 +57,9 @@ export class WorkOrdersService {
     if (wo.type === 'install' && wo.customerId) {
       const customer = await this.customers.findById(wo.customerId);
       if (customer) {
-        await this.customers.markInstalled(wo.customerId, buildConnection(customer));
+        const onuSerial = await this.assignOnu(customer.fullName);
+        await this.customers.markInstalled(wo.customerId, buildConnection(customer, onuSerial));
+        await this.provisionSecret(customer);
         await this.invoices.generateFirstInvoice(wo.customerId);
       }
     }
@@ -55,6 +67,43 @@ export class WorkOrdersService {
     const done = await this.repo.markDone(id);
     this.logger.log({ workOrderId: id, type: wo.type }, 'work order completed');
     return toWorkOrderResponse(done);
+  }
+
+  // Hand the oldest warehouse ONU to the subscriber and return its serial,
+  // or null when stock is dry (the connection then uses a synthetic serial).
+  private async assignOnu(customerName: string): Promise<string | null> {
+    const onu = await this.inventory.findAvailableOnu();
+    if (!onu) {
+      this.logger.warn({ customerName }, 'no ONU in stock — using synthetic serial');
+      return null;
+    }
+    await this.inventory.move(onu.id, { type: 'assign', note: customerName });
+    return onu.serial;
+  }
+
+  // Create the subscriber's PPPoE secret on the default router, matching the
+  // plan profile when present. Skipped (logged) when no router/profile exists.
+  private async provisionSecret(customer: CustomerRow): Promise<void> {
+    const router = await this.routers.findFirst();
+    if (!router) {
+      this.logger.warn({ customerId: customer.id }, 'no router — skipping PPPoE secret');
+      return;
+    }
+    const { items: profiles } = await this.profiles.listByRouter(router.id);
+    const profile = profiles.find((p) => p.name === customer.planName) ?? profiles[0];
+    if (!profile) {
+      this.logger.warn({ routerId: router.id }, 'no PPPoE profile — skipping secret');
+      return;
+    }
+    await this.secrets.create({
+      routerId: router.id,
+      username: pppoeUsername(customer.customerNo),
+      profileId: profile.id,
+      profileName: profile.name,
+      customerId: customer.id,
+      customerName: customer.fullName,
+    });
+    await this.routers.adjustSecretCount(router.id, 1);
   }
 
   /** Dispatch a repair work order from a support ticket. */
@@ -91,19 +140,27 @@ export class WorkOrdersService {
   }
 }
 
+// PPPoE login derived from the account number — shared by the connection
+// record and the router secret so the two always agree.
+function pppoeUsername(customerNo: string): string {
+  return customerNo.toLowerCase().replace('-', '');
+}
+
 // Provisioned GPON connection derived deterministically from the
-// subscriber's account number, so a retry yields the same values.
-function buildConnection(customer: {
-  customerNo: string;
-  planName: string;
-}): CustomerConnection {
+// subscriber's account number, so a retry yields the same values. The ONU
+// serial comes from the assigned inventory item; it falls back to a
+// synthetic serial when warehouse stock is empty.
+function buildConnection(
+  customer: { customerNo: string; planName: string },
+  onuSerial: string | null,
+): CustomerConnection {
   const n = Number(customer.customerNo.replace(/\D/g, '')) || 0;
   return {
     type: 'gpon',
-    pppoeUsername: customer.customerNo.toLowerCase().replace('-', ''),
+    pppoeUsername: pppoeUsername(customer.customerNo),
     profile: customer.planName,
     ipAddress: `100.64.${100 + (n % 150)}.2`,
-    onuSerial: `ZTEG${20_000_000 + (n % 100_000)}`,
+    onuSerial: onuSerial ?? `ZTEG${20_000_000 + (n % 100_000)}`,
     olt: 'OLT-1',
     ponPort: `0/${n % 8}/${n % 16}`,
     rxPower: -20 - (n % 6),

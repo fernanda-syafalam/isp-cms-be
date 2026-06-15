@@ -39,6 +39,14 @@ export class InventoryService {
     return { items: items.map(toMovementResponse), total };
   }
 
+  /**
+   * The next ONU available to assign, or null when warehouse stock is dry.
+   * Used by the work-order install cascade to consume real inventory.
+   */
+  async findAvailableOnu(): Promise<InventoryItem | null> {
+    return this.repo.findAvailableOnu();
+  }
+
   /** Register a new item into the warehouse and log an `in` movement. */
   async stockIn(input: StockInInput): Promise<InventoryItemResponse> {
     const item = await this.repo.create({ kind: input.kind, serial: input.serial });
