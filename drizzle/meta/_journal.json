@@ -162,6 +162,13 @@
       "when": 1781543017340,
       "tag": "0022_ambiguous_wildside",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1781543520314,
+      "tag": "0023_crazy_vulcan",
+      "breakpoints": true
     }
   ]
 }
