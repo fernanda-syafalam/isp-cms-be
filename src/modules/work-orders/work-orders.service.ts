@@ -8,6 +8,8 @@ import { type WorkOrderListFilter, WorkOrdersRepository } from './work-orders.re
 
 // A repair dispatched from a ticket is scheduled for the next day.
 const REPAIR_LEAD_MS = 24 * 3_600_000;
+// An install scheduled when a lead converts gets a two-day lead time.
+const INSTALL_LEAD_MS = 2 * 24 * 3_600_000;
 
 @Injectable()
 export class WorkOrdersService {
@@ -68,6 +70,23 @@ export class WorkOrdersService {
       scheduledAt: new Date(Date.now() + REPAIR_LEAD_MS),
     });
     this.logger.log({ workOrderId: wo.id }, 'work order created from ticket');
+    return toWorkOrderResponse(wo);
+  }
+
+  /**
+   * Schedule an install work order for a freshly-converted lead. customerId
+   * is null — the subscriber is linked when onboarding completes (matches
+   * the FE convert flow).
+   */
+  async scheduleInstall(customerName: string): Promise<WorkOrderResponse> {
+    const wo = await this.repo.create({
+      type: 'install',
+      customerId: null,
+      customerName,
+      technician: null,
+      scheduledAt: new Date(Date.now() + INSTALL_LEAD_MS),
+    });
+    this.logger.log({ workOrderId: wo.id }, 'install scheduled from lead');
     return toWorkOrderResponse(wo);
   }
 }

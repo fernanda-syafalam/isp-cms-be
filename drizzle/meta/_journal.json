@@ -50,6 +50,13 @@
       "when": 1781493324113,
       "tag": "0006_reflective_thunderbird",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1781494006805,
+      "tag": "0007_bored_johnny_blaze",
+      "breakpoints": true
     }
   ]
 }
