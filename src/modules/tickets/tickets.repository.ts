@@ -52,6 +52,17 @@ export class TicketsRepository {
     return row ?? null;
   }
 
+  // Resolve a ticket id from its human code (e.g. TKT-2001) — used when a
+  // module references a ticket by code (SLA credits).
+  async findIdByCode(code: string): Promise<string | null> {
+    const [row] = await this.db
+      .select({ id: tickets.id })
+      .from(tickets)
+      .where(eq(tickets.code, code))
+      .limit(1);
+    return row?.id ?? null;
+  }
+
   async create(input: NewTicket): Promise<Ticket> {
     const [row] = await this.db.insert(tickets).values(input).returning();
     if (!row) {
