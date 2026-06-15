@@ -18,6 +18,7 @@ import { RedisService } from './infrastructure/redis/redis.service';
 import { AuthModule } from './modules/auth/auth.module';
 import { EmailModule } from './modules/email/email.module';
 import { HealthModule } from './modules/health/health.module';
+import { PlansModule } from './modules/plans/plans.module';
 import { UsersModule } from './modules/users/users.module';
 
 /**
@@ -66,6 +67,7 @@ import { UsersModule } from './modules/users/users.module';
     AuthModule,
     EmailModule,
     HealthModule,
+    PlansModule,
     UsersModule,
   ],
   providers: [

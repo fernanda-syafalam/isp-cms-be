@@ -15,6 +15,13 @@
       "when": 1778143903791,
       "tag": "0001_warm_maggott",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781488252848,
+      "tag": "0002_clever_outlaw_kid",
+      "breakpoints": true
     }
   ]
 }
