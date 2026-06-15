@@ -47,6 +47,18 @@ export function segmentMeters(
   return Math.round(2 * R * Math.asin(Math.sqrt(h)));
 }
 
+// Total surveyed length (m) of a polyline route: the sum of its segment lengths.
+// A re-routed cable's lengthM is recomputed from its new waypoints this way.
+export function routeLength(points: Array<{ lat: number; lng: number }>): number {
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    if (a && b) total += segmentMeters(a, b);
+  }
+  return total;
+}
+
 // Uplink path from a node up to the OLT root (inclusive), nearest first.
 export function uplinkPath<T extends TopoNode>(start: T, byId: Map<string, T>): T[] {
   const path: T[] = [start];

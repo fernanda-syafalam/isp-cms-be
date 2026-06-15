@@ -109,6 +109,40 @@ const SUBSCRIBERS: FixtureSubscriber[] = [
   },
 ];
 
+// Provisioned subscribers awaiting a field install: they exist in the catalogue
+// but have NO `${id}-node` yet, so the "Pasang pelanggan" (customer-drop) flow
+// can place them on the map. Kept out of buildTopologyFixture (not seeded as
+// nodes) — the FE catalogue is likewise a superset of the installed nodes.
+const PENDING_SUBSCRIBERS: FixtureSubscriber[] = [
+  {
+    id: 'cust-12',
+    fullName: 'Lukman Hakim',
+    status: 'aktif',
+    planName: 'Home 50',
+    phone: '081234500012',
+    connection: { rxPower: -22, onuSerial: 'ZTEG10000012', ponPort: '0/3/3' },
+  },
+  {
+    id: 'cust-13',
+    fullName: 'Maya Putri',
+    status: 'aktif',
+    planName: 'Home 20',
+    phone: '081234500013',
+    connection: { rxPower: -23, onuSerial: 'ZTEG10000013', ponPort: '0/3/4' },
+  },
+];
+
+// The full subscriber catalogue: installed nodes + those awaiting install. The
+// customer-drop / re-home flows resolve a subscriber's name + provisioning here.
+const SUBSCRIBER_CATALOG: FixtureSubscriber[] = [...SUBSCRIBERS, ...PENDING_SUBSCRIBERS];
+
+export type Subscriber = FixtureSubscriber;
+
+/** Resolve a subscriber (installed or pending) by id, or undefined. */
+export function findSubscriber(id: string): FixtureSubscriber | undefined {
+  return SUBSCRIBER_CATALOG.find((c) => c.id === id);
+}
+
 // NETWORK status (map color) is distinct from BILLING lifecycle: an isolir
 // (suspended) customer is still optically `up` (fiber not cut) — so dispatch
 // never mistakes "belum bayar" for "fiber putus". berhenti (disconnected) and
@@ -119,6 +153,11 @@ const CUST_STATUS: Record<FixtureSubscriber['status'], NewNetworkNode['status']>
   berhenti: 'unknown',
   instalasi: 'unknown',
 };
+
+/** Map a subscriber billing status to its optical/network status (map color). */
+export function customerNetStatus(status: FixtureSubscriber['status']): NewNetworkNode['status'] {
+  return CUST_STATUS[status] ?? 'unknown';
+}
 
 /**
  * Build the topology node forest: OLT -> ODC -> ODP -> pole -> customer, around
