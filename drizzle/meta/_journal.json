@@ -134,6 +134,13 @@
       "when": 1781505017537,
       "tag": "0018_tired_reaper",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1781505600511,
+      "tag": "0019_sour_maria_hill",
+      "breakpoints": true
     }
   ]
 }
