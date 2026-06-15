@@ -32,6 +32,7 @@ import { PlansModule } from './modules/plans/plans.module';
 import { ResellersModule } from './modules/resellers/resellers.module';
 import { RouterResourcesModule } from './modules/router-resources/router-resources.module';
 import { RoutersModule } from './modules/routers/routers.module';
+import { SatisfactionModule } from './modules/satisfaction/satisfaction.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { SlaCreditsModule } from './modules/sla-credits/sla-credits.module';
 import { TicketsModule } from './modules/tickets/tickets.module';
@@ -100,6 +101,7 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     ResellersModule,
     RouterResourcesModule,
     RoutersModule,
+    SatisfactionModule,
     SettingsModule,
     SlaCreditsModule,
     TicketsModule,

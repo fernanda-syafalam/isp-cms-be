@@ -3,8 +3,10 @@ import {
   and,
   asc,
   count,
+  desc,
   eq,
   getTableColumns,
+  gt,
   ilike,
   inArray,
   isNotNull,
@@ -221,6 +223,33 @@ export class CustomersRepository {
     if (result.rowCount === 0) {
       throw new NotFoundException('customer not found');
     }
+  }
+
+  // --- Satisfaction support -------------------------------------------
+
+  /** Total customers — denominator for churn / NPS aggregates. */
+  async countAll(): Promise<number> {
+    const [row] = await this.db.select({ value: count() }).from(customers);
+    return row?.value ?? 0;
+  }
+
+  /** Churn-risk subscribers: isolated or carrying a balance (debt first). */
+  async findAtRisk(
+    limit: number,
+  ): Promise<
+    Array<{ id: string; fullName: string; status: Customer['status']; outstanding: number }>
+  > {
+    return this.db
+      .select({
+        id: customers.id,
+        fullName: customers.fullName,
+        status: customers.status,
+        outstanding: customers.outstanding,
+      })
+      .from(customers)
+      .where(or(eq(customers.status, 'isolir'), gt(customers.outstanding, 0)))
+      .orderBy(desc(customers.outstanding))
+      .limit(limit);
   }
 
   // Provisioned subscribers (aktif/isolir) joined with plan name + speed —
