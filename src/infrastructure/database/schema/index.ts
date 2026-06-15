@@ -18,6 +18,7 @@ export * from './plans.schema';
 export * from './pppoe.schema';
 export * from './resellers.schema';
 export * from './routers.schema';
+export * from './security.schema';
 export * from './settings.schema';
 export * from './sla-credits.schema';
 export * from './tickets.schema';
