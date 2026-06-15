@@ -15,6 +15,7 @@ import { AppLoggerModule } from './infrastructure/logger/logger.module';
 import { QueueModule } from './infrastructure/queue/queue.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
 import { RedisService } from './infrastructure/redis/redis.service';
+import { AccountingModule } from './modules/accounting/accounting.module';
 import { AcsModule } from './modules/acs/acs.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { BranchesModule } from './modules/branches/branches.module';
@@ -84,6 +85,7 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
       },
     }),
     QueueModule,
+    AccountingModule,
     AcsModule,
     AuthModule,
     BranchesModule,
