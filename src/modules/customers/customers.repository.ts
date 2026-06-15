@@ -138,6 +138,11 @@ export class CustomersRepository {
     return updated;
   }
 
+  /** Move the customer: new address + service area. */
+  async relocate(id: string, patch: { address: string; areaName: string }): Promise<CustomerRow> {
+    return this.applyUpdate(id, patch);
+  }
+
   /**
    * Move the customer to a new lifecycle status. `clearOutstanding`
    * zeroes the balance (used by activate-after-payment); the other

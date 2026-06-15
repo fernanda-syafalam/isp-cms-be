@@ -1,6 +1,7 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PlansRepository } from '../plans/plans.repository';
 import { type CustomerRow, CustomersRepository } from './customers.repository';
 import { CustomersService } from './customers.service';
@@ -34,6 +35,7 @@ describe('CustomersService', () => {
   let service: CustomersService;
   let repo: Record<string, ReturnType<typeof vi.fn>>;
   let plans: { findById: ReturnType<typeof vi.fn> };
+  let notifications: { send: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     repo = {
@@ -45,13 +47,17 @@ describe('CustomersService', () => {
       recordConsent: vi.fn(),
       updateKyc: vi.fn(),
       requestDataDeletion: vi.fn(),
+      relocate: vi.fn(),
+      setBilling: vi.fn(),
     };
     plans = { findById: vi.fn() };
+    notifications = { send: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         CustomersService,
         { provide: CustomersRepository, useValue: repo },
         { provide: PlansRepository, useValue: plans },
+        { provide: NotificationsService, useValue: notifications },
       ],
     }).compile();
     service = moduleRef.get(CustomersService);
@@ -193,5 +199,79 @@ describe('CustomersService', () => {
     const result = await service.list({ limit: 50, offset: 0 });
     expect(result.total).toBe(1);
     expect(result.items[0]?.planName).toBe('Home 20');
+  });
+
+  describe('subscriber actions', () => {
+    it('relocate updates address + area', async () => {
+      repo.relocate.mockResolvedValue({ ...sampleRow, address: 'Jl. Baru 9', areaName: 'Bangsri' });
+      const result = await service.relocate(sampleRow.id, {
+        address: 'Jl. Baru 9',
+        areaName: 'Bangsri',
+      });
+      expect(repo.relocate).toHaveBeenCalledWith(sampleRow.id, {
+        address: 'Jl. Baru 9',
+        areaName: 'Bangsri',
+      });
+      expect(result.areaName).toBe('Bangsri');
+    });
+
+    it('onu reboot / wifi are acknowledgments that 404 on a missing customer', async () => {
+      repo.findById.mockResolvedValue(sampleRow);
+      await expect(service.rebootOnu(sampleRow.id)).resolves.toMatchObject({ id: sampleRow.id });
+      await expect(
+        service.setOnuWifi(sampleRow.id, { ssid: 'Net', password: 'supersecret' }),
+      ).resolves.toMatchObject({ id: sampleRow.id });
+      repo.findById.mockResolvedValue(null);
+      await expect(service.rebootOnu('missing')).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('notifyWhatsapp sends a due_soon reminder to the customer phone', async () => {
+      repo.findById.mockResolvedValue(sampleRow);
+      await service.notifyWhatsapp(sampleRow.id);
+      expect(notifications.send).toHaveBeenCalledWith({ event: 'due_soon', to: sampleRow.phone });
+    });
+
+    describe('changePlan', () => {
+      it('adds the price delta to outstanding on an upgrade', async () => {
+        repo.findById.mockResolvedValue({ ...sampleRow, outstanding: 0, planId: PLAN_ID });
+        plans.findById.mockImplementation((id: string) =>
+          Promise.resolve(
+            id === 'plan-new'
+              ? { id: 'plan-new', name: 'Pro 100', priceMonthly: 500_000 }
+              : { id: PLAN_ID, name: 'Home 20', priceMonthly: 200_000 },
+          ),
+        );
+        repo.updateProfile.mockResolvedValue(sampleRow);
+        repo.setBilling.mockResolvedValue(undefined);
+
+        await service.changePlan(sampleRow.id, { planId: 'plan-new' });
+
+        expect(repo.updateProfile).toHaveBeenCalledWith(sampleRow.id, { planId: 'plan-new' });
+        // delta 300k added to outstanding
+        expect(repo.setBilling).toHaveBeenCalledWith(sampleRow.id, { outstanding: 300_000 });
+      });
+
+      it('does not touch outstanding on a downgrade', async () => {
+        repo.findById.mockResolvedValue({ ...sampleRow, outstanding: 0 });
+        plans.findById.mockImplementation((id: string) =>
+          Promise.resolve(
+            id === 'plan-cheap'
+              ? { id: 'plan-cheap', name: 'Home 10', priceMonthly: 100_000 }
+              : { id: PLAN_ID, name: 'Home 20', priceMonthly: 200_000 },
+          ),
+        );
+        repo.updateProfile.mockResolvedValue(sampleRow);
+        await service.changePlan(sampleRow.id, { planId: 'plan-cheap' });
+        expect(repo.setBilling).not.toHaveBeenCalled();
+      });
+
+      it('rejects an unknown plan with 400', async () => {
+        repo.findById.mockResolvedValue(sampleRow);
+        plans.findById.mockResolvedValue(null);
+        await expect(service.changePlan(sampleRow.id, { planId: 'nope' })).rejects.toBeInstanceOf(
+          BadRequestException,
+        );
+      });
+    });
   });
 });
