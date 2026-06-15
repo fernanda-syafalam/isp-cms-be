@@ -138,6 +138,45 @@ export class CustomersRepository {
     }
   }
 
+  // --- Billing support ------------------------------------------------
+  // The billing module owns a customer's balance/lifecycle-by-payment.
+  // These two methods are the seam it uses; the logic lives there.
+
+  /**
+   * Active customers with their plan's monthly price — the input to a
+   * billing run. Joins plans for the price (never stored on the customer).
+   */
+  async findActiveBillable(): Promise<
+    Array<{ id: string; fullName: string; planPriceMonthly: number }>
+  > {
+    return this.db
+      .select({
+        id: customers.id,
+        fullName: customers.fullName,
+        planPriceMonthly: plans.priceMonthly,
+      })
+      .from(customers)
+      .innerJoin(plans, eq(customers.planId, plans.id))
+      .where(eq(customers.status, 'aktif'));
+  }
+
+  /**
+   * Apply a billing effect: set the outstanding balance and/or move the
+   * lifecycle status (e.g. reactivate from isolir once paid up).
+   */
+  async setBilling(
+    id: string,
+    patch: { outstanding?: number; status?: Customer['status'] },
+  ): Promise<void> {
+    const result = await this.db
+      .update(customers)
+      .set({ ...patch, updatedAt: sql`now()` })
+      .where(eq(customers.id, id));
+    if (result.rowCount === 0) {
+      throw new NotFoundException('customer not found');
+    }
+  }
+
   // Shared update path: always bumps updated_at, throws NotFound when the
   // id is absent, then re-reads to attach the joined planName.
   private async applyUpdate(id: string, set: Partial<NewCustomer>): Promise<CustomerRow> {
