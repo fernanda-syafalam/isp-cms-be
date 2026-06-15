@@ -25,6 +25,7 @@ import { HealthModule } from './modules/health/health.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
 import { InvoicesModule } from './modules/invoices/invoices.module';
 import { LeadsModule } from './modules/leads/leads.module';
+import { MonitoringModule } from './modules/monitoring/monitoring.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { PlansModule } from './modules/plans/plans.module';
 import { ResellersModule } from './modules/resellers/resellers.module';
@@ -90,6 +91,7 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     InventoryModule,
     InvoicesModule,
     LeadsModule,
+    MonitoringModule,
     NotificationsModule,
     PlansModule,
     ResellersModule,
