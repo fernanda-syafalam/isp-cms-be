@@ -78,6 +78,13 @@
       "when": 1781496361548,
       "tag": "0010_melodic_serpent_society",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1781496893596,
+      "tag": "0011_charming_titanium_man",
+      "breakpoints": true
     }
   ]
 }
