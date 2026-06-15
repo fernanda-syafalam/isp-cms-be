@@ -99,6 +99,13 @@
       "when": 1781498234603,
       "tag": "0013_common_sprite",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1781498829314,
+      "tag": "0014_military_thor_girl",
+      "breakpoints": true
     }
   ]
 }
