@@ -9,4 +9,5 @@ export * from './leads.schema';
 export * from './plans.schema';
 export * from './tickets.schema';
 export * from './users.schema';
+export * from './vouchers.schema';
 export * from './work-orders.schema';
