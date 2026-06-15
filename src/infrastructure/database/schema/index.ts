@@ -7,6 +7,7 @@ export * from './branches.schema';
 export * from './contracts.schema';
 export * from './coverage.schema';
 export * from './customers.schema';
+export * from './devices.schema';
 export * from './inventory.schema';
 export * from './invoices.schema';
 export * from './leads.schema';
