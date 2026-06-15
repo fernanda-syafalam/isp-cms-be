@@ -10,6 +10,7 @@ export * from './customers.schema';
 export * from './inventory.schema';
 export * from './invoices.schema';
 export * from './leads.schema';
+export * from './mikrotik-resources.schema';
 export * from './monitoring.schema';
 export * from './notifications.schema';
 export * from './plans.schema';
