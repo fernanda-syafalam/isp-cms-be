@@ -10,9 +10,13 @@ import {
   invoices,
   payments,
 } from '../../infrastructure/database/schema/invoices.schema';
+import type { InvoiceListResponse, InvoiceSummary } from './dto/invoice-response.dto';
 
 export interface InvoiceListFilter {
   status?: Invoice['status'];
+  q?: string;
+  sort?: string;
+  order?: 'asc' | 'desc';
   limit: number;
   offset: number;
 }
@@ -25,7 +29,18 @@ export interface PaymentListFilter {
   offset: number;
 }
 
-// Columns the frontend is allowed to sort on (camelCase key → Drizzle column).
+// Columns the frontend is allowed to sort invoices on (camelCase key → Drizzle column).
+// Unknown/absent key falls back to `dueDate desc` via buildOrderBy — never throws.
+const INVOICE_SORT_WHITELIST = {
+  invoiceNo: invoices.invoiceNo,
+  customerName: invoices.customerName,
+  amount: invoices.amount,
+  dueDate: invoices.dueDate,
+  status: invoices.status,
+  lastRemindedAt: invoices.lastRemindedAt,
+} satisfies Record<string, (typeof invoices)[keyof typeof invoices]>;
+
+// Columns the frontend is allowed to sort payments on (camelCase key → Drizzle column).
 // Extend this map as new sortable columns are added; never pass arbitrary
 // column references — the whitelist is the security boundary.
 const PAYMENT_SORT_WHITELIST = {
@@ -50,17 +65,56 @@ export class InvoicesRepository {
     return this.drizzle.db;
   }
 
-  async list(filter: InvoiceListFilter): Promise<{ items: Invoice[]; total: number }> {
-    const where = filter.status ? eq(invoices.status, filter.status) : undefined;
+  async list(
+    filter: InvoiceListFilter,
+  ): Promise<Omit<InvoiceListResponse, 'items'> & { items: Invoice[] }> {
+    // WHERE clause for status + q (applied to items + filtered total).
+    const where = and(
+      filter.status ? eq(invoices.status, filter.status) : undefined,
+      filter.q
+        ? or(
+            ilike(invoices.invoiceNo, `%${filter.q}%`),
+            ilike(invoices.customerName, `%${filter.q}%`),
+          )
+        : undefined,
+    );
+
+    const orderBy = buildOrderBy(
+      filter.sort,
+      filter.order,
+      INVOICE_SORT_WHITELIST,
+      desc(invoices.dueDate),
+    );
+
     const items = await this.db
       .select()
       .from(invoices)
       .where(where)
-      .orderBy(desc(invoices.createdAt))
+      .orderBy(orderBy)
       .limit(filter.limit)
       .offset(filter.offset);
-    const [totals] = await this.db.select({ value: count() }).from(invoices).where(where);
-    return { items, total: totals?.value ?? 0 };
+
+    const [filteredCount] = await this.db.select({ value: count() }).from(invoices).where(where);
+
+    // Full-set summary — computed over ALL invoices, ignoring status/q/paging.
+    // grand total per invoice = amount + late_fee + tax_amount.
+    const [summaryRow] = await this.db
+      .select({
+        total: count(),
+        unpaidCount: sql<number>`count(*) filter (where ${invoices.status} in ('pending', 'overdue'))`,
+        outstanding: sql<string>`coalesce(sum(case when ${invoices.status} in ('pending', 'overdue') then ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} else 0 end), 0)`,
+        overdue: sql<string>`coalesce(sum(case when ${invoices.status} = 'overdue' then ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} else 0 end), 0)`,
+      })
+      .from(invoices);
+
+    const summary: InvoiceSummary = {
+      total: summaryRow?.total ?? 0,
+      unpaidCount: Number(summaryRow?.unpaidCount ?? 0),
+      outstanding: Number(summaryRow?.outstanding ?? 0),
+      overdue: Number(summaryRow?.overdue ?? 0),
+    };
+
+    return { items, total: filteredCount?.value ?? 0, summary };
   }
 
   async findById(id: string): Promise<Invoice | null> {
