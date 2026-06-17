@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { asc, count, desc, eq, sql } from 'drizzle-orm';
+import { asc, count, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type NewNotificationLogEntry,
@@ -10,7 +11,20 @@ import {
   notificationTemplates,
 } from '../../infrastructure/database/schema/notifications.schema';
 
+// Columns the frontend may sort on (camelCase key → Drizzle column).
+// `to` is the FE field name for the `recipient` column.
+// Unknown/absent key falls back to `at desc` via buildOrderBy — never throws.
+const NOTIFICATION_LOG_SORT_WHITELIST = {
+  at: notificationLog.at,
+  to: notificationLog.recipient,
+  templateName: notificationLog.templateName,
+  status: notificationLog.status,
+} satisfies Record<string, (typeof notificationLog)[keyof typeof notificationLog]>;
+
 export interface LogListFilter {
+  q?: string;
+  sort?: string;
+  order?: 'asc' | 'desc';
   limit: number;
   offset: number;
 }
@@ -69,13 +83,28 @@ export class NotificationsRepository {
   // --- Log ------------------------------------------------------------
 
   async listLog(filter: LogListFilter): Promise<{ items: NotificationLogEntry[]; total: number }> {
+    const where = filter.q
+      ? or(
+          ilike(notificationLog.recipient, `%${filter.q}%`),
+          ilike(notificationLog.templateName, `%${filter.q}%`),
+        )
+      : undefined;
+
+    const orderBy = buildOrderBy(
+      filter.sort,
+      filter.order,
+      NOTIFICATION_LOG_SORT_WHITELIST,
+      desc(notificationLog.at),
+    );
+
     const items = await this.db
       .select()
       .from(notificationLog)
-      .orderBy(desc(notificationLog.at))
+      .where(where)
+      .orderBy(orderBy)
       .limit(filter.limit)
       .offset(filter.offset);
-    const [totals] = await this.db.select({ value: count() }).from(notificationLog);
+    const [totals] = await this.db.select({ value: count() }).from(notificationLog).where(where);
     return { items, total: totals?.value ?? 0 };
   }
 
