@@ -2,7 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { Invoice, Payment } from '../../infrastructure/database/schema/invoices.schema';
 import { CustomersRepository } from '../customers/customers.repository';
 import type { BillingRunResult } from './dto/billing-run-result.dto';
-import type { InvoiceResponse } from './dto/invoice-response.dto';
+import type { InvoiceListResponse, InvoiceResponse } from './dto/invoice-response.dto';
 import type { PaymentResponse } from './dto/payment-response.dto';
 import type { RecordPaymentInput } from './dto/record-payment.dto';
 import {
@@ -28,9 +28,9 @@ export class InvoicesService {
     private readonly customers: CustomersRepository,
   ) {}
 
-  async list(filter: InvoiceListFilter): Promise<{ items: InvoiceResponse[]; total: number }> {
-    const { items, total } = await this.repo.list(filter);
-    return { items: items.map(toInvoiceResponse), total };
+  async list(filter: InvoiceListFilter): Promise<InvoiceListResponse> {
+    const { items, total, summary } = await this.repo.list(filter);
+    return { items: items.map(toInvoiceResponse), total, summary };
   }
 
   async findById(id: string): Promise<InvoiceResponse> {

@@ -27,6 +27,14 @@ const pendingInvoice: Invoice = {
   updatedAt: new Date('2026-06-01T00:00:00.000Z'),
 };
 
+// Default full-set summary returned by the mock repo
+const defaultSummary = {
+  outstanding: 444_000,
+  overdue: 222_000,
+  unpaidCount: 2,
+  total: 5,
+};
+
 describe('InvoicesService', () => {
   let service: InvoicesService;
   let repo: Record<string, ReturnType<typeof vi.fn>>;
@@ -59,14 +67,109 @@ describe('InvoicesService', () => {
     service = moduleRef.get(InvoicesService);
   });
 
-  it('maps invoices and passes the total through on list', async () => {
-    repo.list.mockResolvedValue({ items: [pendingInvoice], total: 1 });
-    const result = await service.list({ limit: 50, offset: 0 });
-    expect(result.total).toBe(1);
-    expect(result.items[0]?.invoiceNo).toBe('INV-2026-100');
-    // dates project to plain calendar strings; paidAt is null
-    expect(result.items[0]?.periodStart).toBe('2026-06-01');
-    expect(result.items[0]?.paidAt).toBeNull();
+  // ---------------------------------------------------------------------------
+  // list — pagination, search, sort, and summary invariant
+  // ---------------------------------------------------------------------------
+
+  describe('list', () => {
+    it('maps invoices, passes total through, and includes summary', async () => {
+      repo.list.mockResolvedValue({ items: [pendingInvoice], total: 1, summary: defaultSummary });
+      const result = await service.list({ limit: 50, offset: 0 });
+      expect(result.total).toBe(1);
+      expect(result.items[0]?.invoiceNo).toBe('INV-2026-100');
+      // dates project to plain calendar strings; paidAt is null
+      expect(result.items[0]?.periodStart).toBe('2026-06-01');
+      expect(result.items[0]?.paidAt).toBeNull();
+      expect(result.summary).toEqual(defaultSummary);
+    });
+
+    it('status filter shrinks items and total but summary is unchanged (the invariant)', async () => {
+      const overdueInvoice: Invoice = {
+        ...pendingInvoice,
+        id: '00000000-0000-0000-0000-0000000000e2',
+        status: 'overdue',
+      };
+      repo.list.mockResolvedValue({
+        items: [overdueInvoice],
+        total: 1,
+        summary: defaultSummary,
+      });
+      const result = await service.list({ status: 'overdue', limit: 50, offset: 0 });
+      expect(result.items).toHaveLength(1);
+      expect(result.total).toBe(1);
+      // Summary must reflect the full set, not just the filtered slice.
+      expect(result.summary.total).toBe(5);
+      expect(result.summary.unpaidCount).toBe(2);
+      expect(result.summary.outstanding).toBe(444_000);
+      expect(result.summary.overdue).toBe(222_000);
+    });
+
+    it('q search passes the filter to the repo and summary is unaffected', async () => {
+      const matched: Invoice = { ...pendingInvoice, invoiceNo: 'INV-2026-999' };
+      repo.list.mockResolvedValue({ items: [matched], total: 1, summary: defaultSummary });
+      const result = await service.list({ q: 'INV-2026-999', limit: 50, offset: 0 });
+      expect(repo.list).toHaveBeenCalledWith(expect.objectContaining({ q: 'INV-2026-999' }));
+      expect(result.items[0]?.invoiceNo).toBe('INV-2026-999');
+      expect(result.total).toBe(1);
+      // Summary unaffected by q.
+      expect(result.summary).toEqual(defaultSummary);
+    });
+
+    it('forwards sort and order to the repo', async () => {
+      repo.list.mockResolvedValue({ items: [], total: 0, summary: defaultSummary });
+      await service.list({ sort: 'dueDate', order: 'asc', limit: 50, offset: 0 });
+      expect(repo.list).toHaveBeenCalledWith(
+        expect.objectContaining({ sort: 'dueDate', order: 'asc' }),
+      );
+    });
+
+    it('forwards desc sort to the repo', async () => {
+      repo.list.mockResolvedValue({ items: [], total: 0, summary: defaultSummary });
+      await service.list({ sort: 'customerName', order: 'desc', limit: 50, offset: 0 });
+      expect(repo.list).toHaveBeenCalledWith(
+        expect.objectContaining({ sort: 'customerName', order: 'desc' }),
+      );
+    });
+
+    it('unknown sort key is forwarded to the repo (repo falls back to default via buildOrderBy)', async () => {
+      repo.list.mockResolvedValue({ items: [], total: 0, summary: defaultSummary });
+      await service.list({ sort: 'thisKeyDoesNotExist', order: 'asc', limit: 50, offset: 0 });
+      expect(repo.list).toHaveBeenCalledWith(
+        expect.objectContaining({ sort: 'thisKeyDoesNotExist' }),
+      );
+    });
+
+    it('limit/offset paging keeps total and summary unaffected', async () => {
+      const page2Item: Invoice = {
+        ...pendingInvoice,
+        id: '00000000-0000-0000-0000-0000000000e9',
+      };
+      repo.list.mockResolvedValue({
+        items: [page2Item],
+        total: 50,
+        summary: defaultSummary,
+      });
+      const result = await service.list({ limit: 10, offset: 10 });
+      expect(repo.list).toHaveBeenCalledWith(expect.objectContaining({ limit: 10, offset: 10 }));
+      // total is full filtered count, not just page size
+      expect(result.total).toBe(50);
+      // summary is always full-set
+      expect(result.summary).toEqual(defaultSummary);
+    });
+
+    it('outstanding includes both pending and overdue grand totals', async () => {
+      const summaryWithMix = {
+        outstanding: 700_000, // pending 300k + overdue 400k
+        overdue: 400_000,
+        unpaidCount: 3,
+        total: 10,
+      };
+      repo.list.mockResolvedValue({ items: [], total: 0, summary: summaryWithMix });
+      const result = await service.list({ limit: 50, offset: 0 });
+      expect(result.summary.outstanding).toBe(700_000);
+      expect(result.summary.overdue).toBe(400_000);
+      expect(result.summary.unpaidCount).toBe(3);
+    });
   });
 
   it('findById throws 404 when absent', async () => {
