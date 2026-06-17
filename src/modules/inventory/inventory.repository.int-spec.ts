@@ -160,6 +160,215 @@ describe('InventoryRepository (integration)', () => {
     expect(ledger.items.map((m) => m.type)).toEqual(['assign', 'in']);
   });
 
+  describe('listMovements search (q)', () => {
+    it('matches by serial substring case-insensitively', async () => {
+      const a = await repo.create({ kind: 'onu', serial: 'ZTEG-MOV-001' });
+      const b = await repo.create({ kind: 'router', serial: 'TP-LINK-MOV-001' });
+      await repo.addMovement({
+        itemId: a.id,
+        serial: a.serial,
+        kind: a.kind,
+        type: 'in',
+        note: 'Stok masuk',
+      });
+      await repo.addMovement({
+        itemId: b.id,
+        serial: b.serial,
+        kind: b.kind,
+        type: 'in',
+        note: 'Stok masuk',
+      });
+
+      const result = await repo.listMovements({ q: 'zteg', limit: 50, offset: 0 });
+      expect(result.total).toBe(1);
+      expect(result.items[0]?.serial).toBe('ZTEG-MOV-001');
+    });
+
+    it('matches by note substring case-insensitively', async () => {
+      const a = await repo.create({ kind: 'onu', serial: 'SN-NOTE-001' });
+      const b = await repo.create({ kind: 'onu', serial: 'SN-NOTE-002' });
+      await repo.addMovement({
+        itemId: a.id,
+        serial: a.serial,
+        kind: a.kind,
+        type: 'assign',
+        note: 'Budi Santoso',
+      });
+      await repo.addMovement({
+        itemId: b.id,
+        serial: b.serial,
+        kind: b.kind,
+        type: 'in',
+        note: 'Stok masuk',
+      });
+
+      const result = await repo.listMovements({ q: 'budi', limit: 50, offset: 0 });
+      expect(result.total).toBe(1);
+      expect(result.items[0]?.note).toBe('Budi Santoso');
+    });
+
+    it('total reflects the q filter, not the full table count', async () => {
+      const item = await repo.create({ kind: 'onu', serial: 'SN-TOTAL-001' });
+      await repo.addMovement({
+        itemId: item.id,
+        serial: item.serial,
+        kind: item.kind,
+        type: 'in',
+        note: 'MATCH-NOTE',
+      });
+      await repo.addMovement({
+        itemId: item.id,
+        serial: item.serial,
+        kind: item.kind,
+        type: 'return',
+        note: 'NOMATCH-NOTE',
+      });
+
+      const result = await repo.listMovements({ q: 'MATCH-NOTE', limit: 50, offset: 0 });
+      expect(result.total).toBe(1);
+      expect(result.items).toHaveLength(1);
+    });
+
+    it('returns empty result when q matches nothing', async () => {
+      const item = await repo.create({ kind: 'onu', serial: 'SN-EMPTY-001' });
+      await repo.addMovement({
+        itemId: item.id,
+        serial: item.serial,
+        kind: item.kind,
+        type: 'in',
+        note: 'Stok masuk',
+      });
+
+      const result = await repo.listMovements({ q: 'doesnotexist', limit: 50, offset: 0 });
+      expect(result.total).toBe(0);
+      expect(result.items).toHaveLength(0);
+    });
+  });
+
+  describe('listMovements sort', () => {
+    it('sorts by at ascending', async () => {
+      const item = await repo.create({ kind: 'onu', serial: 'SN-SORT-001' });
+      await repo.addMovement({
+        itemId: item.id,
+        serial: item.serial,
+        kind: item.kind,
+        type: 'in',
+        note: 'first',
+        at: new Date('2026-06-15T01:00:00.000Z'),
+      });
+      await repo.addMovement({
+        itemId: item.id,
+        serial: item.serial,
+        kind: item.kind,
+        type: 'assign',
+        note: 'second',
+        at: new Date('2026-06-15T03:00:00.000Z'),
+      });
+      await repo.addMovement({
+        itemId: item.id,
+        serial: item.serial,
+        kind: item.kind,
+        type: 'return',
+        note: 'third',
+        at: new Date('2026-06-15T02:00:00.000Z'),
+      });
+
+      const result = await repo.listMovements({ sort: 'at', order: 'asc', limit: 50, offset: 0 });
+      expect(result.items.map((m) => m.note)).toEqual(['first', 'third', 'second']);
+    });
+
+    it('sorts by at descending (default behaviour)', async () => {
+      const item = await repo.create({ kind: 'onu', serial: 'SN-SORT-002' });
+      await repo.addMovement({
+        itemId: item.id,
+        serial: item.serial,
+        kind: item.kind,
+        type: 'in',
+        note: 'first',
+        at: new Date('2026-06-15T01:00:00.000Z'),
+      });
+      await repo.addMovement({
+        itemId: item.id,
+        serial: item.serial,
+        kind: item.kind,
+        type: 'assign',
+        note: 'second',
+        at: new Date('2026-06-15T02:00:00.000Z'),
+      });
+
+      const result = await repo.listMovements({ sort: 'at', order: 'desc', limit: 50, offset: 0 });
+      expect(result.items.map((m) => m.note)).toEqual(['second', 'first']);
+    });
+
+    it('sorts by serial ascending', async () => {
+      const a = await repo.create({ kind: 'onu', serial: 'CCC-SORT-003' });
+      const b = await repo.create({ kind: 'onu', serial: 'AAA-SORT-001' });
+      const c = await repo.create({ kind: 'router', serial: 'BBB-SORT-002' });
+      await repo.addMovement({
+        itemId: a.id,
+        serial: a.serial,
+        kind: a.kind,
+        type: 'in',
+        note: 'n',
+      });
+      await repo.addMovement({
+        itemId: b.id,
+        serial: b.serial,
+        kind: b.kind,
+        type: 'in',
+        note: 'n',
+      });
+      await repo.addMovement({
+        itemId: c.id,
+        serial: c.serial,
+        kind: c.kind,
+        type: 'in',
+        note: 'n',
+      });
+
+      const result = await repo.listMovements({
+        sort: 'serial',
+        order: 'asc',
+        limit: 50,
+        offset: 0,
+      });
+      expect(result.items.map((m) => m.serial)).toEqual([
+        'AAA-SORT-001',
+        'BBB-SORT-002',
+        'CCC-SORT-003',
+      ]);
+    });
+
+    it('falls back to at desc when sort key is unknown', async () => {
+      const item = await repo.create({ kind: 'onu', serial: 'SN-FALLBACK-001' });
+      await repo.addMovement({
+        itemId: item.id,
+        serial: item.serial,
+        kind: item.kind,
+        type: 'in',
+        note: 'older',
+        at: new Date('2026-06-15T01:00:00.000Z'),
+      });
+      await repo.addMovement({
+        itemId: item.id,
+        serial: item.serial,
+        kind: item.kind,
+        type: 'assign',
+        note: 'newer',
+        at: new Date('2026-06-15T02:00:00.000Z'),
+      });
+
+      // Unknown sort key → falls back to at desc → newer first
+      const result = await repo.listMovements({
+        sort: 'notAColumn',
+        order: 'asc',
+        limit: 50,
+        offset: 0,
+      });
+      expect(result.items.map((m) => m.note)).toEqual(['newer', 'older']);
+    });
+  });
+
   describe('search (q)', () => {
     it('matches by serial substring case-insensitively', async () => {
       await repo.create({ kind: 'onu', serial: 'ZTEG-ABC-001' });

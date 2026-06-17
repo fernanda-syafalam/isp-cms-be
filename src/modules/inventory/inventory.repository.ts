@@ -11,6 +11,15 @@ import {
   stockMovements,
 } from '../../infrastructure/database/schema/inventory.schema';
 
+// Columns the caller may sort movements on (camelCase key → Drizzle column).
+// Unknown/absent key falls back to `at desc` via buildOrderBy — never throws.
+const MOVEMENT_SORT_WHITELIST = {
+  at: stockMovements.at,
+  serial: stockMovements.serial,
+  type: stockMovements.type,
+  kind: stockMovements.kind,
+} satisfies Record<string, (typeof stockMovements)[keyof typeof stockMovements]>;
+
 export interface InventoryListFilter {
   q?: string;
   status?: InventoryItem['status'];
@@ -31,6 +40,9 @@ const SORT_WHITELIST = {
 } satisfies Record<string, (typeof inventoryItems)[keyof typeof inventoryItems]>;
 
 export interface MovementListFilter {
+  q?: string;
+  sort?: string;
+  order?: 'asc' | 'desc';
   limit: number;
   offset: number;
 }
@@ -142,13 +154,28 @@ export class InventoryRepository {
   async listMovements(
     filter: MovementListFilter,
   ): Promise<{ items: StockMovement[]; total: number }> {
+    const where = filter.q
+      ? or(
+          ilike(stockMovements.serial, `%${filter.q}%`),
+          ilike(stockMovements.note, `%${filter.q}%`),
+        )
+      : undefined;
+
+    const orderBy = buildOrderBy(
+      filter.sort,
+      filter.order,
+      MOVEMENT_SORT_WHITELIST,
+      desc(stockMovements.at),
+    );
+
     const items = await this.db
       .select()
       .from(stockMovements)
-      .orderBy(desc(stockMovements.at))
+      .where(where)
+      .orderBy(orderBy)
       .limit(filter.limit)
       .offset(filter.offset);
-    const [totals] = await this.db.select({ value: count() }).from(stockMovements);
+    const [totals] = await this.db.select({ value: count() }).from(stockMovements).where(where);
     return { items, total: totals?.value ?? 0 };
   }
 }
