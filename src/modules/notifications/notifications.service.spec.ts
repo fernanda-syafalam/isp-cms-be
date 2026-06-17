@@ -91,4 +91,22 @@ describe('NotificationsService', () => {
     expect(result.items[0]?.to).toBe('0812');
     expect(result.items[0]?.at).toBe('2026-06-15T10:00:00.000Z');
   });
+
+  it('listLog forwards q, sort, and order to the repository unchanged', async () => {
+    repo.listLog.mockResolvedValue({ items: [], total: 0 });
+    await service.listLog({ q: '0812', sort: 'to', order: 'asc', limit: 10, offset: 0 });
+    expect(repo.listLog).toHaveBeenCalledWith({
+      q: '0812',
+      sort: 'to',
+      order: 'asc',
+      limit: 10,
+      offset: 0,
+    });
+  });
+
+  it('listLog without q passes undefined q to repository', async () => {
+    repo.listLog.mockResolvedValue({ items: [], total: 0 });
+    await service.listLog({ limit: 20, offset: 5 });
+    expect(repo.listLog).toHaveBeenCalledWith({ limit: 20, offset: 5 });
+  });
 });
