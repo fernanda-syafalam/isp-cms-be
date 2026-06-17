@@ -45,4 +45,28 @@ describe('CoverageService', () => {
       status: 'operational',
     });
   });
+
+  it('forwards q to the repository unchanged', async () => {
+    repo.list.mockResolvedValue({ items: [area], total: 1 });
+    await service.list({ q: 'Jepara', limit: 50, offset: 0 });
+    expect(repo.list).toHaveBeenCalledWith(
+      expect.objectContaining({ q: 'Jepara' }),
+    );
+  });
+
+  it('forwards sort and order to the repository unchanged', async () => {
+    repo.list.mockResolvedValue({ items: [], total: 0 });
+    await service.list({ sort: 'capacity', order: 'desc', limit: 50, offset: 0 });
+    expect(repo.list).toHaveBeenCalledWith(
+      expect.objectContaining({ sort: 'capacity', order: 'desc' }),
+    );
+  });
+
+  it('forwards status + q combination to the repository', async () => {
+    repo.list.mockResolvedValue({ items: [], total: 0 });
+    await service.list({ status: 'operational', q: 'Jepara', limit: 50, offset: 0 });
+    expect(repo.list).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'operational', q: 'Jepara' }),
+    );
+  });
 });
