@@ -82,6 +82,69 @@ describe('BranchesRepository (integration)', () => {
     expect(page.total).toBe(3);
   });
 
+  it('filters by q (case-insensitive) over name, city, and manager', async () => {
+    await repo.create(newBranch({ name: 'Cabang Jepara', city: 'Jepara', manager: 'Slamet' }));
+    await repo.create(newBranch({ name: 'Cabang Kudus', city: 'Kudus', manager: 'Adi Jepara' }));
+    await repo.create(newBranch({ name: 'Cabang Pati', city: 'Pati', manager: 'Rudi' }));
+
+    // matches on name
+    const byName = await repo.list({ q: 'jepara', limit: 50, offset: 0 });
+    // 'Cabang Jepara' (name) + 'Cabang Kudus' (manager 'Adi Jepara') both match
+    expect(byName.total).toBe(2);
+
+    // matches on city only
+    const byCity = await repo.list({ q: 'Kudus', limit: 50, offset: 0 });
+    expect(byCity.total).toBe(1);
+    expect(byCity.items[0]?.name).toBe('Cabang Kudus');
+
+    // q with no match returns empty
+    const noMatch = await repo.list({ q: 'zzznomatch', limit: 50, offset: 0 });
+    expect(noMatch.total).toBe(0);
+    expect(noMatch.items).toHaveLength(0);
+  });
+
+  it('sorts by mrr desc', async () => {
+    await repo.create(newBranch({ name: 'Branch A', mrr: 5_000_000 }));
+    await repo.create(newBranch({ name: 'Branch B', mrr: 20_000_000 }));
+    await repo.create(newBranch({ name: 'Branch C', mrr: 1_000_000 }));
+
+    const result = await repo.list({ sort: 'mrr', order: 'desc', limit: 50, offset: 0 });
+    expect(result.items[0]?.name).toBe('Branch B');
+    expect(result.items[1]?.name).toBe('Branch A');
+    expect(result.items[2]?.name).toBe('Branch C');
+  });
+
+  it('falls back to name asc for an unknown sort key', async () => {
+    await repo.create(newBranch({ name: 'Zebra' }));
+    await repo.create(newBranch({ name: 'Alpha' }));
+
+    const result = await repo.list({ sort: 'unknownColumn', order: 'desc', limit: 50, offset: 0 });
+    expect(result.items[0]?.name).toBe('Alpha');
+    expect(result.items[1]?.name).toBe('Zebra');
+  });
+
+  it('returns a full-set summary ignoring status and q filters', async () => {
+    await repo.create(newBranch({ customerCount: 100, mrr: 10_000_000 }));
+    await repo.create(
+      newBranch({ name: 'Cabang Dua', customerCount: 50, mrr: 5_000_000, status: 'inactive' }),
+    );
+
+    // Filter to active only — summary must still reflect ALL 2 branches.
+    const result = await repo.list({ status: 'active', limit: 50, offset: 0 });
+    expect(result.total).toBe(1); // filtered count
+    expect(result.summary.branches).toBe(2); // full-set
+    expect(result.summary.customers).toBe(150); // full-set sum
+    expect(result.summary.mrr).toBe(15_000_000); // full-set sum
+  });
+
+  it('summary customers and mrr coalesce to 0 on an empty table', async () => {
+    // Table is already empty (cleared in beforeEach).
+    const result = await repo.list({ limit: 50, offset: 0 });
+    expect(result.summary.branches).toBe(0);
+    expect(result.summary.customers).toBe(0);
+    expect(result.summary.mrr).toBe(0);
+  });
+
   it('updates fields and rejects a missing branch', async () => {
     const b = await repo.create(newBranch());
     const updated = await repo.update(b.id, { name: 'Cabang Baru', status: 'inactive' });

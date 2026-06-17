@@ -14,10 +14,18 @@ import { z } from 'zod';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { BranchesService } from './branches.service';
-import { BranchResponseDto, CreateBranchDto, UpdateBranchDto } from './dto/branch.dto';
+import {
+  BranchListResponseDto,
+  BranchResponseDto,
+  CreateBranchDto,
+  UpdateBranchDto,
+} from './dto/branch.dto';
 
 const ListQuerySchema = z.object({
+  q: z.string().optional(),
   status: z.enum(['active', 'inactive']).optional(),
+  sort: z.string().optional(),
+  order: z.enum(['asc', 'desc']).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -27,6 +35,7 @@ export class BranchesController {
   constructor(private readonly branches: BranchesService) {}
 
   @Get()
+  @ZodSerializerDto(BranchListResponseDto)
   list(@Query() query: unknown) {
     return this.branches.list(ListQuerySchema.parse(query));
   }

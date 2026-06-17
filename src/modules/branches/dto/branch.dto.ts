@@ -38,3 +38,35 @@ export const BranchResponseSchema = z.object({
 
 export type BranchResponse = z.infer<typeof BranchResponseSchema>;
 export class BranchResponseDto extends createZodDto(BranchResponseSchema) {}
+
+/**
+ * Full-set summary aggregate for the branches list.
+ * Computed over ALL branches — NEVER affected by q/status/paging.
+ *
+ * - branches: total branch count.
+ * - customers: sum of customer_count across all branches.
+ * - mrr: sum of mrr across all branches (whole IDR).
+ */
+export const BranchSummarySchema = z.object({
+  branches: z.number().int().nonnegative(),
+  customers: z.number().int().nonnegative(),
+  mrr: z.number().int().nonnegative(),
+});
+
+export type BranchSummaryResponse = z.infer<typeof BranchSummarySchema>;
+
+/**
+ * Paginated list response for GET /v1/branches.
+ *
+ * - `items`   – current page (after status + q filter, sort, limit/offset).
+ * - `total`   – count matching status+q filter BEFORE paging (drives page count).
+ * - `summary` – full-set aggregate; NEVER affected by status/q/paging.
+ */
+export const BranchListResponseSchema = z.object({
+  items: z.array(BranchResponseSchema),
+  total: z.number().int().nonnegative(),
+  summary: BranchSummarySchema,
+});
+
+export type BranchListResponse = z.infer<typeof BranchListResponseSchema>;
+export class BranchListResponseDto extends createZodDto(BranchListResponseSchema) {}
