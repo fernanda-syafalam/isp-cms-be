@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { asc, count, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type NewTicket,
@@ -11,10 +12,24 @@ import {
 } from '../../infrastructure/database/schema/tickets.schema';
 
 export interface TicketListFilter {
+  q?: string;
   status?: Ticket['status'];
+  sort?: string;
+  order?: 'asc' | 'desc';
   limit: number;
   offset: number;
 }
+
+// Columns the frontend is allowed to sort on (camelCase key → Drizzle column).
+// Extend this map as new sortable columns are added; never pass arbitrary
+// column references — the whitelist is the security boundary.
+const SORT_WHITELIST = {
+  code: tickets.code,
+  status: tickets.status,
+  priority: tickets.priority,
+  slaDueAt: tickets.slaDueAt,
+  createdAt: tickets.createdAt,
+} satisfies Record<string, (typeof tickets)[keyof typeof tickets]>;
 
 // Fields a PATCH may touch. status/priority/assignee/subject + the
 // recomputed SLA deadline; everything else is owned by the service flow.
@@ -35,12 +50,29 @@ export class TicketsRepository {
   }
 
   async list(filter: TicketListFilter): Promise<{ items: Ticket[]; total: number }> {
-    const where = filter.status ? eq(tickets.status, filter.status) : undefined;
+    const where = and(
+      filter.status ? eq(tickets.status, filter.status) : undefined,
+      filter.q
+        ? or(
+            ilike(tickets.code, `%${filter.q}%`),
+            ilike(tickets.subject, `%${filter.q}%`),
+            ilike(tickets.customerName, `%${filter.q}%`),
+          )
+        : undefined,
+    );
+
+    const orderBy = buildOrderBy(
+      filter.sort,
+      filter.order,
+      SORT_WHITELIST,
+      desc(tickets.createdAt),
+    );
+
     const items = await this.db
       .select()
       .from(tickets)
       .where(where)
-      .orderBy(desc(tickets.createdAt))
+      .orderBy(orderBy)
       .limit(filter.limit)
       .offset(filter.offset);
     const [totals] = await this.db.select({ value: count() }).from(tickets).where(where);

@@ -52,6 +52,61 @@ describe('TicketsService', () => {
     service = moduleRef.get(TicketsService);
   });
 
+  describe('list', () => {
+    it('forwards the filter to the repo and maps rows', async () => {
+      repo.list.mockResolvedValue({ items: [baseTicket], total: 1 });
+      const result = await service.list({ limit: 50, offset: 0 });
+      expect(repo.list).toHaveBeenCalledWith({ limit: 50, offset: 0 });
+      expect(result.total).toBe(1);
+      expect(result.items[0]).toMatchObject({ code: 'TKT-2001' });
+    });
+
+    it('passes q filter through to the repo', async () => {
+      const filter = { q: 'Internet', limit: 50, offset: 0 };
+      repo.list.mockResolvedValue({ items: [baseTicket], total: 1 });
+
+      const result = await service.list(filter);
+
+      expect(repo.list).toHaveBeenCalledWith(filter);
+      expect(result.total).toBe(1);
+    });
+
+    it('passes q + status composed filter through to the repo', async () => {
+      const filter = { q: 'Budi', status: 'open' as const, limit: 50, offset: 0 };
+      repo.list.mockResolvedValue({ items: [baseTicket], total: 1 });
+
+      await service.list(filter);
+
+      expect(repo.list).toHaveBeenCalledWith(filter);
+    });
+
+    it('passes sort and order asc through to the repo', async () => {
+      const filter = { sort: 'createdAt', order: 'asc' as const, limit: 50, offset: 0 };
+      repo.list.mockResolvedValue({ items: [baseTicket], total: 1 });
+
+      const result = await service.list(filter);
+
+      expect(repo.list).toHaveBeenCalledWith(filter);
+      expect(result.total).toBe(1);
+    });
+
+    it('passes sort desc through to the repo', async () => {
+      const filter = { sort: 'priority', order: 'desc' as const, limit: 50, offset: 0 };
+      repo.list.mockResolvedValue({ items: [], total: 0 });
+
+      await service.list(filter);
+
+      expect(repo.list).toHaveBeenCalledWith(filter);
+    });
+
+    it('returns empty items when repo returns empty', async () => {
+      repo.list.mockResolvedValue({ items: [], total: 0 });
+      const result = await service.list({ limit: 50, offset: 0 });
+      expect(result.items).toHaveLength(0);
+      expect(result.total).toBe(0);
+    });
+  });
+
   describe('create', () => {
     it('resolves the customer id by name, computes the SLA deadline, and logs a created event', async () => {
       customers.findIdByFullName.mockResolvedValue(baseTicket.customerId);
