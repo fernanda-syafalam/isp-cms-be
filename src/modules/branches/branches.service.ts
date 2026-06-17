@@ -1,6 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Branch } from '../../infrastructure/database/schema/branches.schema';
-import { type BranchListFilter, BranchesRepository } from './branches.repository';
+import {
+  type BranchListFilter,
+  type BranchSummary,
+  BranchesRepository,
+} from './branches.repository';
 import type { BranchResponse, CreateBranchInput, UpdateBranchInput } from './dto/branch.dto';
 
 @Injectable()
@@ -9,9 +13,11 @@ export class BranchesService {
 
   constructor(private readonly repo: BranchesRepository) {}
 
-  async list(filter: BranchListFilter): Promise<{ items: BranchResponse[]; total: number }> {
-    const { items, total } = await this.repo.list(filter);
-    return { items: items.map(toBranchResponse), total };
+  async list(
+    filter: BranchListFilter,
+  ): Promise<{ items: BranchResponse[]; total: number; summary: BranchSummary }> {
+    const { items, total, summary } = await this.repo.list(filter);
+    return { items: items.map(toBranchResponse), total, summary };
   }
 
   async create(input: CreateBranchInput): Promise<BranchResponse> {
