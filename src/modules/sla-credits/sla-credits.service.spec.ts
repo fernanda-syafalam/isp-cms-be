@@ -21,6 +21,13 @@ const credit: SlaCredit = {
   updatedAt: new Date('2026-06-15T00:00:00.000Z'),
 };
 
+// Default full-set summary returned by the mock repo
+const defaultSummary = {
+  activeAmount: 150_000,
+  pending: 3,
+  applied: 2,
+};
+
 describe('SlaCreditsService', () => {
   let service: SlaCreditsService;
   let repo: Record<string, ReturnType<typeof vi.fn>>;
@@ -40,6 +47,95 @@ describe('SlaCreditsService', () => {
       ],
     }).compile();
     service = moduleRef.get(SlaCreditsService);
+  });
+
+  // ---------------------------------------------------------------------------
+  // list — pagination, search, sort, and summary invariant
+  // ---------------------------------------------------------------------------
+
+  describe('list', () => {
+    it('maps credits, passes total through, and includes summary', async () => {
+      repo.list.mockResolvedValue({ items: [credit], total: 1, summary: defaultSummary });
+      const result = await service.list({ limit: 50, offset: 0 });
+      expect(result.total).toBe(1);
+      expect(result.items[0]?.customerName).toBe('Budi Santoso');
+      expect(result.items[0]?.createdAt).toBe('2026-06-15T00:00:00.000Z');
+      expect(result.items[0]?.appliedAt).toBeNull();
+      expect(result.summary).toEqual(defaultSummary);
+    });
+
+    it('q search by customerName narrows total but summary stays invariant', async () => {
+      const matched: SlaCredit = { ...credit, customerName: 'Ani Rahayu' };
+      repo.list.mockResolvedValue({ items: [matched], total: 1, summary: defaultSummary });
+      const result = await service.list({ q: 'Ani Rahayu', limit: 50, offset: 0 });
+      expect(repo.list).toHaveBeenCalledWith(expect.objectContaining({ q: 'Ani Rahayu' }));
+      expect(result.items[0]?.customerName).toBe('Ani Rahayu');
+      expect(result.total).toBe(1);
+      // Summary must reflect the full set, not just the filtered slice.
+      expect(result.summary).toEqual(defaultSummary);
+    });
+
+    it('q search by reason narrows total but summary stays invariant', async () => {
+      const matched: SlaCredit = { ...credit, reason: 'Gangguan jaringan' };
+      repo.list.mockResolvedValue({ items: [matched], total: 1, summary: defaultSummary });
+      const result = await service.list({ q: 'Gangguan', limit: 50, offset: 0 });
+      expect(repo.list).toHaveBeenCalledWith(expect.objectContaining({ q: 'Gangguan' }));
+      expect(result.total).toBe(1);
+      expect(result.summary).toEqual(defaultSummary);
+    });
+
+    it('forwards sort asc to the repo', async () => {
+      repo.list.mockResolvedValue({ items: [], total: 0, summary: defaultSummary });
+      await service.list({ sort: 'customerName', order: 'asc', limit: 50, offset: 0 });
+      expect(repo.list).toHaveBeenCalledWith(
+        expect.objectContaining({ sort: 'customerName', order: 'asc' }),
+      );
+    });
+
+    it('forwards sort desc to the repo', async () => {
+      repo.list.mockResolvedValue({ items: [], total: 0, summary: defaultSummary });
+      await service.list({ sort: 'amount', order: 'desc', limit: 50, offset: 0 });
+      expect(repo.list).toHaveBeenCalledWith(
+        expect.objectContaining({ sort: 'amount', order: 'desc' }),
+      );
+    });
+
+    it('unknown sort key is forwarded to the repo (repo falls back to createdAt desc via buildOrderBy)', async () => {
+      repo.list.mockResolvedValue({ items: [], total: 0, summary: defaultSummary });
+      await service.list({ sort: 'unknownField', order: 'asc', limit: 50, offset: 0 });
+      expect(repo.list).toHaveBeenCalledWith(expect.objectContaining({ sort: 'unknownField' }));
+    });
+
+    it('limit/offset paging keeps total and summary unaffected', async () => {
+      const page2Item: SlaCredit = {
+        ...credit,
+        id: '00000000-0000-0000-0000-00000000d099',
+      };
+      repo.list.mockResolvedValue({
+        items: [page2Item],
+        total: 30,
+        summary: defaultSummary,
+      });
+      const result = await service.list({ limit: 10, offset: 10 });
+      expect(repo.list).toHaveBeenCalledWith(expect.objectContaining({ limit: 10, offset: 10 }));
+      // total is full filtered count, not just page size
+      expect(result.total).toBe(30);
+      // summary is always full-set
+      expect(result.summary).toEqual(defaultSummary);
+    });
+
+    it('summary activeAmount excludes void credits', async () => {
+      const summaryWithVoid = {
+        activeAmount: 50_000, // only non-void credits counted
+        pending: 1,
+        applied: 0,
+      };
+      repo.list.mockResolvedValue({ items: [], total: 0, summary: summaryWithVoid });
+      const result = await service.list({ limit: 50, offset: 0 });
+      expect(result.summary.activeAmount).toBe(50_000);
+      expect(result.summary.pending).toBe(1);
+      expect(result.summary.applied).toBe(0);
+    });
   });
 
   describe('create', () => {

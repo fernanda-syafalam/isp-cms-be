@@ -4,11 +4,13 @@ import { z } from 'zod';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CreateSlaCreditDto } from './dto/create-sla-credit.dto';
-import { SlaCreditResponseDto } from './dto/sla-credit-response.dto';
+import { SlaCreditListResponseDto, SlaCreditResponseDto } from './dto/sla-credit-response.dto';
 import { SlaCreditsService } from './sla-credits.service';
 
 const ListQuerySchema = z.object({
-  status: z.enum(['pending', 'applied', 'void']).optional(),
+  q: z.string().trim().min(1).optional(),
+  sort: z.string().optional(),
+  order: z.enum(['asc', 'desc']).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -18,6 +20,7 @@ export class SlaCreditsController {
   constructor(private readonly slaCredits: SlaCreditsService) {}
 
   @Get()
+  @ZodSerializerDto(SlaCreditListResponseDto)
   list(@Query() query: unknown) {
     return this.slaCredits.list(ListQuerySchema.parse(query));
   }

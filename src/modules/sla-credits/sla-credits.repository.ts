@@ -1,14 +1,26 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { count, desc, eq, sql } from 'drizzle-orm';
+import { count, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type NewSlaCredit,
   type SlaCredit,
   slaCredits,
 } from '../../infrastructure/database/schema/sla-credits.schema';
+import type { SlaCreditSummary } from './dto/sla-credit-response.dto';
+
+// Columns the frontend may sort on (camelCase key → Drizzle column).
+// Unknown/absent key falls back to `createdAt desc` via buildOrderBy — never throws.
+const SLA_CREDITS_SORT_WHITELIST = {
+  customerName: slaCredits.customerName,
+  amount: slaCredits.amount,
+  createdAt: slaCredits.createdAt,
+} satisfies Record<string, (typeof slaCredits)[keyof typeof slaCredits]>;
 
 export interface SlaCreditListFilter {
-  status?: SlaCredit['status'];
+  q?: string;
+  sort?: string;
+  order?: 'asc' | 'desc';
   limit: number;
   offset: number;
 }
@@ -25,17 +37,50 @@ export class SlaCreditsRepository {
     return this.drizzle.db;
   }
 
-  async list(filter: SlaCreditListFilter): Promise<{ items: SlaCredit[]; total: number }> {
-    const where = filter.status ? eq(slaCredits.status, filter.status) : undefined;
+  async list(
+    filter: SlaCreditListFilter,
+  ): Promise<{ items: SlaCredit[]; total: number; summary: SlaCreditSummary }> {
+    // WHERE clause for q (applied to items + filtered total; NOT applied to summary).
+    const where = filter.q
+      ? or(
+          ilike(slaCredits.customerName, `%${filter.q}%`),
+          ilike(slaCredits.reason, `%${filter.q}%`),
+        )
+      : undefined;
+
+    const orderBy = buildOrderBy(
+      filter.sort,
+      filter.order,
+      SLA_CREDITS_SORT_WHITELIST,
+      desc(slaCredits.createdAt),
+    );
+
     const items = await this.db
       .select()
       .from(slaCredits)
       .where(where)
-      .orderBy(desc(slaCredits.createdAt))
+      .orderBy(orderBy)
       .limit(filter.limit)
       .offset(filter.offset);
-    const [totals] = await this.db.select({ value: count() }).from(slaCredits).where(where);
-    return { items, total: totals?.value ?? 0 };
+
+    const [filteredCount] = await this.db.select({ value: count() }).from(slaCredits).where(where);
+
+    // Full-set summary — computed over ALL sla_credits, ignoring q/paging.
+    const [summaryRow] = await this.db
+      .select({
+        activeAmount: sql<string>`coalesce(sum(case when ${slaCredits.status} != 'void' then ${slaCredits.amount} else 0 end), 0)`,
+        pending: sql<number>`count(*) filter (where ${slaCredits.status} = 'pending')`,
+        applied: sql<number>`count(*) filter (where ${slaCredits.status} = 'applied')`,
+      })
+      .from(slaCredits);
+
+    const summary: SlaCreditSummary = {
+      activeAmount: Number(summaryRow?.activeAmount ?? 0),
+      pending: Number(summaryRow?.pending ?? 0),
+      applied: Number(summaryRow?.applied ?? 0),
+    };
+
+    return { items, total: filteredCount?.value ?? 0, summary };
   }
 
   async findById(id: string): Promise<SlaCredit | null> {
