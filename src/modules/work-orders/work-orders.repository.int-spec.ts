@@ -134,4 +134,159 @@ describe('WorkOrdersRepository (integration)', () => {
     expect(done.status).toBe('done');
     await expect(repo.markDone('00000000-0000-0000-0000-0000000000ff')).rejects.toThrow();
   });
+
+  // ---- search (q) ----------------------------------------------------------
+
+  it('search by code: returns matching order and total reflects filter', async () => {
+    const a = await repo.create(newWo({ customerName: 'Alpha' }));
+    await repo.create(newWo({ customerName: 'Beta' }));
+
+    const result = await repo.list({ q: a.code, limit: 50, offset: 0 });
+
+    expect(result.total).toBe(1);
+    expect(result.items[0]?.code).toBe(a.code);
+  });
+
+  it('search by customerName: case-insensitive ILIKE matches substring', async () => {
+    await repo.create(newWo({ customerName: 'Siti Rahayu' }));
+    await repo.create(newWo({ customerName: 'Budi Santoso' }));
+
+    const result = await repo.list({ q: 'siti', limit: 50, offset: 0 });
+
+    expect(result.total).toBe(1);
+    expect(result.items[0]?.customerName).toBe('Siti Rahayu');
+  });
+
+  it('search by customerName: total reflects filtered count (not total rows)', async () => {
+    await repo.create(newWo({ customerName: 'Andi' }));
+    await repo.create(newWo({ customerName: 'Andi Pratama' }));
+    await repo.create(newWo({ customerName: 'Budi' }));
+
+    const result = await repo.list({ q: 'andi', limit: 50, offset: 0 });
+
+    expect(result.total).toBe(2);
+    expect(result.items).toHaveLength(2);
+  });
+
+  // ---- type filter ---------------------------------------------------------
+
+  it('type filter: returns only orders of the requested type', async () => {
+    await repo.create(newWo({ type: 'install' }));
+    await repo.create(newWo({ type: 'repair' }));
+    await repo.create(newWo({ type: 'repair' }));
+
+    const result = await repo.list({ type: 'repair', limit: 50, offset: 0 });
+
+    expect(result.total).toBe(2);
+    for (const item of result.items) {
+      expect(item.type).toBe('repair');
+    }
+  });
+
+  it('type filter combined with status filter: ANDs the conditions', async () => {
+    await repo.create(newWo({ type: 'install', status: 'scheduled' }));
+    await repo.create(newWo({ type: 'install', status: 'done' }));
+    await repo.create(newWo({ type: 'repair', status: 'scheduled' }));
+
+    const result = await repo.list({
+      type: 'install',
+      status: 'scheduled',
+      limit: 50,
+      offset: 0,
+    });
+
+    expect(result.total).toBe(1);
+    expect(result.items[0]?.type).toBe('install');
+    expect(result.items[0]?.status).toBe('scheduled');
+  });
+
+  // ---- sort ----------------------------------------------------------------
+
+  it('sort by code asc: items returned in ascending code order', async () => {
+    // Create several orders — their codes are assigned by sequence so they
+    // are naturally ascending; we just assert the sort is respected.
+    await repo.create(newWo());
+    await repo.create(newWo());
+    await repo.create(newWo());
+
+    const result = await repo.list({ sort: 'code', order: 'asc', limit: 50, offset: 0 });
+
+    expect(result.items.length).toBeGreaterThanOrEqual(3);
+    for (let i = 1; i < result.items.length; i++) {
+      expect((result.items[i]?.code ?? '') >= (result.items[i - 1]?.code ?? '')).toBe(true);
+    }
+  });
+
+  it('sort by code desc: items returned in descending code order', async () => {
+    await repo.create(newWo());
+    await repo.create(newWo());
+    await repo.create(newWo());
+
+    const result = await repo.list({ sort: 'code', order: 'desc', limit: 50, offset: 0 });
+
+    expect(result.items.length).toBeGreaterThanOrEqual(3);
+    for (let i = 1; i < result.items.length; i++) {
+      expect((result.items[i]?.code ?? '') <= (result.items[i - 1]?.code ?? '')).toBe(true);
+    }
+  });
+
+  it('sort by scheduledAt asc: items ordered by scheduled date ascending', async () => {
+    const early = new Date('2026-06-10T00:00:00.000Z');
+    const late = new Date('2026-06-20T00:00:00.000Z');
+    await repo.create(newWo({ scheduledAt: late }));
+    await repo.create(newWo({ scheduledAt: early }));
+
+    const result = await repo.list({ sort: 'scheduledAt', order: 'asc', limit: 50, offset: 0 });
+
+    expect(result.items.length).toBe(2);
+    expect(result.items[0]?.scheduledAt.getTime()).toBeLessThanOrEqual(
+      result.items[1]?.scheduledAt.getTime() ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it('sort by scheduledAt desc: most-future schedule first', async () => {
+    const early = new Date('2026-06-10T00:00:00.000Z');
+    const late = new Date('2026-06-20T00:00:00.000Z');
+    await repo.create(newWo({ scheduledAt: early }));
+    await repo.create(newWo({ scheduledAt: late }));
+
+    const result = await repo.list({ sort: 'scheduledAt', order: 'desc', limit: 50, offset: 0 });
+
+    expect(result.items.length).toBe(2);
+    expect(result.items[0]?.scheduledAt.getTime()).toBeGreaterThanOrEqual(
+      result.items[1]?.scheduledAt.getTime() ?? 0,
+    );
+  });
+
+  it('unknown sort key falls back to default (createdAt DESC) without throwing', async () => {
+    await repo.create(newWo());
+    await repo.create(newWo());
+
+    // Should not throw and should return rows.
+    const result = await repo.list({
+      sort: 'notARealColumn',
+      order: 'asc',
+      limit: 50,
+      offset: 0,
+    });
+
+    expect(result.total).toBe(2);
+    expect(result.items).toHaveLength(2);
+    // Default order is createdAt DESC: first item must be >= second in time.
+    expect(result.items[0]?.createdAt.getTime()).toBeGreaterThanOrEqual(
+      result.items[1]?.createdAt.getTime() ?? 0,
+    );
+  });
+
+  it('missing sort key falls back to default (createdAt DESC)', async () => {
+    await repo.create(newWo());
+    await repo.create(newWo());
+
+    const result = await repo.list({ limit: 50, offset: 0 });
+
+    expect(result.total).toBe(2);
+    expect(result.items[0]?.createdAt.getTime()).toBeGreaterThanOrEqual(
+      result.items[1]?.createdAt.getTime() ?? 0,
+    );
+  });
 });

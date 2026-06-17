@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { count, desc, eq, sql } from 'drizzle-orm';
+import { and, count, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type NewWorkOrder,
@@ -8,10 +9,24 @@ import {
 } from '../../infrastructure/database/schema/work-orders.schema';
 
 export interface WorkOrderListFilter {
+  q?: string;
   status?: WorkOrder['status'];
+  type?: WorkOrder['type'];
+  sort?: string;
+  order?: 'asc' | 'desc';
   limit: number;
   offset: number;
 }
+
+// Columns the frontend is allowed to sort on (camelCase key → Drizzle column).
+// Extend this map as new sortable columns are added; never pass arbitrary
+// column references — the whitelist is the security boundary.
+const SORT_WHITELIST = {
+  code: workOrders.code,
+  scheduledAt: workOrders.scheduledAt,
+  status: workOrders.status,
+  createdAt: workOrders.createdAt,
+} satisfies Record<string, (typeof workOrders)[keyof typeof workOrders]>;
 
 /**
  * The only place that talks to the `work_orders` table. Returns domain
@@ -26,12 +41,30 @@ export class WorkOrdersRepository {
   }
 
   async list(filter: WorkOrderListFilter): Promise<{ items: WorkOrder[]; total: number }> {
-    const where = filter.status ? eq(workOrders.status, filter.status) : undefined;
+    const where = and(
+      filter.status ? eq(workOrders.status, filter.status) : undefined,
+      filter.type ? eq(workOrders.type, filter.type) : undefined,
+      filter.q
+        ? or(
+            ilike(workOrders.code, `%${filter.q}%`),
+            ilike(workOrders.customerName, `%${filter.q}%`),
+            ilike(workOrders.technician, `%${filter.q}%`),
+          )
+        : undefined,
+    );
+
+    const orderBy = buildOrderBy(
+      filter.sort,
+      filter.order,
+      SORT_WHITELIST,
+      desc(workOrders.createdAt),
+    );
+
     const items = await this.db
       .select()
       .from(workOrders)
       .where(where)
-      .orderBy(desc(workOrders.createdAt))
+      .orderBy(orderBy)
       .limit(filter.limit)
       .offset(filter.offset);
     const [totals] = await this.db.select({ value: count() }).from(workOrders).where(where);
