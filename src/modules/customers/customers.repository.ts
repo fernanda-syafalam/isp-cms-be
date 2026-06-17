@@ -11,9 +11,11 @@ import {
   ilike,
   inArray,
   isNotNull,
+  isNull,
   or,
   sql,
 } from 'drizzle-orm';
+import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type Customer,
@@ -30,9 +32,25 @@ export type CustomerRow = Customer & { planName: string };
 export interface CustomerListFilter {
   q?: string;
   status?: Customer['status'];
+  // Repeatable area filter: return customers whose areaName is IN this list
+  // OR whose areaName IS NULL (unassigned customers are always visible).
+  // Absent = no area constraint.
+  area?: string[];
+  sort?: string;
+  order?: 'asc' | 'desc';
   limit: number;
   offset: number;
 }
+
+// Columns the frontend may sort on (camelCase key → Drizzle column).
+// Unknown/absent key falls back to `asc(fullName)` via buildOrderBy — never throws.
+const CUSTOMERS_SORT_WHITELIST = {
+  customerNo: customers.customerNo,
+  fullName: customers.fullName,
+  areaName: customers.areaName,
+  status: customers.status,
+  joinedAt: customers.createdAt,
+} satisfies Record<string, (typeof customers)[keyof typeof customers]>;
 
 // Mutable base-profile fields a client may PATCH. Lifecycle, balance and
 // provisioning are NOT here — they move through dedicated methods.
@@ -69,13 +87,27 @@ export class CustomersRepository {
         ? or(
             ilike(customers.fullName, `%${filter.q}%`),
             ilike(customers.customerNo, `%${filter.q}%`),
+            ilike(customers.phone, `%${filter.q}%`),
           )
         : undefined,
+      // Multi-value area scope: match any listed area OR unassigned (null).
+      // The OR-null rule ensures unassigned customers are never hidden when a
+      // branch-scope filter is active.
+      filter.area && filter.area.length > 0
+        ? or(inArray(customers.areaName, filter.area), isNull(customers.areaName))
+        : undefined,
+    );
+
+    const orderBy = buildOrderBy(
+      filter.sort,
+      filter.order,
+      CUSTOMERS_SORT_WHITELIST,
+      asc(customers.fullName),
     );
 
     const items = await this.baseSelect()
       .where(where)
-      .orderBy(asc(customers.fullName))
+      .orderBy(orderBy)
       .limit(filter.limit)
       .offset(filter.offset);
 

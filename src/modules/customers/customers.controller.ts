@@ -26,6 +26,14 @@ import { UpdateKycDto } from './dto/update-kyc.dto';
 const ListQuerySchema = z.object({
   q: z.string().trim().min(1).optional(),
   status: z.enum(['prospek', 'instalasi', 'aktif', 'isolir', 'berhenti']).optional(),
+  // Repeatable: ?area=Jepara&area=Tahunan — a single string is coerced to
+  // a one-element array so callers need not special-case the scalar case.
+  area: z
+    .union([z.string(), z.array(z.string())])
+    .transform((v) => (Array.isArray(v) ? v : [v]))
+    .optional(),
+  sort: z.string().optional(),
+  order: z.enum(['asc', 'desc']).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });
