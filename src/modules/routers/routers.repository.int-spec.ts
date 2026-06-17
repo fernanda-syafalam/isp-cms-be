@@ -90,4 +90,108 @@ describe('RoutersRepository (integration)', () => {
     expect(synced.lastSyncAt.getTime()).toBeGreaterThanOrEqual(r.lastSyncAt.getTime());
     await expect(repo.markSynced('00000000-0000-0000-0000-0000000000ff')).rejects.toThrow();
   });
+
+  describe('search (q)', () => {
+    it('filters by name substring case-insensitively', async () => {
+      await repo.create(newRouter({ name: 'Core-Router-1', address: '10.0.1.1' }));
+      await repo.create(newRouter({ name: 'Edge-Router-2', address: '10.0.2.1' }));
+
+      const result = await repo.list({ q: 'core', limit: 50, offset: 0 });
+      expect(result.total).toBe(1);
+      expect(result.items[0]?.name).toBe('Core-Router-1');
+    });
+
+    it('filters by address substring case-insensitively', async () => {
+      await repo.create(newRouter({ name: 'RT-Alpha', address: '192.168.10.1' }));
+      await repo.create(newRouter({ name: 'RT-Beta', address: '172.16.20.1' }));
+
+      const result = await repo.list({ q: '192.168', limit: 50, offset: 0 });
+      expect(result.total).toBe(1);
+      expect(result.items[0]?.address).toBe('192.168.10.1');
+    });
+
+    it('filters by model substring case-insensitively', async () => {
+      await repo.create(newRouter({ name: 'RT-1', address: '10.1.1.1', model: 'CCR2004' }));
+      await repo.create(newRouter({ name: 'RT-2', address: '10.1.1.2', model: 'RB5009' }));
+
+      const result = await repo.list({ q: 'ccr', limit: 50, offset: 0 });
+      expect(result.total).toBe(1);
+      expect(result.items[0]?.model).toBe('CCR2004');
+    });
+
+    it('total reflects q filter, not the full table count', async () => {
+      await repo.create(newRouter({ name: 'Match-1', address: '10.2.1.1' }));
+      await repo.create(newRouter({ name: 'Match-2', address: '10.2.1.2' }));
+      await repo.create(newRouter({ name: 'Other-3', address: '10.2.1.3' }));
+
+      const result = await repo.list({ q: 'Match', limit: 50, offset: 0 });
+      expect(result.total).toBe(2);
+      expect(result.items).toHaveLength(2);
+    });
+
+    it('q combined with status filter ANDs correctly', async () => {
+      await repo.create(newRouter({ name: 'Core-Online', address: '10.3.1.1', status: 'online' }));
+      await repo.create(
+        newRouter({ name: 'Core-Offline', address: '10.3.1.2', status: 'offline' }),
+      );
+      await repo.create(newRouter({ name: 'Edge-Online', address: '10.3.1.3', status: 'online' }));
+
+      const result = await repo.list({ q: 'Core', status: 'online', limit: 50, offset: 0 });
+      expect(result.total).toBe(1);
+      expect(result.items[0]?.name).toBe('Core-Online');
+    });
+
+    it('returns empty result when q matches nothing', async () => {
+      await repo.create(newRouter({ name: 'RT-Existing', address: '10.4.1.1' }));
+
+      const result = await repo.list({ q: 'doesnotexist', limit: 50, offset: 0 });
+      expect(result.total).toBe(0);
+      expect(result.items).toHaveLength(0);
+    });
+  });
+
+  describe('sort', () => {
+    it('sorts by name ascending', async () => {
+      await repo.create(newRouter({ name: 'Z-Router', address: '10.5.1.3' }));
+      await repo.create(newRouter({ name: 'A-Router', address: '10.5.1.1' }));
+      await repo.create(newRouter({ name: 'M-Router', address: '10.5.1.2' }));
+
+      const result = await repo.list({ sort: 'name', order: 'asc', limit: 50, offset: 0 });
+      expect(result.items.map((r) => r.name)).toEqual(['A-Router', 'M-Router', 'Z-Router']);
+    });
+
+    it('sorts by name descending', async () => {
+      await repo.create(newRouter({ name: 'Z-Router-D', address: '10.6.1.3' }));
+      await repo.create(newRouter({ name: 'A-Router-D', address: '10.6.1.1' }));
+      await repo.create(newRouter({ name: 'M-Router-D', address: '10.6.1.2' }));
+
+      const result = await repo.list({ sort: 'name', order: 'desc', limit: 50, offset: 0 });
+      expect(result.items.map((r) => r.name)).toEqual(['Z-Router-D', 'M-Router-D', 'A-Router-D']);
+    });
+
+    it('sorts by secretCount ascending', async () => {
+      const r1 = await repo.create(newRouter({ name: 'High-SC', address: '10.7.1.1' }));
+      const r2 = await repo.create(newRouter({ name: 'Low-SC', address: '10.7.1.2' }));
+      // Adjust secret counts
+      await repo.adjustSecretCount(r1.id, 10);
+      await repo.adjustSecretCount(r2.id, 2);
+
+      const result = await repo.list({ sort: 'secretCount', order: 'asc', limit: 50, offset: 0 });
+      expect(result.items[0]?.name).toBe('Low-SC');
+      expect(result.items[1]?.name).toBe('High-SC');
+    });
+
+    it('falls back to createdAt desc when sort key is unknown', async () => {
+      // Insert in known order; without explicit sleep, rely on order of creation
+      // (same-millisecond rows are fine — we just check no crash and 3 rows returned)
+      await repo.create(newRouter({ name: 'Fallback-1', address: '10.8.1.1' }));
+      await repo.create(newRouter({ name: 'Fallback-2', address: '10.8.1.2' }));
+      await repo.create(newRouter({ name: 'Fallback-3', address: '10.8.1.3' }));
+
+      // Unknown sort key — must not throw, must return all 3 rows
+      const result = await repo.list({ sort: 'notAColumn', order: 'desc', limit: 50, offset: 0 });
+      expect(result.total).toBe(3);
+      expect(result.items).toHaveLength(3);
+    });
+  });
 });
