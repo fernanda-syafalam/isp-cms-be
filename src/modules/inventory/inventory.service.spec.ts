@@ -43,6 +43,40 @@ describe('InventoryService', () => {
     service = moduleRef.get(InventoryService);
   });
 
+  describe('listMovements', () => {
+    it('forwards filter (q/sort/order) straight to repo and maps rows', async () => {
+      const movement = {
+        id: '00000000-0000-0000-0000-00000000c001',
+        itemId: item.id,
+        serial: item.serial,
+        kind: item.kind as 'onu',
+        type: 'in' as const,
+        note: 'Stok masuk',
+        at: new Date('2026-06-15T00:00:00.000Z'),
+      };
+      repo.listMovements.mockResolvedValue({ items: [movement], total: 1 });
+
+      const filter = { q: 'ZTEG', sort: 'serial', order: 'asc' as const, limit: 50, offset: 0 };
+      const result = await service.listMovements(filter);
+
+      expect(repo.listMovements).toHaveBeenCalledWith(filter);
+      expect(result.total).toBe(1);
+      expect(result.items[0]).toMatchObject({
+        id: movement.id,
+        serial: movement.serial,
+        at: movement.at.toISOString(),
+      });
+    });
+
+    it('returns empty list and total 0 when repo returns nothing', async () => {
+      repo.listMovements.mockResolvedValue({ items: [], total: 0 });
+
+      const result = await service.listMovements({ q: 'nomatch', limit: 50, offset: 0 });
+      expect(result.items).toHaveLength(0);
+      expect(result.total).toBe(0);
+    });
+  });
+
   it('stockIn creates an item and logs an `in` movement', async () => {
     repo.create.mockResolvedValue(item);
     await service.stockIn({ kind: 'onu', serial: 'ZTEG00000001' });
