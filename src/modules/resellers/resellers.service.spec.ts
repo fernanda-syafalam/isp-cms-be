@@ -51,6 +51,19 @@ describe('ResellersService', () => {
     expect(result.items[0]?.commissionPct).toBe(0.05);
   });
 
+  it('list forwards q, sort, and order to the repository unchanged', async () => {
+    repo.list.mockResolvedValue({ items: [reseller], total: 1 });
+    customers.countsByResellerName.mockResolvedValue([]);
+    await service.list({ q: 'Jepara', sort: 'name', order: 'asc', limit: 10, offset: 0 });
+    expect(repo.list).toHaveBeenCalledWith({
+      q: 'Jepara',
+      sort: 'name',
+      order: 'asc',
+      limit: 10,
+      offset: 0,
+    });
+  });
+
   it('findById uses the single-name count', async () => {
     repo.findById.mockResolvedValue(reseller);
     customers.countByResellerName.mockResolvedValue(3);
