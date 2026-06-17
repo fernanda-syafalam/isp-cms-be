@@ -7,8 +7,16 @@ import type {
 } from '../../infrastructure/database/schema/monitoring.schema';
 import type { TicketResponse } from '../tickets/dto/ticket-response.dto';
 import { TicketsService } from '../tickets/tickets.service';
-import type { AlertResponse, DeviceMetricResponse } from './dto/monitoring-response.dto';
-import { type ListFilter, MonitoringRepository } from './monitoring.repository';
+import type {
+  AlertResponse,
+  DeviceMetricResponse,
+  MetricListResponse,
+} from './dto/monitoring-response.dto';
+import {
+  type AlertListFilter,
+  type MetricListFilter,
+  MonitoringRepository,
+} from './monitoring.repository';
 
 const D1 = '00000000-0000-4000-8000-0000000d1001';
 const D2 = '00000000-0000-4000-8000-0000000d1002';
@@ -74,13 +82,13 @@ export class MonitoringService {
     private readonly tickets: TicketsService,
   ) {}
 
-  async listMetrics(filter: ListFilter): Promise<{ items: DeviceMetricResponse[]; total: number }> {
+  async listMetrics(filter: MetricListFilter): Promise<MetricListResponse> {
     await this.repo.ensureSeeded(DEFAULT_METRICS, DEFAULT_ALERTS);
-    const { items, total } = await this.repo.listMetrics(filter);
-    return { items: items.map(toMetricResponse), total };
+    const { items, total, summary } = await this.repo.listMetrics(filter);
+    return { items: items.map(toMetricResponse), total, summary };
   }
 
-  async listAlerts(filter: ListFilter): Promise<{ items: AlertResponse[]; total: number }> {
+  async listAlerts(filter: AlertListFilter): Promise<{ items: AlertResponse[]; total: number }> {
     await this.repo.ensureSeeded(DEFAULT_METRICS, DEFAULT_ALERTS);
     const { items, total } = await this.repo.listAlerts(filter);
     return { items: items.map(toAlertResponse), total };

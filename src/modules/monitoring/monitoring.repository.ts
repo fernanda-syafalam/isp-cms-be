@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { count, desc, eq } from 'drizzle-orm';
+import { asc, count, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type Alert,
@@ -10,10 +11,36 @@ import {
   deviceMetrics,
 } from '../../infrastructure/database/schema/monitoring.schema';
 
-export interface ListFilter {
+export interface MetricSummary {
+  up: number;
+  degraded: number;
+  down: number;
+  total: number;
+  avgUptimePct: number;
+}
+
+export interface MetricListFilter {
+  q?: string;
+  sort?: string;
+  order?: 'asc' | 'desc';
   limit: number;
   offset: number;
 }
+
+export interface AlertListFilter {
+  limit: number;
+  offset: number;
+}
+
+// Columns the frontend may sort metrics on (camelCase key → Drizzle column).
+// Unknown/absent key falls back to `name asc` via buildOrderBy — never throws.
+const METRIC_SORT_WHITELIST = {
+  name: deviceMetrics.name,
+  status: deviceMetrics.status,
+  uptimePct: deviceMetrics.uptimePct,
+  latencyMs: deviceMetrics.latencyMs,
+  utilizationPct: deviceMetrics.utilizationPct,
+} satisfies Record<string, (typeof deviceMetrics)[keyof typeof deviceMetrics]>;
 
 /**
  * The only place that talks to `device_metrics` / `alerts`. Returns domain
@@ -38,18 +65,62 @@ export class MonitoringRepository {
     }
   }
 
-  async listMetrics(filter: ListFilter): Promise<{ items: DeviceMetric[]; total: number }> {
+  async listMetrics(
+    filter: MetricListFilter,
+  ): Promise<{ items: DeviceMetric[]; total: number; summary: MetricSummary }> {
+    // WHERE clause for q — applied to items and filtered total, but NOT to summary.
+    const where = filter.q
+      ? or(
+          ilike(deviceMetrics.name, `%${filter.q}%`),
+          ilike(deviceMetrics.areaName, `%${filter.q}%`),
+        )
+      : undefined;
+
+    const orderBy = buildOrderBy(
+      filter.sort,
+      filter.order,
+      METRIC_SORT_WHITELIST,
+      asc(deviceMetrics.name),
+    );
+
     const items = await this.db
       .select()
       .from(deviceMetrics)
-      .orderBy(deviceMetrics.name)
+      .where(where)
+      .orderBy(orderBy)
       .limit(filter.limit)
       .offset(filter.offset);
-    const [totals] = await this.db.select({ value: count() }).from(deviceMetrics);
-    return { items, total: totals?.value ?? 0 };
+
+    const [filteredCount] = await this.db
+      .select({ value: count() })
+      .from(deviceMetrics)
+      .where(where);
+
+    // Full-set summary — computed over ALL device_metrics rows, ignoring q/sort/paging.
+    // This is the fleet-health invariant: searching or paging must not change it.
+    const [summaryRow] = await this.db
+      .select({
+        total: count(),
+        up: sql<number>`count(*) filter (where ${deviceMetrics.status} = 'up')`,
+        degraded: sql<number>`count(*) filter (where ${deviceMetrics.status} = 'degraded')`,
+        down: sql<number>`count(*) filter (where ${deviceMetrics.status} = 'down')`,
+        avgUptimePct: sql<number>`coalesce(avg(${deviceMetrics.uptimePct}), 0)`,
+      })
+      .from(deviceMetrics);
+
+    const summary: MetricSummary = {
+      up: Number(summaryRow?.up ?? 0),
+      degraded: Number(summaryRow?.degraded ?? 0),
+      down: Number(summaryRow?.down ?? 0),
+      total: summaryRow?.total ?? 0,
+      // Round to 1 decimal place as required by the contract.
+      avgUptimePct: Math.round(Number(summaryRow?.avgUptimePct ?? 0) * 10) / 10,
+    };
+
+    return { items, total: filteredCount?.value ?? 0, summary };
   }
 
-  async listAlerts(filter: ListFilter): Promise<{ items: Alert[]; total: number }> {
+  async listAlerts(filter: AlertListFilter): Promise<{ items: Alert[]; total: number }> {
     const items = await this.db
       .select()
       .from(alerts)

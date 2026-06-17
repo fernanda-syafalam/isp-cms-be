@@ -16,6 +16,25 @@ export const DeviceMetricResponseSchema = z.object({
 export type DeviceMetricResponse = z.infer<typeof DeviceMetricResponseSchema>;
 export class DeviceMetricResponseDto extends createZodDto(DeviceMetricResponseSchema) {}
 
+/** Fleet-health aggregate computed over the FULL device set (never filtered). */
+export const MetricSummarySchema = z.object({
+  up: z.number().int().nonnegative(),
+  degraded: z.number().int().nonnegative(),
+  down: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+  /** Mean uptimePct across all devices, rounded to 1 decimal place. */
+  avgUptimePct: z.number(),
+});
+
+export type MetricSummary = z.infer<typeof MetricSummarySchema>;
+
+/** Envelope returned by GET /v1/monitoring/metrics. */
+export type MetricListResponse = {
+  items: DeviceMetricResponse[];
+  total: number;
+  summary: MetricSummary;
+};
+
 /** Output shape for a NOC alert. */
 export const AlertResponseSchema = z.object({
   id: z.uuid(),
