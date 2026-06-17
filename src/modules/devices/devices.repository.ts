@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { and, asc, count, eq, sql } from 'drizzle-orm';
+import { and, asc, count, eq, ilike, or, sql } from 'drizzle-orm';
+import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type Device,
@@ -8,11 +9,25 @@ import {
 } from '../../infrastructure/database/schema/devices.schema';
 
 export interface DeviceListFilter {
+  q?: string;
   type?: Device['type'];
   status?: Device['status'];
+  sort?: string;
+  order?: 'asc' | 'desc';
   limit: number;
   offset: number;
 }
+
+// Columns the frontend is allowed to sort on (camelCase key → Drizzle column).
+// Extend this map as new sortable columns are added; never pass arbitrary
+// column references — the whitelist is the security boundary.
+const SORT_WHITELIST = {
+  name: devices.name,
+  status: devices.status,
+  rxPower: devices.rxPower,
+  uptimeHours: devices.uptimeHours,
+  lastSeenAt: devices.lastSeenAt,
+} satisfies Record<string, (typeof devices)[keyof typeof devices]>;
 
 // Fields a PATCH may correct directly.
 export type DevicePatch = Partial<Pick<NewDevice, 'name' | 'ipAddress' | 'areaName'>>;
@@ -39,12 +54,22 @@ export class DevicesRepository {
     const where = and(
       filter.type ? eq(devices.type, filter.type) : undefined,
       filter.status ? eq(devices.status, filter.status) : undefined,
+      filter.q
+        ? or(
+            ilike(devices.name, `%${filter.q}%`),
+            ilike(devices.ipAddress, `%${filter.q}%`),
+            ilike(devices.areaName, `%${filter.q}%`),
+          )
+        : undefined,
     );
+
+    const orderBy = buildOrderBy(filter.sort, filter.order, SORT_WHITELIST, asc(devices.name));
+
     const items = await this.db
       .select()
       .from(devices)
       .where(where)
-      .orderBy(asc(devices.name))
+      .orderBy(orderBy)
       .limit(filter.limit)
       .offset(filter.offset);
     const [totals] = await this.db.select({ value: count() }).from(devices).where(where);

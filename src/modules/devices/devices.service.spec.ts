@@ -52,6 +52,62 @@ describe('DevicesService', () => {
         lastSeenAt: '2026-06-15T00:00:00.000Z',
       });
     });
+
+    it('passes q filter through to the repo', async () => {
+      const filter = { q: 'ONU', limit: 200, offset: 0 };
+      repo.list.mockResolvedValue({ items: [onu], total: 1 });
+
+      const result = await service.list(filter);
+
+      expect(repo.list).toHaveBeenCalledWith(filter);
+      expect(result.total).toBe(1);
+    });
+
+    it('passes status filter through to the repo', async () => {
+      const filter = { status: 'online' as const, limit: 200, offset: 0 };
+      repo.list.mockResolvedValue({ items: [onu], total: 1 });
+
+      await service.list(filter);
+
+      expect(repo.list).toHaveBeenCalledWith(filter);
+    });
+
+    it('passes q + status composed filter through to the repo', async () => {
+      const filter = { q: 'Jepara', status: 'online' as const, limit: 200, offset: 0 };
+      repo.list.mockResolvedValue({ items: [onu], total: 1 });
+
+      await service.list(filter);
+
+      expect(repo.list).toHaveBeenCalledWith(filter);
+    });
+
+    it('passes sort and order through to the repo', async () => {
+      const filter = { sort: 'name', order: 'asc' as const, limit: 200, offset: 0 };
+      repo.list.mockResolvedValue({ items: [onu], total: 1 });
+
+      const result = await service.list(filter);
+
+      expect(repo.list).toHaveBeenCalledWith(filter);
+      expect(result.total).toBe(1);
+    });
+
+    it('passes sort desc through to the repo', async () => {
+      const filter = { sort: 'uptimeHours', order: 'desc' as const, limit: 200, offset: 0 };
+      repo.list.mockResolvedValue({ items: [], total: 0 });
+
+      await service.list(filter);
+
+      expect(repo.list).toHaveBeenCalledWith(filter);
+    });
+
+    it('returns empty items when repo returns empty', async () => {
+      repo.list.mockResolvedValue({ items: [], total: 0 });
+
+      const result = await service.list({ limit: 200, offset: 0 });
+
+      expect(result.items).toHaveLength(0);
+      expect(result.total).toBe(0);
+    });
   });
 
   describe('findById', () => {
