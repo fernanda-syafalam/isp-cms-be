@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { asc, count, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type NewRouter,
@@ -7,8 +8,23 @@ import {
   routers,
 } from '../../infrastructure/database/schema/routers.schema';
 
+// Columns the frontend may sort on (camelCase key → Drizzle column).
+// Unknown/absent key falls back to `createdAt desc` via buildOrderBy — never throws.
+const ROUTERS_SORT_WHITELIST = {
+  name: routers.name,
+  address: routers.address,
+  model: routers.model,
+  secretCount: routers.secretCount,
+  lastSyncAt: routers.lastSyncAt,
+  status: routers.status,
+  createdAt: routers.createdAt,
+} satisfies Record<string, (typeof routers)[keyof typeof routers]>;
+
 export interface RouterListFilter {
   status?: Router['status'];
+  q?: string;
+  sort?: string;
+  order?: 'asc' | 'desc';
   limit: number;
   offset: number;
 }
@@ -26,12 +42,29 @@ export class RoutersRepository {
   }
 
   async list(filter: RouterListFilter): Promise<{ items: Router[]; total: number }> {
-    const where = filter.status ? eq(routers.status, filter.status) : undefined;
+    const where = and(
+      filter.status ? eq(routers.status, filter.status) : undefined,
+      filter.q
+        ? or(
+            ilike(routers.name, `%${filter.q}%`),
+            ilike(routers.address, `%${filter.q}%`),
+            ilike(routers.model, `%${filter.q}%`),
+          )
+        : undefined,
+    );
+
+    const orderBy = buildOrderBy(
+      filter.sort,
+      filter.order,
+      ROUTERS_SORT_WHITELIST,
+      desc(routers.createdAt),
+    );
+
     const items = await this.db
       .select()
       .from(routers)
       .where(where)
-      .orderBy(desc(routers.createdAt))
+      .orderBy(orderBy)
       .limit(filter.limit)
       .offset(filter.offset);
     const [totals] = await this.db.select({ value: count() }).from(routers).where(where);
