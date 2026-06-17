@@ -3,7 +3,7 @@ import type { SlaCredit } from '../../infrastructure/database/schema/sla-credits
 import { CustomersRepository } from '../customers/customers.repository';
 import { TicketsRepository } from '../tickets/tickets.repository';
 import type { CreateSlaCreditInput } from './dto/create-sla-credit.dto';
-import type { SlaCreditResponse } from './dto/sla-credit-response.dto';
+import type { SlaCreditListResponse, SlaCreditResponse } from './dto/sla-credit-response.dto';
 import { type SlaCreditListFilter, SlaCreditsRepository } from './sla-credits.repository';
 
 @Injectable()
@@ -17,9 +17,9 @@ export class SlaCreditsService {
     private readonly tickets: TicketsRepository,
   ) {}
 
-  async list(filter: SlaCreditListFilter): Promise<{ items: SlaCreditResponse[]; total: number }> {
-    const { items, total } = await this.repo.list(filter);
-    return { items: items.map(toSlaCreditResponse), total };
+  async list(filter: SlaCreditListFilter): Promise<SlaCreditListResponse> {
+    const { items, total, summary } = await this.repo.list(filter);
+    return { items: items.map(toSlaCreditResponse), total, summary };
   }
 
   async create(input: CreateSlaCreditInput): Promise<SlaCreditResponse> {
