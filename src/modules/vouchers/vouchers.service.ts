@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import type { NewVoucher, Voucher } from '../../infrastructure/database/schema/vouchers.schema';
 import type { GenerateBatchInput } from './dto/generate-batch.dto';
-import type { BatchResult, VoucherResponse } from './dto/voucher-response.dto';
+import type { BatchResult, VoucherListResponse, VoucherResponse } from './dto/voucher-response.dto';
 import { type VoucherListFilter, VouchersRepository } from './vouchers.repository';
 
 // 32 unambiguous characters (no O/0/I/1) for printed codes.
@@ -14,9 +14,9 @@ export class VouchersService {
 
   constructor(private readonly repo: VouchersRepository) {}
 
-  async list(filter: VoucherListFilter): Promise<{ items: VoucherResponse[]; total: number }> {
-    const { items, total } = await this.repo.list(filter);
-    return { items: items.map(toVoucherResponse), total };
+  async list(filter: VoucherListFilter): Promise<VoucherListResponse> {
+    const { items, total, summary } = await this.repo.list(filter);
+    return { items: items.map(toVoucherResponse), total, summary };
   }
 
   /** Mint `count` vouchers sharing one batch id; returns the batch summary. */
