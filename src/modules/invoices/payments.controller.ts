@@ -5,6 +5,9 @@ import { InvoicesService } from './invoices.service';
 const ListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().min(0).default(0),
+  q: z.string().trim().min(1).optional(),
+  sort: z.string().optional(),
+  order: z.enum(['asc', 'desc']).optional(),
 });
 
 // The recorded-payments ledger. Read-only here; payments are created as a

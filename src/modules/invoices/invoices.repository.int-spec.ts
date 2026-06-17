@@ -194,6 +194,234 @@ describe('InvoicesRepository (integration)', () => {
     expect(ledger.items[0]?.method).toBe('transfer');
   });
 
+  describe('listPayments — search (q)', () => {
+    it('matches by invoiceNo substring case-insensitively', async () => {
+      const inv1 = await repo.create(newInvoice({ periodStart: '2026-06-01' }));
+      const inv2 = await repo.create(newInvoice({ periodStart: '2026-07-01' }));
+      await repo.createPayment({
+        invoiceId: inv1.id,
+        invoiceNo: 'INV-2026-ALPHA',
+        customerId,
+        customerName: 'Budi',
+        amount: 100_000,
+        method: 'transfer',
+      });
+      await repo.createPayment({
+        invoiceId: inv2.id,
+        invoiceNo: 'INV-2026-BETA',
+        customerId,
+        customerName: 'Budi',
+        amount: 200_000,
+        method: 'cash',
+      });
+
+      const result = await repo.listPayments({ q: 'alpha', limit: 50, offset: 0 });
+      expect(result.total).toBe(1);
+      expect(result.items[0]?.invoiceNo).toBe('INV-2026-ALPHA');
+    });
+
+    it('matches by customerName substring case-insensitively', async () => {
+      const inv1 = await repo.create(newInvoice({ periodStart: '2026-06-01' }));
+      const inv2 = await repo.create(newInvoice({ periodStart: '2026-07-01' }));
+      await repo.createPayment({
+        invoiceId: inv1.id,
+        invoiceNo: inv1.invoiceNo,
+        customerId,
+        customerName: 'Budi Santoso',
+        amount: 100_000,
+        method: 'transfer',
+      });
+      await repo.createPayment({
+        invoiceId: inv2.id,
+        invoiceNo: inv2.invoiceNo,
+        customerId,
+        customerName: 'Ani Wijaya',
+        amount: 200_000,
+        method: 'cash',
+      });
+
+      const result = await repo.listPayments({ q: 'santoso', limit: 50, offset: 0 });
+      expect(result.total).toBe(1);
+      expect(result.items[0]?.customerName).toBe('Budi Santoso');
+    });
+
+    it('total reflects the q filter, not the full table count', async () => {
+      const inv1 = await repo.create(newInvoice({ periodStart: '2026-06-01' }));
+      const inv2 = await repo.create(newInvoice({ periodStart: '2026-07-01' }));
+      const inv3 = await repo.create(newInvoice({ periodStart: '2026-08-01' }));
+      await repo.createPayment({
+        invoiceId: inv1.id,
+        invoiceNo: inv1.invoiceNo,
+        customerId,
+        customerName: 'Match Name',
+        amount: 100_000,
+        method: 'transfer',
+      });
+      await repo.createPayment({
+        invoiceId: inv2.id,
+        invoiceNo: inv2.invoiceNo,
+        customerId,
+        customerName: 'Match Name',
+        amount: 200_000,
+        method: 'cash',
+      });
+      await repo.createPayment({
+        invoiceId: inv3.id,
+        invoiceNo: inv3.invoiceNo,
+        customerId,
+        customerName: 'Other Name',
+        amount: 300_000,
+        method: 'qris',
+      });
+
+      const result = await repo.listPayments({ q: 'Match', limit: 50, offset: 0 });
+      expect(result.total).toBe(2);
+      expect(result.items).toHaveLength(2);
+    });
+  });
+
+  describe('listPayments — sort', () => {
+    // Helper to seed a payment with explicit paidAt so sort order is deterministic.
+    async function seedPayment(
+      inv: { id: string; invoiceNo: string },
+      overrides: {
+        customerName: string;
+        amount: number;
+        method: typeof payments.$inferInsert.method;
+        paidAt: string;
+      },
+    ) {
+      await db.insert(payments).values({
+        invoiceId: inv.id,
+        invoiceNo: inv.invoiceNo,
+        customerId,
+        customerName: overrides.customerName,
+        amount: overrides.amount,
+        method: overrides.method,
+        paidAt: new Date(overrides.paidAt),
+      });
+    }
+
+    it('sorts by amount ascending', async () => {
+      const inv1 = await repo.create(newInvoice({ periodStart: '2026-06-01' }));
+      const inv2 = await repo.create(newInvoice({ periodStart: '2026-07-01' }));
+      const inv3 = await repo.create(newInvoice({ periodStart: '2026-08-01' }));
+      await seedPayment(inv1, {
+        customerName: 'A',
+        amount: 300_000,
+        method: 'cash',
+        paidAt: '2026-06-01T00:00:00.000Z',
+      });
+      await seedPayment(inv2, {
+        customerName: 'B',
+        amount: 100_000,
+        method: 'cash',
+        paidAt: '2026-06-02T00:00:00.000Z',
+      });
+      await seedPayment(inv3, {
+        customerName: 'C',
+        amount: 200_000,
+        method: 'cash',
+        paidAt: '2026-06-03T00:00:00.000Z',
+      });
+
+      const asc = await repo.listPayments({ sort: 'amount', order: 'asc', limit: 50, offset: 0 });
+      expect(asc.items.map((p) => p.amount)).toEqual([100_000, 200_000, 300_000]);
+    });
+
+    it('sorts by amount descending', async () => {
+      const inv1 = await repo.create(newInvoice({ periodStart: '2026-06-01' }));
+      const inv2 = await repo.create(newInvoice({ periodStart: '2026-07-01' }));
+      const inv3 = await repo.create(newInvoice({ periodStart: '2026-08-01' }));
+      await seedPayment(inv1, {
+        customerName: 'A',
+        amount: 300_000,
+        method: 'cash',
+        paidAt: '2026-06-01T00:00:00.000Z',
+      });
+      await seedPayment(inv2, {
+        customerName: 'B',
+        amount: 100_000,
+        method: 'cash',
+        paidAt: '2026-06-02T00:00:00.000Z',
+      });
+      await seedPayment(inv3, {
+        customerName: 'C',
+        amount: 200_000,
+        method: 'cash',
+        paidAt: '2026-06-03T00:00:00.000Z',
+      });
+
+      const desc = await repo.listPayments({ sort: 'amount', order: 'desc', limit: 50, offset: 0 });
+      expect(desc.items.map((p) => p.amount)).toEqual([300_000, 200_000, 100_000]);
+    });
+
+    it('sorts by paidAt ascending', async () => {
+      const inv1 = await repo.create(newInvoice({ periodStart: '2026-06-01' }));
+      const inv2 = await repo.create(newInvoice({ periodStart: '2026-07-01' }));
+      const inv3 = await repo.create(newInvoice({ periodStart: '2026-08-01' }));
+      await seedPayment(inv1, {
+        customerName: 'A',
+        amount: 100_000,
+        method: 'cash',
+        paidAt: '2026-06-03T00:00:00.000Z',
+      });
+      await seedPayment(inv2, {
+        customerName: 'B',
+        amount: 200_000,
+        method: 'cash',
+        paidAt: '2026-06-01T00:00:00.000Z',
+      });
+      await seedPayment(inv3, {
+        customerName: 'C',
+        amount: 300_000,
+        method: 'cash',
+        paidAt: '2026-06-02T00:00:00.000Z',
+      });
+
+      const result = await repo.listPayments({
+        sort: 'paidAt',
+        order: 'asc',
+        limit: 50,
+        offset: 0,
+      });
+      expect(result.items.map((p) => p.amount)).toEqual([200_000, 300_000, 100_000]);
+    });
+
+    it('falls back to paidAt desc when sort key is unknown', async () => {
+      const inv1 = await repo.create(newInvoice({ periodStart: '2026-06-01' }));
+      const inv2 = await repo.create(newInvoice({ periodStart: '2026-07-01' }));
+      const inv3 = await repo.create(newInvoice({ periodStart: '2026-08-01' }));
+      await seedPayment(inv1, {
+        customerName: 'A',
+        amount: 100_000,
+        method: 'cash',
+        paidAt: '2026-06-01T00:00:00.000Z',
+      });
+      await seedPayment(inv2, {
+        customerName: 'B',
+        amount: 200_000,
+        method: 'cash',
+        paidAt: '2026-06-02T00:00:00.000Z',
+      });
+      await seedPayment(inv3, {
+        customerName: 'C',
+        amount: 300_000,
+        method: 'cash',
+        paidAt: '2026-06-03T00:00:00.000Z',
+      });
+
+      // Unknown key → default paidAt desc → newest first (300_000 at 06-03)
+      const result = await repo.listPayments({
+        sort: 'notAColumn',
+        order: 'asc',
+        limit: 50,
+        offset: 0,
+      });
+      expect(result.items.map((p) => p.amount)).toEqual([300_000, 200_000, 100_000]);
+    });
+  });
+
   it('scopes invoices and payments to one customer for the portal', async () => {
     const jun = await repo.create(newInvoice({ periodStart: '2026-06-01' }));
     await repo.create(newInvoice({ periodStart: '2026-07-01' }));
