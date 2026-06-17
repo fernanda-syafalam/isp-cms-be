@@ -6,6 +6,9 @@ import { AcsService } from './acs.service';
 import { BulkAcsDto } from './dto/bulk-acs.dto';
 
 const ListQuerySchema = z.object({
+  q: z.string().trim().min(1).optional(),
+  sort: z.string().optional(),
+  order: z.enum(['asc', 'desc']).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(100),
   offset: z.coerce.number().int().min(0).default(0),
 });

@@ -42,6 +42,25 @@ describe('AcsService', () => {
     expect(result.items[0]?.lastInform).toBe('2026-06-15T00:00:00.000Z');
   });
 
+  it('forwards q to the repository', async () => {
+    repo.list.mockResolvedValue({ items: [device], total: 1 });
+    await service.list({ q: 'ZTEG', limit: 100, offset: 0 });
+    expect(repo.list).toHaveBeenCalledWith({ q: 'ZTEG', limit: 100, offset: 0 });
+  });
+
+  it('forwards sort and order to the repository', async () => {
+    repo.list.mockResolvedValue({ items: [device], total: 1 });
+    await service.list({ sort: 'serial', order: 'desc', limit: 50, offset: 0 });
+    expect(repo.list).toHaveBeenCalledWith({ sort: 'serial', order: 'desc', limit: 50, offset: 0 });
+  });
+
+  it('returns filtered total from the repository unchanged', async () => {
+    repo.list.mockResolvedValue({ items: [device], total: 42 });
+    const result = await service.list({ q: 'Budi', limit: 10, offset: 0 });
+    expect(result.total).toBe(42);
+    expect(result.items).toHaveLength(1);
+  });
+
   describe('bulk', () => {
     it('firmware pushes the version and returns rows updated', async () => {
       repo.updateFirmware.mockResolvedValue(2);
