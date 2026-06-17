@@ -11,10 +11,17 @@ const JournalLineSchema = z.object({
   credit: z.number().int().nonnegative(),
 });
 
-/** Output shape for the period journal (double-entry, debit == credit). */
+/**
+ * Output shape for the period journal (double-entry, debit == credit).
+ *
+ * - `lines`  – the current page of posting lines (after q-filter + sort + limit/offset).
+ * - `total`  – count of lines matching the q-filter BEFORE limit/offset (for page-count math).
+ * - `totals` – full-period debit/credit aggregate; NEVER affected by q/limit/offset.
+ */
 export const JournalResponseSchema = z.object({
   period: z.string(),
   lines: z.array(JournalLineSchema),
+  total: z.number().int().nonnegative(),
   totals: z.object({
     debit: z.number().int().nonnegative(),
     credit: z.number().int().nonnegative(),
