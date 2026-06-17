@@ -60,4 +60,27 @@ describe('AuditService', () => {
     await service.list({ entityId: 'cust-1001', limit: 100, offset: 0 });
     expect(repo.list).toHaveBeenCalledWith({ entityId: 'cust-1001', limit: 100, offset: 0 });
   });
+
+  it('forwards q, sort, and order to the repo unchanged', async () => {
+    repo.list.mockResolvedValue({ items: [withEntity], total: 1 });
+    await service.list({ q: 'admin', sort: 'actor', order: 'asc', limit: 50, offset: 0 });
+    expect(repo.list).toHaveBeenCalledWith({
+      q: 'admin',
+      sort: 'actor',
+      order: 'asc',
+      limit: 50,
+      offset: 0,
+    });
+  });
+
+  it('forwards combined entityId + q filters to the repo', async () => {
+    repo.list.mockResolvedValue({ items: [withEntity], total: 1 });
+    await service.list({ entityId: 'cust-1001', q: 'suspend', limit: 100, offset: 0 });
+    expect(repo.list).toHaveBeenCalledWith({
+      entityId: 'cust-1001',
+      q: 'suspend',
+      limit: 100,
+      offset: 0,
+    });
+  });
 });
