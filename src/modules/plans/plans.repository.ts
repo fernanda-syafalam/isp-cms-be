@@ -1,7 +1,28 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { asc, eq, sql } from 'drizzle-orm';
+import { and, asc, count, eq, ilike, sql } from 'drizzle-orm';
+import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import { type NewPlan, type Plan, plans } from '../../infrastructure/database/schema/plans.schema';
+
+// Columns the frontend may sort on (camelCase key → Drizzle column).
+// `subscriberCount` is FE-only mock data with no backing column — it must
+// never appear here.
+// Unknown/absent key falls back to `name asc` via buildOrderBy — never throws.
+const PLANS_SORT_WHITELIST = {
+  name: plans.name,
+  speedMbps: plans.speedMbps,
+  priceMonthly: plans.priceMonthly,
+  status: plans.status,
+  createdAt: plans.createdAt,
+} satisfies Record<string, (typeof plans)[keyof typeof plans]>;
+
+export interface PlanListFilter {
+  q?: string;
+  sort?: string;
+  order?: 'asc' | 'desc';
+  limit: number;
+  offset: number;
+}
 
 /**
  * The only place that talks to the `plans` table. Service consumers get
@@ -15,10 +36,20 @@ export class PlansRepository {
     return this.drizzle.db;
   }
 
-  // Plans are few and long-lived; a full ordered list (active + archived)
-  // is fine — no cursor pagination needed.
-  async findAll(): Promise<Plan[]> {
-    return this.db.select().from(plans).orderBy(asc(plans.name));
+  async list(filter: PlanListFilter): Promise<{ items: Plan[]; total: number }> {
+    const where = and(filter.q ? ilike(plans.name, `%${filter.q}%`) : undefined);
+
+    const orderBy = buildOrderBy(filter.sort, filter.order, PLANS_SORT_WHITELIST, asc(plans.name));
+
+    const items = await this.db
+      .select()
+      .from(plans)
+      .where(where)
+      .orderBy(orderBy)
+      .limit(filter.limit)
+      .offset(filter.offset);
+    const [totals] = await this.db.select({ value: count() }).from(plans).where(where);
+    return { items, total: totals?.value ?? 0 };
   }
 
   async findById(id: string): Promise<Plan | null> {

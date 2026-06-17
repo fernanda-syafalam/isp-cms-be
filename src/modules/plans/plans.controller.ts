@@ -1,5 +1,16 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Patch, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
+import { z } from 'zod';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CreatePlanDto } from './dto/create-plan.dto';
@@ -7,16 +18,21 @@ import { PlanResponseDto } from './dto/plan-response.dto';
 import { UpdatePlanDto } from './dto/update-plan.dto';
 import { PlansService } from './plans.service';
 
+const ListQuerySchema = z.object({
+  q: z.string().trim().min(1).optional(),
+  sort: z.string().optional(),
+  order: z.enum(['asc', 'desc']).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
 @Controller({ path: 'plans', version: '1' })
 export class PlansController {
   constructor(private readonly plans: PlansService) {}
 
-  // Any authenticated user may read the catalogue. Plans are few, so the
-  // list is unpaginated — { items, total }.
   @Get()
-  async list() {
-    const items = await this.plans.list();
-    return { items, total: items.length };
+  list(@Query() query: unknown) {
+    return this.plans.list(ListQuerySchema.parse(query));
   }
 
   @Roles('admin')
