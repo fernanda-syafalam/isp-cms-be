@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { and, asc, count, desc, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, ilike, inArray, or, sql } from 'drizzle-orm';
+import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type Invoice,
@@ -17,9 +18,22 @@ export interface InvoiceListFilter {
 }
 
 export interface PaymentListFilter {
+  q?: string;
+  sort?: string;
+  order?: 'asc' | 'desc';
   limit: number;
   offset: number;
 }
+
+// Columns the frontend is allowed to sort on (camelCase key → Drizzle column).
+// Extend this map as new sortable columns are added; never pass arbitrary
+// column references — the whitelist is the security boundary.
+const PAYMENT_SORT_WHITELIST = {
+  paidAt: payments.paidAt,
+  invoiceNo: payments.invoiceNo,
+  amount: payments.amount,
+  customerName: payments.customerName,
+} satisfies Record<string, (typeof payments)[keyof typeof payments]>;
 
 // Statuses that still owe money — used for the outstanding total.
 const UNPAID_STATUSES = ['pending', 'overdue'] as const;
@@ -224,13 +238,28 @@ export class InvoicesRepository {
   // --- Payments ledger ------------------------------------------------
 
   async listPayments(filter: PaymentListFilter): Promise<{ items: Payment[]; total: number }> {
+    const where = filter.q
+      ? or(
+          ilike(payments.invoiceNo, `%${filter.q}%`),
+          ilike(payments.customerName, `%${filter.q}%`),
+        )
+      : undefined;
+
+    const orderBy = buildOrderBy(
+      filter.sort,
+      filter.order,
+      PAYMENT_SORT_WHITELIST,
+      desc(payments.paidAt),
+    );
+
     const items = await this.db
       .select()
       .from(payments)
-      .orderBy(desc(payments.paidAt))
+      .where(where)
+      .orderBy(orderBy)
       .limit(filter.limit)
       .offset(filter.offset);
-    const [totals] = await this.db.select({ value: count() }).from(payments);
+    const [totals] = await this.db.select({ value: count() }).from(payments).where(where);
     return { items, total: totals?.value ?? 0 };
   }
 
