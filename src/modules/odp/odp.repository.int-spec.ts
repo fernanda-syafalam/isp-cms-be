@@ -51,18 +51,24 @@ describe('OdpRepository (integration)', () => {
     await db.delete(odpRecords);
   });
 
-  it('seeds the 12-row fixture on first read, ordered by id', async () => {
+  it('seeds the 12-row fixture on first read, default order is name asc', async () => {
     await repo.ensureSeeded(buildOdpFixture());
-    const rows = await repo.list();
-    expect(rows).toHaveLength(12);
-    expect(rows[0]?.name).toBe('ODP-JEP-01'); // index 0 is first by id
-    expect(rows[0]?.usedPorts).toBeLessThanOrEqual(rows[0]?.totalPorts ?? 0);
+    const { items, total, summary } = await repo.list({ limit: 100, offset: 0 });
+    expect(items).toHaveLength(12);
+    expect(total).toBe(12);
+    // Default sort is name asc — ODP-BAN comes before ODP-JEP alphabetically.
+    expect(items[0]?.name.startsWith('ODP-')).toBe(true);
+    expect(items[0]?.usedPorts).toBeLessThanOrEqual(items[0]?.totalPorts ?? 0);
+    // Summary covers the full set.
+    expect(summary.totalOdp).toBe(12);
+    expect(summary.utilization).toBeGreaterThanOrEqual(0);
+    expect(summary.utilization).toBeLessThanOrEqual(100);
   });
 
   it('ensureSeeded is idempotent on the deterministic id/name', async () => {
     await repo.ensureSeeded(buildOdpFixture());
     await repo.ensureSeeded(buildOdpFixture());
-    const rows = await repo.list();
-    expect(rows).toHaveLength(12);
+    const { items } = await repo.list({ limit: 100, offset: 0 });
+    expect(items).toHaveLength(12);
   });
 });
