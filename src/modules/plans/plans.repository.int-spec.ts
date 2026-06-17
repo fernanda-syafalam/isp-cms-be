@@ -50,12 +50,13 @@ describe('PlansRepository (integration)', () => {
     await db.delete(plans);
   });
 
-  it('creates and lists plans alphabetically', async () => {
+  it('creates and lists plans alphabetically (default name asc)', async () => {
     await repo.create({ name: 'Zeta', speedMbps: 10, priceMonthly: 100_000 });
     await repo.create({ name: 'Alpha', speedMbps: 20, priceMonthly: 200_000 });
 
-    const all = await repo.findAll();
-    expect(all.map((p) => p.name)).toEqual(['Alpha', 'Zeta']);
+    const { items, total } = await repo.list({ limit: 50, offset: 0 });
+    expect(items.map((p) => p.name)).toEqual(['Alpha', 'Zeta']);
+    expect(total).toBe(2);
   });
 
   it('updates price and bumps updated_at', async () => {
@@ -77,8 +78,9 @@ describe('PlansRepository (integration)', () => {
     });
     const archived = await repo.archive(created.id);
     expect(archived.status).toBe('archived');
-    // still listed
-    expect((await repo.findAll()).some((p) => p.id === created.id)).toBe(true);
+    // still listed — archive is a status transition, not a delete
+    const { items } = await repo.list({ limit: 50, offset: 0 });
+    expect(items.some((p) => p.id === created.id)).toBe(true);
   });
 
   it('rejects update/archive of a missing plan', async () => {

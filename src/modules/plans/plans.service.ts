@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { Plan } from '../../infrastructure/database/schema/plans.schema';
 import type { CreatePlanInput } from './dto/create-plan.dto';
 import type { UpdatePlanInput } from './dto/update-plan.dto';
-import { PlansRepository } from './plans.repository';
+import { type PlanListFilter, PlansRepository } from './plans.repository';
 
 @Injectable()
 export class PlansService {
@@ -10,8 +10,8 @@ export class PlansService {
 
   constructor(private readonly repo: PlansRepository) {}
 
-  async list(): Promise<Plan[]> {
-    return this.repo.findAll();
+  async list(filter: PlanListFilter): Promise<{ items: Plan[]; total: number }> {
+    return this.repo.list(filter);
   }
 
   async create(input: CreatePlanInput): Promise<Plan> {
