@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { asc, count, inArray, sql } from 'drizzle-orm';
+import { and, asc, count, ilike, inArray, or, sql } from 'drizzle-orm';
+import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type AcsDevice,
@@ -7,7 +8,23 @@ import {
   acsDevices,
 } from '../../infrastructure/database/schema/acs.schema';
 
+// Columns the frontend may sort on (camelCase key → Drizzle column).
+// Unknown/absent key falls back to `serial asc` via buildOrderBy — never throws.
+const ACS_SORT_WHITELIST = {
+  serial: acsDevices.serial,
+  customerName: acsDevices.customerName,
+  model: acsDevices.model,
+  firmware: acsDevices.firmware,
+  rxPowerDbm: acsDevices.rxPowerDbm,
+  status: acsDevices.status,
+  lastInform: acsDevices.lastInform,
+  createdAt: acsDevices.createdAt,
+} satisfies Record<string, (typeof acsDevices)[keyof typeof acsDevices]>;
+
 export interface AcsListFilter {
+  q?: string;
+  sort?: string;
+  order?: 'asc' | 'desc';
   limit: number;
   offset: number;
 }
@@ -31,13 +48,30 @@ export class AcsRepository {
   }
 
   async list(filter: AcsListFilter): Promise<{ items: AcsDevice[]; total: number }> {
+    const where = and(
+      filter.q
+        ? or(
+            ilike(acsDevices.serial, `%${filter.q}%`),
+            ilike(acsDevices.customerName, `%${filter.q}%`),
+          )
+        : undefined,
+    );
+
+    const orderBy = buildOrderBy(
+      filter.sort,
+      filter.order,
+      ACS_SORT_WHITELIST,
+      asc(acsDevices.serial),
+    );
+
     const items = await this.db
       .select()
       .from(acsDevices)
-      .orderBy(asc(acsDevices.serial))
+      .where(where)
+      .orderBy(orderBy)
       .limit(filter.limit)
       .offset(filter.offset);
-    const [totals] = await this.db.select({ value: count() }).from(acsDevices);
+    const [totals] = await this.db.select({ value: count() }).from(acsDevices).where(where);
     return { items, total: totals?.value ?? 0 };
   }
 

@@ -88,4 +88,217 @@ describe('AcsRepository (integration)', () => {
     const after = await repo.list({ limit: 50, offset: 0 });
     expect(after.items.every((d) => d.firmware === 'v2.4.1')).toBe(true);
   });
+
+  describe('search (q)', () => {
+    it('filters by serial substring case-insensitively', async () => {
+      await repo.ensureSeeded([
+        {
+          serial: 'ZTEG20000001',
+          customerName: 'Alpha',
+          model: 'ZTE F670L',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'online' as const,
+        },
+        {
+          serial: 'HWTG20000001',
+          customerName: 'Beta',
+          model: 'Huawei HG8145',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'online' as const,
+        },
+      ]);
+
+      const result = await repo.list({ q: 'zteg2', limit: 50, offset: 0 });
+      expect(result.total).toBe(1);
+      expect(result.items[0]?.serial).toBe('ZTEG20000001');
+    });
+
+    it('filters by customerName substring case-insensitively', async () => {
+      await repo.ensureSeeded([
+        {
+          serial: 'ZTEG30000001',
+          customerName: 'Siti Rahayu',
+          model: 'ZTE F670L',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'online' as const,
+        },
+        {
+          serial: 'ZTEG30000002',
+          customerName: 'Dewi Kusuma',
+          model: 'ZTE F670L',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'online' as const,
+        },
+      ]);
+
+      const result = await repo.list({ q: 'siti', limit: 50, offset: 0 });
+      expect(result.total).toBe(1);
+      expect(result.items[0]?.customerName).toBe('Siti Rahayu');
+    });
+
+    it('total reflects q filter, not the full table count', async () => {
+      await repo.ensureSeeded([
+        {
+          serial: 'MATCH40000001',
+          customerName: 'User A',
+          model: 'ZTE F670L',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'online' as const,
+        },
+        {
+          serial: 'MATCH40000002',
+          customerName: 'User B',
+          model: 'ZTE F670L',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'online' as const,
+        },
+        {
+          serial: 'OTHER40000003',
+          customerName: 'User C',
+          model: 'ZTE F670L',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'online' as const,
+        },
+      ]);
+
+      const result = await repo.list({ q: 'MATCH4', limit: 50, offset: 0 });
+      expect(result.total).toBe(2);
+      expect(result.items).toHaveLength(2);
+    });
+
+    it('returns empty result when q matches nothing', async () => {
+      await repo.ensureSeeded([
+        {
+          serial: 'ZTEG50000001',
+          customerName: 'Hendra',
+          model: 'ZTE F670L',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'online' as const,
+        },
+      ]);
+
+      const result = await repo.list({ q: 'doesnotexist', limit: 50, offset: 0 });
+      expect(result.total).toBe(0);
+      expect(result.items).toHaveLength(0);
+    });
+  });
+
+  describe('sort', () => {
+    it('sorts by serial ascending', async () => {
+      await repo.ensureSeeded([
+        {
+          serial: 'C-SERIAL60003',
+          customerName: 'Third',
+          model: 'ZTE F670L',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'online' as const,
+        },
+        {
+          serial: 'A-SERIAL60001',
+          customerName: 'First',
+          model: 'ZTE F670L',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'online' as const,
+        },
+        {
+          serial: 'B-SERIAL60002',
+          customerName: 'Second',
+          model: 'ZTE F670L',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'online' as const,
+        },
+      ]);
+
+      const result = await repo.list({ sort: 'serial', order: 'asc', limit: 50, offset: 0 });
+      expect(result.items.map((d) => d.serial)).toEqual([
+        'A-SERIAL60001',
+        'B-SERIAL60002',
+        'C-SERIAL60003',
+      ]);
+    });
+
+    it('sorts by serial descending', async () => {
+      await repo.ensureSeeded([
+        {
+          serial: 'C-SERIAL70003',
+          customerName: 'Third',
+          model: 'ZTE F670L',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'online' as const,
+        },
+        {
+          serial: 'A-SERIAL70001',
+          customerName: 'First',
+          model: 'ZTE F670L',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'online' as const,
+        },
+        {
+          serial: 'B-SERIAL70002',
+          customerName: 'Second',
+          model: 'ZTE F670L',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'online' as const,
+        },
+      ]);
+
+      const result = await repo.list({ sort: 'serial', order: 'desc', limit: 50, offset: 0 });
+      expect(result.items.map((d) => d.serial)).toEqual([
+        'C-SERIAL70003',
+        'B-SERIAL70002',
+        'A-SERIAL70001',
+      ]);
+    });
+
+    it('falls back to serial asc when sort key is unknown', async () => {
+      await repo.ensureSeeded([
+        {
+          serial: 'C-SERIAL80003',
+          customerName: 'Third',
+          model: 'ZTE F670L',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'online' as const,
+        },
+        {
+          serial: 'A-SERIAL80001',
+          customerName: 'First',
+          model: 'ZTE F670L',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'online' as const,
+        },
+        {
+          serial: 'B-SERIAL80002',
+          customerName: 'Second',
+          model: 'ZTE F670L',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'online' as const,
+        },
+      ]);
+
+      // Unknown sort key → falls back to default asc(serial)
+      const result = await repo.list({ sort: 'notAColumn', order: 'desc', limit: 50, offset: 0 });
+      expect(result.items.map((d) => d.serial)).toEqual([
+        'A-SERIAL80001',
+        'B-SERIAL80002',
+        'C-SERIAL80003',
+      ]);
+    });
+  });
 });
