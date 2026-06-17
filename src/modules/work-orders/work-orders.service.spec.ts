@@ -207,6 +207,59 @@ describe('WorkOrdersService', () => {
     });
   });
 
+  describe('list', () => {
+    const makeWo = (over: Partial<typeof installWo> = {}) => ({ ...installWo, ...over });
+
+    it('delegates filter to the repo and maps items to WorkOrderResponse', async () => {
+      const filter = { limit: 10, offset: 0 };
+      repo.list.mockResolvedValue({ items: [installWo], total: 1 });
+
+      const result = await service.list(filter);
+
+      expect(repo.list).toHaveBeenCalledWith(filter);
+      expect(result.total).toBe(1);
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0]).toMatchObject({ id: installWo.id, code: installWo.code });
+    });
+
+    it('passes q and status filter through to the repo', async () => {
+      const filter = { q: 'budi', status: 'scheduled' as const, limit: 50, offset: 0 };
+      repo.list.mockResolvedValue({ items: [], total: 0 });
+
+      await service.list(filter);
+
+      expect(repo.list).toHaveBeenCalledWith(filter);
+    });
+
+    it('passes type filter through to the repo', async () => {
+      const filter = { type: 'repair' as const, limit: 50, offset: 0 };
+      repo.list.mockResolvedValue({ items: [], total: 0 });
+
+      await service.list(filter);
+
+      expect(repo.list).toHaveBeenCalledWith(filter);
+    });
+
+    it('passes sort and order through to the repo', async () => {
+      const filter = { sort: 'code', order: 'asc' as const, limit: 50, offset: 0 };
+      repo.list.mockResolvedValue({ items: [makeWo()], total: 1 });
+
+      const result = await service.list(filter);
+
+      expect(repo.list).toHaveBeenCalledWith(filter);
+      expect(result.total).toBe(1);
+    });
+
+    it('returns empty items when repo returns empty', async () => {
+      repo.list.mockResolvedValue({ items: [], total: 0 });
+
+      const result = await service.list({ limit: 50, offset: 0 });
+
+      expect(result.items).toHaveLength(0);
+      expect(result.total).toBe(0);
+    });
+  });
+
   describe('createFromTicket', () => {
     it('creates a scheduled repair order', async () => {
       repo.create.mockResolvedValue({
