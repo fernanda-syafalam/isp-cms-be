@@ -159,4 +159,79 @@ describe('InventoryRepository (integration)', () => {
     expect(ledger.total).toBe(2);
     expect(ledger.items.map((m) => m.type)).toEqual(['assign', 'in']);
   });
+
+  describe('search (q)', () => {
+    it('matches by serial substring case-insensitively', async () => {
+      await repo.create({ kind: 'onu', serial: 'ZTEG-ABC-001' });
+      await repo.create({ kind: 'onu', serial: 'ZTEG-XYZ-002' });
+      await repo.create({ kind: 'router', serial: 'TP-LINK-001' });
+
+      const result = await repo.list({ q: 'zteg', limit: 50, offset: 0 });
+      expect(result.total).toBe(2);
+      expect(result.items.map((i) => i.serial).sort()).toEqual(['ZTEG-ABC-001', 'ZTEG-XYZ-002']);
+    });
+
+    it('matches by assignedTo (customer name) case-insensitively', async () => {
+      const a = await repo.create({ kind: 'onu', serial: 'SN-BUDI-1' });
+      const b = await repo.create({ kind: 'onu', serial: 'SN-BUDI-2' });
+      await repo.create({ kind: 'router', serial: 'SN-OTHER-1' });
+
+      await repo.update(a.id, { status: 'installed', assignedTo: 'Budi Santoso' });
+      await repo.update(b.id, { status: 'installed', assignedTo: 'Budi Prasetyo' });
+
+      const result = await repo.list({ q: 'budi', limit: 50, offset: 0 });
+      expect(result.total).toBe(2);
+      expect(result.items.every((i) => i.assignedTo?.toLowerCase().includes('budi'))).toBe(true);
+    });
+
+    it('total reflects the q filter, not the full table count', async () => {
+      await repo.create({ kind: 'onu', serial: 'MATCH-001' });
+      await repo.create({ kind: 'onu', serial: 'MATCH-002' });
+      await repo.create({ kind: 'router', serial: 'NOMATCH-001' });
+
+      const result = await repo.list({ q: 'MATCH', limit: 50, offset: 0 });
+      // total must equal only the 2 matching rows, even though 3 exist
+      expect(result.total).toBe(2);
+      expect(result.items).toHaveLength(2);
+    });
+
+    it('returns empty result when q matches nothing', async () => {
+      await repo.create({ kind: 'onu', serial: 'SN-001' });
+
+      const result = await repo.list({ q: 'doesnotexist', limit: 50, offset: 0 });
+      expect(result.total).toBe(0);
+      expect(result.items).toHaveLength(0);
+    });
+  });
+
+  describe('sort', () => {
+    it('sorts by serial ascending', async () => {
+      await repo.create({ kind: 'onu', serial: 'CCC-003' });
+      await repo.create({ kind: 'onu', serial: 'AAA-001' });
+      await repo.create({ kind: 'router', serial: 'BBB-002' });
+
+      const result = await repo.list({ sort: 'serial', order: 'asc', limit: 50, offset: 0 });
+      expect(result.items.map((i) => i.serial)).toEqual(['AAA-001', 'BBB-002', 'CCC-003']);
+    });
+
+    it('sorts by serial descending', async () => {
+      await repo.create({ kind: 'onu', serial: 'CCC-003' });
+      await repo.create({ kind: 'onu', serial: 'AAA-001' });
+      await repo.create({ kind: 'router', serial: 'BBB-002' });
+
+      const result = await repo.list({ sort: 'serial', order: 'desc', limit: 50, offset: 0 });
+      expect(result.items.map((i) => i.serial)).toEqual(['CCC-003', 'BBB-002', 'AAA-001']);
+    });
+
+    it('falls back to createdAt desc when sort key is unknown', async () => {
+      // Insert in order: X, Y, Z — default sort is createdAt desc so Z is first
+      const x = await repo.create({ kind: 'onu', serial: 'X-001' });
+      const y = await repo.create({ kind: 'onu', serial: 'Y-002' });
+      const z = await repo.create({ kind: 'onu', serial: 'Z-003' });
+
+      const result = await repo.list({ sort: 'notAColumn', order: 'asc', limit: 50, offset: 0 });
+      // Default: createdAt desc → Z, Y, X
+      expect(result.items.map((i) => i.id)).toEqual([z.id, y.id, x.id]);
+    });
+  });
 });

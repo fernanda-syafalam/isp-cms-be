@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { and, asc, count, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type InventoryItem,
@@ -11,10 +12,23 @@ import {
 } from '../../infrastructure/database/schema/inventory.schema';
 
 export interface InventoryListFilter {
+  q?: string;
   status?: InventoryItem['status'];
+  sort?: string;
+  order?: 'asc' | 'desc';
   limit: number;
   offset: number;
 }
+
+// Columns the frontend is allowed to sort on (camelCase key → Drizzle column).
+// Extend this map as new sortable columns are added; never pass arbitrary
+// column references — the whitelist is the security boundary.
+const SORT_WHITELIST = {
+  serial: inventoryItems.serial,
+  status: inventoryItems.status,
+  kind: inventoryItems.kind,
+  createdAt: inventoryItems.createdAt,
+} satisfies Record<string, (typeof inventoryItems)[keyof typeof inventoryItems]>;
 
 export interface MovementListFilter {
   limit: number;
@@ -39,12 +53,28 @@ export class InventoryRepository {
   }
 
   async list(filter: InventoryListFilter): Promise<{ items: InventoryItem[]; total: number }> {
-    const where = filter.status ? eq(inventoryItems.status, filter.status) : undefined;
+    const where = and(
+      filter.status ? eq(inventoryItems.status, filter.status) : undefined,
+      filter.q
+        ? or(
+            ilike(inventoryItems.serial, `%${filter.q}%`),
+            ilike(inventoryItems.assignedTo, `%${filter.q}%`),
+          )
+        : undefined,
+    );
+
+    const orderBy = buildOrderBy(
+      filter.sort,
+      filter.order,
+      SORT_WHITELIST,
+      desc(inventoryItems.createdAt),
+    );
+
     const items = await this.db
       .select()
       .from(inventoryItems)
       .where(where)
-      .orderBy(desc(inventoryItems.createdAt))
+      .orderBy(orderBy)
       .limit(filter.limit)
       .offset(filter.offset);
     const [totals] = await this.db.select({ value: count() }).from(inventoryItems).where(where);
