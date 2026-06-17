@@ -268,11 +268,43 @@ describe('CustomersService', () => {
     await expect(service.findById('missing')).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it('list projects every row and passes the total through', async () => {
-    repo.list.mockResolvedValue({ items: [sampleRow], total: 1 });
-    const result = await service.list({ limit: 50, offset: 0 });
-    expect(result.total).toBe(1);
-    expect(result.items[0]?.planName).toBe('Home 20');
+  describe('list', () => {
+    it('projects every row and passes the total through', async () => {
+      repo.list.mockResolvedValue({ items: [sampleRow], total: 1 });
+      const result = await service.list({ limit: 50, offset: 0 });
+      expect(result.total).toBe(1);
+      expect(result.items[0]?.planName).toBe('Home 20');
+    });
+
+    it('forwards q search to the repository', async () => {
+      repo.list.mockResolvedValue({ items: [sampleRow], total: 1 });
+      await service.list({ q: '0812', limit: 50, offset: 0 });
+      expect(repo.list).toHaveBeenCalledWith(expect.objectContaining({ q: '0812' }));
+    });
+
+    it('forwards sort + order to the repository', async () => {
+      repo.list.mockResolvedValue({ items: [sampleRow], total: 1 });
+      await service.list({ sort: 'joinedAt', order: 'desc', limit: 50, offset: 0 });
+      expect(repo.list).toHaveBeenCalledWith(
+        expect.objectContaining({ sort: 'joinedAt', order: 'desc' }),
+      );
+    });
+
+    it('forwards multi-value area filter to the repository', async () => {
+      repo.list.mockResolvedValue({ items: [sampleRow], total: 1 });
+      await service.list({ area: ['Jepara', 'Tahunan'], limit: 50, offset: 0 });
+      expect(repo.list).toHaveBeenCalledWith(
+        expect.objectContaining({ area: ['Jepara', 'Tahunan'] }),
+      );
+    });
+
+    it('passes area: undefined when no area filter is given', async () => {
+      repo.list.mockResolvedValue({ items: [], total: 0 });
+      await service.list({ limit: 50, offset: 0 });
+      expect(repo.list).toHaveBeenCalledWith(
+        expect.not.objectContaining({ area: expect.anything() }),
+      );
+    });
   });
 
   describe('subscriber actions', () => {
