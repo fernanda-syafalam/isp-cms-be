@@ -7,7 +7,19 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { TicketResponseDto } from '../tickets/dto/ticket-response.dto';
 import { MonitoringService } from './monitoring.service';
 
-const ListQuerySchema = z.object({
+// Sort keys the FE is allowed to use for the metrics table.
+// Unknown/absent key falls back to `name asc` — never throws (enforced in the repo).
+const METRIC_SORT_KEYS = ['name', 'status', 'uptimePct', 'latencyMs', 'utilizationPct'] as const;
+
+const MetricsQuerySchema = z.object({
+  q: z.string().trim().min(1).optional(),
+  sort: z.enum(METRIC_SORT_KEYS).optional(),
+  order: z.enum(['asc', 'desc']).optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+const AlertsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(100),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -18,12 +30,12 @@ export class MonitoringController {
 
   @Get('metrics')
   listMetrics(@Query() query: unknown) {
-    return this.monitoring.listMetrics(ListQuerySchema.parse(query));
+    return this.monitoring.listMetrics(MetricsQuerySchema.parse(query));
   }
 
   @Get('alerts')
   listAlerts(@Query() query: unknown) {
-    return this.monitoring.listAlerts(ListQuerySchema.parse(query));
+    return this.monitoring.listAlerts(AlertsQuerySchema.parse(query));
   }
 
   @Roles('admin', 'staff')
