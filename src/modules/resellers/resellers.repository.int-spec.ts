@@ -84,6 +84,85 @@ describe('ResellersRepository (integration)', () => {
     expect(active.total).toBe(1);
   });
 
+  describe('search (q)', () => {
+    it('matches by name substring case-insensitively', async () => {
+      await seed({ name: 'Loket Andi', area: 'Jepara' });
+      await seed({ name: 'Agen Budi', area: 'Kudus' });
+      await seed({ name: 'Mitra Citra', area: 'Semarang' });
+
+      const result = await repo.list({ q: 'andi', limit: 50, offset: 0 });
+      expect(result.total).toBe(1);
+      expect(result.items[0]?.name).toBe('Loket Andi');
+    });
+
+    it('matches by area substring case-insensitively', async () => {
+      await seed({ name: 'Loket Andi', area: 'Jepara Utara' });
+      await seed({ name: 'Agen Budi', area: 'Kudus' });
+
+      const result = await repo.list({ q: 'jepara', limit: 50, offset: 0 });
+      expect(result.total).toBe(1);
+      expect(result.items[0]?.area).toBe('Jepara Utara');
+    });
+
+    it('total reflects q filter, not the full table count', async () => {
+      await seed({ name: 'MATCH-Loket', area: 'Jepara' });
+      await seed({ name: 'MATCH-Agen', area: 'Kudus' });
+      await seed({ name: 'Other-Mitra', area: 'Semarang' });
+
+      const result = await repo.list({ q: 'MATCH', limit: 50, offset: 0 });
+      expect(result.total).toBe(2);
+      expect(result.items).toHaveLength(2);
+    });
+
+    it('returns empty result when q matches nothing', async () => {
+      await seed({ name: 'Loket Andi', area: 'Jepara' });
+
+      const result = await repo.list({ q: 'doesnotexist', limit: 50, offset: 0 });
+      expect(result.total).toBe(0);
+      expect(result.items).toHaveLength(0);
+    });
+  });
+
+  describe('sort', () => {
+    it('sorts by name ascending', async () => {
+      await seed({ name: 'Citra Mitra', area: 'Semarang' });
+      await seed({ name: 'Andi Loket', area: 'Jepara' });
+      await seed({ name: 'Budi Agen', area: 'Kudus' });
+
+      const result = await repo.list({ sort: 'name', order: 'asc', limit: 50, offset: 0 });
+      expect(result.items.map((r) => r.name)).toEqual(['Andi Loket', 'Budi Agen', 'Citra Mitra']);
+    });
+
+    it('sorts by name descending', async () => {
+      await seed({ name: 'Citra Mitra', area: 'Semarang' });
+      await seed({ name: 'Andi Loket', area: 'Jepara' });
+      await seed({ name: 'Budi Agen', area: 'Kudus' });
+
+      const result = await repo.list({ sort: 'name', order: 'desc', limit: 50, offset: 0 });
+      expect(result.items.map((r) => r.name)).toEqual(['Citra Mitra', 'Budi Agen', 'Andi Loket']);
+    });
+
+    it('sorts by balance ascending', async () => {
+      await seed({ name: 'Medium', balance: 500_000 });
+      await seed({ name: 'High', balance: 1_000_000 });
+      await seed({ name: 'Low', balance: 100_000 });
+
+      const result = await repo.list({ sort: 'balance', order: 'asc', limit: 50, offset: 0 });
+      expect(result.items.map((r) => r.balance)).toEqual([100_000, 500_000, 1_000_000]);
+    });
+
+    it('falls back to createdAt desc when sort key is unknown', async () => {
+      // Insert in order: X, Y, Z — default sort is createdAt desc so Z is first
+      const x = await seed({ name: 'X-Reseller', area: 'Jepara' });
+      const y = await seed({ name: 'Y-Reseller', area: 'Kudus' });
+      const z = await seed({ name: 'Z-Reseller', area: 'Semarang' });
+
+      const result = await repo.list({ sort: 'notAColumn', order: 'asc', limit: 50, offset: 0 });
+      // Default: createdAt desc → Z, Y, X
+      expect(result.items.map((r) => r.id)).toEqual([z.id, y.id, x.id]);
+    });
+  });
+
   it('updates fields and rejects a missing reseller', async () => {
     const r = await seed();
     const updated = await repo.update(r.id, { commissionPct: 0.1, status: 'inactive' });

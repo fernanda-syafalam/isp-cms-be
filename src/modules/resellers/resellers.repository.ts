@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
-import { count, desc, eq, sql } from 'drizzle-orm';
+import { and, count, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type NewReseller,
@@ -9,8 +10,24 @@ import {
   resellers,
 } from '../../infrastructure/database/schema/resellers.schema';
 
+// Columns the frontend may sort on (camelCase key → Drizzle column).
+// `customerCount` is derived in the service layer (post-query) and is NOT a
+// DB column, so it must never appear here.
+// Unknown/absent key falls back to `createdAt desc` via buildOrderBy — never throws.
+const RESELLER_SORT_WHITELIST = {
+  name: resellers.name,
+  area: resellers.area,
+  balance: resellers.balance,
+  commissionPct: resellers.commissionPct,
+  status: resellers.status,
+  createdAt: resellers.createdAt,
+} satisfies Record<string, (typeof resellers)[keyof typeof resellers]>;
+
 export interface ResellerListFilter {
+  q?: string;
   status?: Reseller['status'];
+  sort?: string;
+  order?: 'asc' | 'desc';
   limit: number;
   offset: number;
 }
@@ -38,12 +55,25 @@ export class ResellersRepository {
   }
 
   async list(filter: ResellerListFilter): Promise<{ items: Reseller[]; total: number }> {
-    const where = filter.status ? eq(resellers.status, filter.status) : undefined;
+    const where = and(
+      filter.status ? eq(resellers.status, filter.status) : undefined,
+      filter.q
+        ? or(ilike(resellers.name, `%${filter.q}%`), ilike(resellers.area, `%${filter.q}%`))
+        : undefined,
+    );
+
+    const orderBy = buildOrderBy(
+      filter.sort,
+      filter.order,
+      RESELLER_SORT_WHITELIST,
+      desc(resellers.createdAt),
+    );
+
     const items = await this.db
       .select()
       .from(resellers)
       .where(where)
-      .orderBy(desc(resellers.createdAt))
+      .orderBy(orderBy)
       .limit(filter.limit)
       .offset(filter.offset);
     const [totals] = await this.db.select({ value: count() }).from(resellers).where(where);
