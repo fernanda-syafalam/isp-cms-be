@@ -8,20 +8,36 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
+import { z } from 'zod';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { CreateSecretDto, SecretResponseDto, UpdateSecretDto } from './dto/secret.dto';
+import {
+  CreateSecretDto,
+  SecretListResponseDto,
+  SecretResponseDto,
+  UpdateSecretDto,
+} from './dto/secret.dto';
 import { SecretsService } from './secrets.service';
+
+const ListQuerySchema = z.object({
+  q: z.string().optional(),
+  sort: z.string().optional(),
+  order: z.enum(['asc', 'desc']).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
 
 @Controller({ path: 'routers/:routerId/secrets', version: '1' })
 export class SecretsController {
   constructor(private readonly secrets: SecretsService) {}
 
   @Get()
-  list(@Param('routerId') routerId: string) {
-    return this.secrets.list(routerId);
+  @ZodSerializerDto(SecretListResponseDto)
+  list(@Param('routerId') routerId: string, @Query() query: unknown) {
+    return this.secrets.list(routerId, ListQuerySchema.parse(query));
   }
 
   @Roles('admin', 'staff')

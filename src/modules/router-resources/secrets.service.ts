@@ -2,9 +2,18 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import type { PppSecret } from '../../infrastructure/database/schema/pppoe.schema';
 import { CustomersRepository } from '../customers/customers.repository';
 import { RoutersRepository } from '../routers/routers.repository';
-import type { CreateSecretInput, SecretResponse, UpdateSecretInput } from './dto/secret.dto';
+import type {
+  CreateSecretInput,
+  SecretListItem,
+  SecretResponse,
+  UpdateSecretInput,
+} from './dto/secret.dto';
 import { ProfilesRepository } from './profiles.repository';
+import type { SecretListFilter } from './secrets.repository';
 import { SecretsRepository } from './secrets.repository';
+import { deriveConnection } from './session-synthesis';
+
+export type { SecretListFilter };
 
 @Injectable()
 export class SecretsService {
@@ -17,10 +26,13 @@ export class SecretsService {
     private readonly customers: CustomersRepository,
   ) {}
 
-  async list(routerId: string): Promise<{ items: SecretResponse[]; total: number }> {
+  async list(
+    routerId: string,
+    filter: SecretListFilter,
+  ): Promise<{ items: SecretListItem[]; total: number }> {
     await this.requireRouter(routerId);
-    const { items, total } = await this.repo.listByRouter(routerId);
-    return { items: items.map(toSecretResponse), total };
+    const { items, total } = await this.repo.listByRouter(routerId, filter);
+    return { items: items.map(toSecretListItem), total };
   }
 
   /** Create a secret, denormalising the profile name + maintaining secretCount. */
@@ -106,5 +118,18 @@ function toSecretResponse(row: PppSecret): SecretResponse {
     customerName: row.customerName,
     disabled: row.disabled,
     comment: row.comment,
+  };
+}
+
+function toSecretListItem(row: PppSecret): SecretListItem {
+  const online = !row.disabled;
+  const conn = online ? deriveConnection(row.id) : null;
+  return {
+    ...toSecretResponse(row),
+    online,
+    address: conn?.address ?? null,
+    uptime: conn?.uptime ?? null,
+    // sessionId = secret.id when online (session is derived 1:1 from secret)
+    sessionId: online ? row.id : null,
   };
 }
