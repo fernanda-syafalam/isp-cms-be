@@ -7,7 +7,11 @@ import { CustomersRepository } from '../customers/customers.repository';
 import type { AddLedgerEntryInput } from './dto/add-ledger-entry.dto';
 import type { LedgerEntryResponse, ResellerResponse } from './dto/reseller-response.dto';
 import type { UpdateResellerInput } from './dto/update-reseller.dto';
-import { type ResellerListFilter, ResellersRepository } from './resellers.repository';
+import {
+  type LedgerListFilter,
+  type ResellerListFilter,
+  ResellersRepository,
+} from './resellers.repository';
 
 @Injectable()
 export class ResellersService {
@@ -40,9 +44,12 @@ export class ResellersService {
     return this.withCount(reseller);
   }
 
-  async listLedger(id: string): Promise<{ items: LedgerEntryResponse[]; total: number }> {
+  async listLedger(
+    id: string,
+    filter: LedgerListFilter,
+  ): Promise<{ items: LedgerEntryResponse[]; total: number }> {
     await this.requireById(id);
-    const { items, total } = await this.repo.listLedger(id);
+    const { items, total } = await this.repo.listLedger(id, filter);
     return { items: items.map(toLedgerEntryResponse), total };
   }
 
