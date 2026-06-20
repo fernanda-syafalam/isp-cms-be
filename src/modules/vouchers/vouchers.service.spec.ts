@@ -1,6 +1,7 @@
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Voucher } from '../../infrastructure/database/schema/vouchers.schema';
+import { CustomersRepository } from '../customers/customers.repository';
 import { VouchersRepository } from './vouchers.repository';
 import { VouchersService } from './vouchers.service';
 
@@ -14,6 +15,7 @@ const makeVoucher = (overrides: Partial<Voucher> = {}): Voucher => ({
   status: 'unused',
   usedAt: null,
   usedBy: null,
+  redeemedCustomerId: null,
   createdAt: new Date('2026-06-15T00:00:00.000Z'),
   updatedAt: new Date('2026-06-15T00:00:00.000Z'),
   ...overrides,
@@ -27,11 +29,21 @@ const defaultSummary = { total: 10, unused: 7, used: 2, revenue: 10_000 };
 describe('VouchersService', () => {
   let service: VouchersService;
   let repo: Record<string, ReturnType<typeof vi.fn>>;
+  let customers: {
+    findIdByFullName: ReturnType<typeof vi.fn>;
+    findById: ReturnType<typeof vi.fn>;
+    setBilling: ReturnType<typeof vi.fn>;
+  };
 
   beforeEach(async () => {
     repo = { list: vi.fn(), findById: vi.fn(), createBatch: vi.fn(), redeem: vi.fn() };
+    customers = { findIdByFullName: vi.fn(), findById: vi.fn(), setBilling: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
-      providers: [VouchersService, { provide: VouchersRepository, useValue: repo }],
+      providers: [
+        VouchersService,
+        { provide: VouchersRepository, useValue: repo },
+        { provide: CustomersRepository, useValue: customers },
+      ],
     }).compile();
     service = moduleRef.get(VouchersService);
   });
@@ -59,7 +71,7 @@ describe('VouchersService', () => {
     });
   });
 
-  it('redeems a voucher', async () => {
+  it('redeems a voucher anonymously (no customer) — status only', async () => {
     repo.redeem.mockResolvedValue({
       ...voucher,
       status: 'used',
@@ -67,10 +79,46 @@ describe('VouchersService', () => {
       usedBy: 'Admin (manual)',
     });
     const result = await service.redeem(voucher.id);
-    expect(repo.redeem).toHaveBeenCalledWith(voucher.id);
+    expect(repo.redeem).toHaveBeenCalledWith(voucher.id, {
+      redeemedCustomerId: null,
+      usedBy: null,
+    });
+    expect(customers.setBilling).not.toHaveBeenCalled();
     expect(result.status).toBe('used');
     expect(result.usedAt).toBe('2026-06-15T10:00:00.000Z');
     expect(result.usedBy).toBe('Admin (manual)');
+  });
+
+  // ADR-0010/0007: a loket sale to a subscriber credits their bill by the
+  // voucher's face value (floored at zero) and links the redemption to them.
+  it('credits the buyer when redeemed with a customerName', async () => {
+    customers.findIdByFullName.mockResolvedValue('cust-1');
+    repo.redeem.mockResolvedValue({
+      ...voucher,
+      status: 'used',
+      usedBy: 'Budi Santoso',
+      redeemedCustomerId: 'cust-1',
+    });
+    customers.findById.mockResolvedValue({ id: 'cust-1', outstanding: 12_000 });
+
+    await service.redeem(voucher.id, { customerName: 'Budi Santoso' });
+
+    expect(repo.redeem).toHaveBeenCalledWith(voucher.id, {
+      redeemedCustomerId: 'cust-1',
+      usedBy: 'Budi Santoso',
+    });
+    // priceIdr 5_000 off a 12_000 balance -> 7_000.
+    expect(customers.setBilling).toHaveBeenCalledWith('cust-1', { outstanding: 7_000 });
+  });
+
+  it('floors the outstanding at zero when the voucher exceeds the balance', async () => {
+    customers.findIdByFullName.mockResolvedValue('cust-1');
+    repo.redeem.mockResolvedValue({ ...voucher, status: 'used', redeemedCustomerId: 'cust-1' });
+    customers.findById.mockResolvedValue({ id: 'cust-1', outstanding: 2_000 });
+
+    await service.redeem(voucher.id, { customerName: 'Budi Santoso' });
+
+    expect(customers.setBilling).toHaveBeenCalledWith('cust-1', { outstanding: 0 });
   });
 
   // ---------------------------------------------------------------------------
