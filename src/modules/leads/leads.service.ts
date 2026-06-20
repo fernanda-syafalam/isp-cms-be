@@ -62,7 +62,7 @@ export class LeadsService {
       throw new BadRequestException('plan not found for lead');
     }
 
-    await this.customers.create({
+    const customer = await this.customers.create({
       fullName: lead.name,
       phone: lead.phone,
       address: lead.address,
@@ -71,7 +71,13 @@ export class LeadsService {
       // New subscriber starts at installation, not active.
       status: 'instalasi',
     });
-    await this.workOrders.scheduleInstall(lead.name);
+    // Link the install order to the new subscriber so completing it activates,
+    // provisions, and bills them. Passing only the name left customerId null
+    // and the activation cascade was silently skipped (ADR-0009).
+    await this.workOrders.scheduleInstall({
+      customerId: customer.id,
+      customerName: customer.fullName,
+    });
 
     const won = await this.repo.setStage(id, 'won');
     this.logger.log({ leadId: id }, 'lead converted');
