@@ -1,6 +1,7 @@
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CustomersRepository } from '../customers/customers.repository';
+import { SecretsRepository } from '../router-resources/secrets.repository';
 import { BillingAutomationService } from './billing-automation.service';
 import { InvoicesRepository } from './invoices.repository';
 import { InvoicesService } from './invoices.service';
@@ -14,6 +15,7 @@ describe('BillingAutomationService', () => {
     setBilling: ReturnType<typeof vi.fn>;
     findActiveBillable: ReturnType<typeof vi.fn>;
   };
+  let secrets: { setDisabledByCustomerId: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     invoicesService = { run: vi.fn() };
@@ -29,12 +31,14 @@ describe('BillingAutomationService', () => {
       existsForPeriod: vi.fn(),
     };
     customers = { findById: vi.fn(), setBilling: vi.fn(), findActiveBillable: vi.fn() };
+    secrets = { setDisabledByCustomerId: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         BillingAutomationService,
         { provide: InvoicesService, useValue: invoicesService },
         { provide: InvoicesRepository, useValue: repo },
         { provide: CustomersRepository, useValue: customers },
+        { provide: SecretsRepository, useValue: secrets },
       ],
     }).compile();
     service = moduleRef.get(BillingAutomationService);
@@ -58,6 +62,9 @@ describe('BillingAutomationService', () => {
         status: 'isolir',
         outstanding: 247_000,
       });
+      // ADR-0008: isolating a debtor disables their PPPoE secret on the router.
+      expect(secrets.setDisabledByCustomerId).toHaveBeenCalledTimes(1);
+      expect(secrets.setDisabledByCustomerId).toHaveBeenCalledWith('c1', true);
       expect(result).toEqual({ markedOverdue: 3, isolated: 1 });
     });
   });

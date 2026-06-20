@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { Invoice, Payment } from '../../infrastructure/database/schema/invoices.schema';
 import { CustomersRepository } from '../customers/customers.repository';
+import { SecretsRepository } from '../router-resources/secrets.repository';
 import type { BillingRunResult } from './dto/billing-run-result.dto';
 import type { InvoiceListResponse, InvoiceResponse } from './dto/invoice-response.dto';
 import type { PaymentResponse } from './dto/payment-response.dto';
@@ -26,6 +27,8 @@ export class InvoicesService {
     // Billing owns a customer's outstanding balance + payment-driven
     // reactivation, written through the customers repository seam.
     private readonly customers: CustomersRepository,
+    // Payment-driven reactivation must re-enable the PPPoE secret (ADR-0008).
+    private readonly secrets: SecretsRepository,
   ) {}
 
   async list(filter: InvoiceListFilter): Promise<InvoiceListResponse> {
@@ -153,6 +156,10 @@ export class InvoicesService {
       outstanding,
       ...(reactivate ? { status: 'aktif' as const } : {}),
     });
+    // Payment cleared the debt -> bring the PPPoE secret back online (ADR-0008).
+    if (reactivate) {
+      await this.secrets.setDisabledByCustomerId(customerId, false);
+    }
   }
 }
 

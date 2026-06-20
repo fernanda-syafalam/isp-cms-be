@@ -72,4 +72,20 @@ export class SecretsRepository {
       throw new NotFoundException('secret not found');
     }
   }
+
+  /**
+   * Network enforcement for the billing lifecycle (ADR-0008): flip the
+   * `disabled` flag on every PPPoE secret owned by a customer. Isolir/berhenti
+   * disables (cuts the PPPoE session); reactivation re-enables. Idempotent and
+   * a no-op (returns 0) while the customer has no secret provisioned yet
+   * (prospek/instalasi), so callers never need to guard on it.
+   */
+  async setDisabledByCustomerId(customerId: string, disabled: boolean): Promise<number> {
+    const rows = await this.db
+      .update(pppSecrets)
+      .set({ disabled, updatedAt: sql`now()` })
+      .where(eq(pppSecrets.customerId, customerId))
+      .returning({ id: pppSecrets.id });
+    return rows.length;
+  }
 }
