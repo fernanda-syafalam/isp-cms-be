@@ -90,8 +90,14 @@ export class InventoryService {
       kind: updated.kind,
       type: input.type,
       note,
+      // Link the movement to its driving work order when one is supplied
+      // (the install cascade passes it), so stock reconciles with the order.
+      workOrderId: input.workOrderId ?? null,
     });
-    this.logger.log({ itemId: id, type: input.type }, 'inventory moved');
+    this.logger.log(
+      { itemId: id, type: input.type, workOrderId: input.workOrderId },
+      'inventory moved',
+    );
     return toItemResponse(updated);
   }
 

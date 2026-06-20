@@ -63,7 +63,7 @@ export class WorkOrdersService {
       }
       const customer = await this.customers.findById(wo.customerId);
       if (customer) {
-        const onuSerial = await this.assignOnu(customer.fullName);
+        const onuSerial = await this.assignOnu(customer.fullName, wo.id);
         await this.customers.markInstalled(wo.customerId, buildConnection(customer, onuSerial));
         await this.provisionSecret(customer);
         await this.invoices.generateFirstInvoice(wo.customerId);
@@ -77,13 +77,15 @@ export class WorkOrdersService {
 
   // Hand the oldest warehouse ONU to the subscriber and return its serial,
   // or null when stock is dry (the connection then uses a synthetic serial).
-  private async assignOnu(customerName: string): Promise<string | null> {
+  // The work order id is recorded on the movement so stock consumption
+  // reconciles with the order (ADR-0003/0009).
+  private async assignOnu(customerName: string, workOrderId: string): Promise<string | null> {
     const onu = await this.inventory.findAvailableOnu();
     if (!onu) {
       this.logger.warn({ customerName }, 'no ONU in stock — using synthetic serial');
       return null;
     }
-    await this.inventory.move(onu.id, { type: 'assign', note: customerName });
+    await this.inventory.move(onu.id, { type: 'assign', note: customerName, workOrderId });
     return onu.serial;
   }
 
