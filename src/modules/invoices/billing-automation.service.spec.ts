@@ -1,6 +1,7 @@
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CustomersRepository } from '../customers/customers.repository';
+import { NotificationsService } from '../notifications/notifications.service';
 import { SecretsRepository } from '../router-resources/secrets.repository';
 import { BillingAutomationService } from './billing-automation.service';
 import { InvoicesRepository } from './invoices.repository';
@@ -16,6 +17,7 @@ describe('BillingAutomationService', () => {
     findActiveBillable: ReturnType<typeof vi.fn>;
   };
   let secrets: { setDisabledByCustomerId: ReturnType<typeof vi.fn> };
+  let notifications: { enqueue: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     invoicesService = { run: vi.fn() };
@@ -27,11 +29,16 @@ describe('BillingAutomationService', () => {
       markRemindedDueSoon: vi.fn(),
       markRemindedByIds: vi.fn(),
       customerIdsWithOverdue: vi.fn(),
+      customerIdsWithPendingDueSoon: vi.fn(),
       sumUnpaidByCustomer: vi.fn(),
       existsForPeriod: vi.fn(),
     };
     customers = { findById: vi.fn(), setBilling: vi.fn(), findActiveBillable: vi.fn() };
     secrets = { setDisabledByCustomerId: vi.fn() };
+    notifications = { enqueue: vi.fn() };
+    // Safe defaults so the dunning dispatch is a no-op unless a test opts in.
+    repo.customerIdsWithOverdue.mockResolvedValue([]);
+    repo.customerIdsWithPendingDueSoon.mockResolvedValue([]);
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         BillingAutomationService,
@@ -39,6 +46,7 @@ describe('BillingAutomationService', () => {
         { provide: InvoicesRepository, useValue: repo },
         { provide: CustomersRepository, useValue: customers },
         { provide: SecretsRepository, useValue: secrets },
+        { provide: NotificationsService, useValue: notifications },
       ],
     }).compile();
     service = moduleRef.get(BillingAutomationService);
@@ -76,6 +84,25 @@ describe('BillingAutomationService', () => {
       expect(repo.markRemindedByIds).toHaveBeenCalledWith(['a', 'b']);
       expect(repo.markRemindedOverdue).not.toHaveBeenCalled();
       expect(result).toEqual({ reminded: 2, channel: 'whatsapp' });
+    });
+
+    // ADR-0012: dunning must actually send — enqueue one WhatsApp per overdue
+    // debtor (idempotent per customer + event + month), skipping phoneless rows.
+    it('enqueues a WhatsApp dunning to each overdue debtor with a phone', async () => {
+      repo.markRemindedOverdue.mockResolvedValue(2);
+      repo.customerIdsWithOverdue.mockResolvedValue(['c1', 'c2']);
+      customers.findById.mockImplementation((id: string) =>
+        Promise.resolve(id === 'c1' ? { id, phone: '0812' } : { id, phone: null }),
+      );
+
+      await service.remind({});
+
+      // c1 has a phone -> enqueued; c2 has none -> skipped.
+      expect(notifications.enqueue).toHaveBeenCalledTimes(1);
+      expect(notifications.enqueue).toHaveBeenCalledWith(
+        { event: 'overdue', to: '0812' },
+        expect.stringMatching(/^dun:overdue:c1:/),
+      );
     });
 
     it('reminds all overdue when no ids given', async () => {
