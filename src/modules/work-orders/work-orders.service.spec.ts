@@ -98,10 +98,12 @@ describe('WorkOrdersService', () => {
 
       const result = await service.complete(installWo.id);
 
-      // ONU consumed from warehouse and assigned to the subscriber.
+      // ONU consumed from warehouse and assigned to the subscriber, with the
+      // movement linked back to this work order (ADR-0003/0009).
       expect(inventory.move).toHaveBeenCalledWith('onu-1', {
         type: 'assign',
         note: 'Budi Santoso',
+        workOrderId: installWo.id,
       });
       // Connection carries the real ONU serial (not the synthetic fallback).
       expect(customers.markInstalled).toHaveBeenCalledTimes(1);
