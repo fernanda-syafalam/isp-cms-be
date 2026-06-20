@@ -19,6 +19,11 @@ export const vouchers = pgTable(
     usedAt: timestamp('used_at', { withTimezone: true, precision: 3 }),
     // Free-text redeemer label (hotspot user, admin, ...).
     usedBy: varchar('used_by', { length: 120 }),
+    // Subscriber the voucher was redeemed against (loket sale to a customer);
+    // null for anonymous hotspot redemptions. Resolved in the service, so this
+    // is a denormalized link rather than a hard FK (matches the other
+    // service-resolved customer references).
+    redeemedCustomerId: uuid('redeemed_customer_id'),
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },

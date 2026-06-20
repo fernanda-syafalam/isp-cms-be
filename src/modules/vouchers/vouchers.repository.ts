@@ -110,16 +110,21 @@ export class VouchersRepository {
   }
 
   /**
-   * Mark a voucher redeemed. usedBy defaults to "Admin (manual)" only when
-   * not already set, so a hotspot-supplied identifier is preserved.
+   * Mark a voucher redeemed. When sold to a subscriber the caller passes the
+   * resolved customer id + label; otherwise usedBy defaults to "Admin (manual)"
+   * only when not already set, so a hotspot-supplied identifier is preserved.
    */
-  async redeem(id: string): Promise<Voucher> {
+  async redeem(
+    id: string,
+    opts: { redeemedCustomerId?: string | null; usedBy?: string | null } = {},
+  ): Promise<Voucher> {
     const [row] = await this.db
       .update(vouchers)
       .set({
         status: 'used',
         usedAt: sql`now()`,
-        usedBy: sql`coalesce(${vouchers.usedBy}, 'Admin (manual)')`,
+        usedBy: opts.usedBy ? opts.usedBy : sql`coalesce(${vouchers.usedBy}, 'Admin (manual)')`,
+        ...(opts.redeemedCustomerId ? { redeemedCustomerId: opts.redeemedCustomerId } : {}),
         updatedAt: sql`now()`,
       })
       .where(eq(vouchers.id, id))

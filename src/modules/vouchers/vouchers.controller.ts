@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { GenerateBatchDto } from './dto/generate-batch.dto';
+import { RedeemVoucherSchema } from './dto/redeem-voucher.dto';
 import { VoucherListResponseDto, VoucherResponseDto } from './dto/voucher-response.dto';
 import { VouchersService } from './vouchers.service';
 
@@ -35,11 +36,13 @@ export class VouchersController {
     return this.vouchers.generateBatch(body);
   }
 
+  // Optional body: { customerName } sells the voucher to a subscriber and
+  // credits their bill; no body is an anonymous hotspot redemption.
   @Roles('admin', 'staff')
   @Audit('voucher.redeem')
   @Post(':id/redeem')
   @ZodSerializerDto(VoucherResponseDto)
-  redeem(@Param('id') id: string) {
-    return this.vouchers.redeem(id);
+  redeem(@Param('id') id: string, @Body() body: unknown) {
+    return this.vouchers.redeem(id, RedeemVoucherSchema.parse(body ?? {}));
   }
 }
