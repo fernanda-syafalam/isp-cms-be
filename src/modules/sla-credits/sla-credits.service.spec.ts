@@ -31,12 +31,16 @@ const defaultSummary = {
 describe('SlaCreditsService', () => {
   let service: SlaCreditsService;
   let repo: Record<string, ReturnType<typeof vi.fn>>;
-  let customers: { findIdByFullName: ReturnType<typeof vi.fn> };
+  let customers: {
+    findIdByFullName: ReturnType<typeof vi.fn>;
+    findById: ReturnType<typeof vi.fn>;
+    setBilling: ReturnType<typeof vi.fn>;
+  };
   let tickets: { findIdByCode: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     repo = { list: vi.fn(), findById: vi.fn(), create: vi.fn(), apply: vi.fn(), void: vi.fn() };
-    customers = { findIdByFullName: vi.fn() };
+    customers = { findIdByFullName: vi.fn(), findById: vi.fn(), setBilling: vi.fn() };
     tickets = { findIdByCode: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
@@ -182,23 +186,45 @@ describe('SlaCreditsService', () => {
   });
 
   describe('apply', () => {
-    it('applies a pending credit', async () => {
+    it('applies a pending credit and reduces the customer outstanding', async () => {
       repo.findById.mockResolvedValue(credit);
       repo.apply.mockResolvedValue({
         ...credit,
         status: 'applied',
         appliedAt: new Date('2026-06-15T10:00:00.000Z'),
       });
+      // amount 50_000 off a 200_000 balance -> 150_000.
+      customers.findById.mockResolvedValue({ id: credit.customerId, outstanding: 200_000 });
       const result = await service.apply(credit.id);
       expect(repo.apply).toHaveBeenCalledWith(credit.id);
+      expect(customers.setBilling).toHaveBeenCalledWith(credit.customerId, {
+        outstanding: 150_000,
+      });
       expect(result.status).toBe('applied');
       expect(result.appliedAt).toBe('2026-06-15T10:00:00.000Z');
+    });
+
+    it('floors the outstanding at zero when the credit exceeds the balance', async () => {
+      repo.findById.mockResolvedValue(credit);
+      repo.apply.mockResolvedValue({ ...credit, status: 'applied' });
+      customers.findById.mockResolvedValue({ id: credit.customerId, outstanding: 20_000 });
+      await service.apply(credit.id);
+      expect(customers.setBilling).toHaveBeenCalledWith(credit.customerId, { outstanding: 0 });
+    });
+
+    it('only transitions state when the credit has no resolved customer', async () => {
+      repo.findById.mockResolvedValue({ ...credit, customerId: null });
+      repo.apply.mockResolvedValue({ ...credit, customerId: null, status: 'applied' });
+      await service.apply(credit.id);
+      expect(customers.findById).not.toHaveBeenCalled();
+      expect(customers.setBilling).not.toHaveBeenCalled();
     });
 
     it('is idempotent for an already-applied credit', async () => {
       repo.findById.mockResolvedValue({ ...credit, status: 'applied' });
       await service.apply(credit.id);
       expect(repo.apply).not.toHaveBeenCalled();
+      expect(customers.setBilling).not.toHaveBeenCalled();
     });
 
     it('rejects applying a void credit', async () => {
