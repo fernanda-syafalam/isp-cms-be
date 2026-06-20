@@ -1,4 +1,6 @@
+import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import type { Queue } from 'bullmq';
 import type {
   NewNotificationTemplate,
   NotificationLogEntry,
@@ -10,6 +12,7 @@ import type {
 } from './dto/notification-response.dto';
 import type { SendNotificationInput } from './dto/send-notification.dto';
 import type { UpdateTemplateInput } from './dto/update-template.dto';
+import { NOTIFICATIONS_QUEUE } from './notifications.constants';
 import { type LogListFilter, NotificationsRepository } from './notifications.repository';
 
 // Default templates, seeded on first read. Admins edit body/enabled after.
@@ -59,7 +62,13 @@ const SAMPLE_VARS: Record<string, string> = {
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
 
-  constructor(private readonly repo: NotificationsRepository) {}
+  constructor(
+    private readonly repo: NotificationsRepository,
+    // Producer side of the dunning queue. Enqueued sends are retried by the
+    // worker (NotificationsProcessor); the synchronous send() below is the
+    // delivery the worker performs.
+    @InjectQueue(NOTIFICATIONS_QUEUE) private readonly queue: Queue<SendNotificationInput>,
+  ) {}
 
   async listTemplates(): Promise<{ items: NotificationTemplateResponse[]; total: number }> {
     await this.repo.ensureSeeded(DEFAULT_TEMPLATES);
@@ -96,6 +105,15 @@ export class NotificationsService {
       status: 'sent',
     });
     this.logger.log({ event: input.event, to: input.to }, 'notification sent');
+  }
+
+  /**
+   * Producer: enqueue a notification for asynchronous, retried delivery
+   * (ADR-0012). `jobId` makes the enqueue idempotent so re-running a dunning
+   * cycle never double-sends; the worker calls send() to deliver.
+   */
+  async enqueue(input: SendNotificationInput, jobId: string): Promise<void> {
+    await this.queue.add('send', input, { jobId });
   }
 }
 

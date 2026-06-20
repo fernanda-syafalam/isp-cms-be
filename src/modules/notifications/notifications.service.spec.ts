@@ -1,7 +1,9 @@
+import { getQueueToken } from '@nestjs/bullmq';
 import { NotFoundException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NotificationTemplate } from '../../infrastructure/database/schema/notifications.schema';
+import { NOTIFICATIONS_QUEUE } from './notifications.constants';
 import { NotificationsRepository } from './notifications.repository';
 import { NotificationsService } from './notifications.service';
 
@@ -18,6 +20,7 @@ const template: NotificationTemplate = {
 describe('NotificationsService', () => {
   let service: NotificationsService;
   let repo: Record<string, ReturnType<typeof vi.fn>>;
+  let queue: { add: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     repo = {
@@ -28,8 +31,13 @@ describe('NotificationsService', () => {
       listLog: vi.fn(),
       addLog: vi.fn(),
     };
+    queue = { add: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
-      providers: [NotificationsService, { provide: NotificationsRepository, useValue: repo }],
+      providers: [
+        NotificationsService,
+        { provide: NotificationsRepository, useValue: repo },
+        { provide: getQueueToken(NOTIFICATIONS_QUEUE), useValue: queue },
+      ],
     }).compile();
     service = moduleRef.get(NotificationsService);
   });
@@ -69,6 +77,19 @@ describe('NotificationsService', () => {
         NotFoundException,
       );
       expect(repo.addLog).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('enqueue', () => {
+    // ADR-0012: producer side — add a job keyed by the idempotency id so a
+    // re-run of the dunning cycle cannot double-send.
+    it('adds a send job to the queue with the idempotency jobId', async () => {
+      await service.enqueue({ event: 'overdue', to: '0812' }, 'dun:overdue:c1:2026-06-01');
+      expect(queue.add).toHaveBeenCalledWith(
+        'send',
+        { event: 'overdue', to: '0812' },
+        { jobId: 'dun:overdue:c1:2026-06-01' },
+      );
     });
   });
 
