@@ -77,7 +77,7 @@ describe('LeadsService', () => {
     it('creates a subscriber + install and marks the lead won', async () => {
       repo.findById.mockResolvedValue(baseLead);
       plans.findByName.mockResolvedValue({ id: 'plan-1', name: 'Home 20' });
-      customers.create.mockResolvedValue({ id: 'cust-1' });
+      customers.create.mockResolvedValue({ id: 'cust-1', fullName: 'Citra Lestari' });
       workOrders.scheduleInstall.mockResolvedValue({ code: 'WO-9001' });
       repo.setStage.mockResolvedValue({ ...baseLead, stage: 'won' });
 
@@ -91,7 +91,12 @@ describe('LeadsService', () => {
           status: 'instalasi',
         }),
       );
-      expect(workOrders.scheduleInstall).toHaveBeenCalledWith('Citra Lestari');
+      // ADR-0009: the install order must be LINKED to the new subscriber so
+      // completing it activates + provisions + bills them.
+      expect(workOrders.scheduleInstall).toHaveBeenCalledWith({
+        customerId: 'cust-1',
+        customerName: 'Citra Lestari',
+      });
       expect(repo.setStage).toHaveBeenCalledWith(baseLead.id, 'won');
       expect(result.stage).toBe('won');
     });

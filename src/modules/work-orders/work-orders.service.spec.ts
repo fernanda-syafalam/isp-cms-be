@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkOrder } from '../../infrastructure/database/schema/work-orders.schema';
@@ -204,6 +204,14 @@ describe('WorkOrdersService', () => {
     it('throws 404 for a missing order', async () => {
       repo.findById.mockResolvedValue(null);
       await expect(service.complete('missing')).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    // ADR-0009: an install order with no subscriber must fail loud rather than
+    // silently skip the activation cascade (the old lead-convert break).
+    it('rejects completing an install order with no linked customer', async () => {
+      repo.findById.mockResolvedValue({ ...installWo, customerId: null });
+      await expect(service.complete(installWo.id)).rejects.toBeInstanceOf(BadRequestException);
+      expect(repo.markDone).not.toHaveBeenCalled();
     });
   });
 
