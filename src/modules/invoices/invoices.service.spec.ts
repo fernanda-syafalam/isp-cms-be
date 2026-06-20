@@ -3,6 +3,7 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Invoice } from '../../infrastructure/database/schema/invoices.schema';
 import { CustomersRepository } from '../customers/customers.repository';
+import { SecretsRepository } from '../router-resources/secrets.repository';
 import { InvoicesRepository } from './invoices.repository';
 import { InvoicesService } from './invoices.service';
 
@@ -39,6 +40,7 @@ describe('InvoicesService', () => {
   let service: InvoicesService;
   let repo: Record<string, ReturnType<typeof vi.fn>>;
   let customers: Record<string, ReturnType<typeof vi.fn>>;
+  let secrets: { setDisabledByCustomerId: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     repo = {
@@ -57,11 +59,13 @@ describe('InvoicesService', () => {
       setBilling: vi.fn(),
       findById: vi.fn(),
     };
+    secrets = { setDisabledByCustomerId: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         InvoicesService,
         { provide: InvoicesRepository, useValue: repo },
         { provide: CustomersRepository, useValue: customers },
+        { provide: SecretsRepository, useValue: secrets },
       ],
     }).compile();
     service = moduleRef.get(InvoicesService);
@@ -210,6 +214,8 @@ describe('InvoicesService', () => {
         outstanding: 0,
         status: 'aktif',
       });
+      // ADR-0008: reactivation re-enables the PPPoE secret on the router.
+      expect(secrets.setDisabledByCustomerId).toHaveBeenCalledWith(CUSTOMER_ID, false);
       expect(result.status).toBe('paid');
       expect(result.paidAt).toBe('2026-06-15T10:00:00.000Z');
     });
@@ -232,6 +238,8 @@ describe('InvoicesService', () => {
       expect(customers.setBilling).toHaveBeenCalledWith(CUSTOMER_ID, {
         outstanding: 50_000,
       });
+      // Still in debt -> no reactivation, so the secret is left untouched.
+      expect(secrets.setDisabledByCustomerId).not.toHaveBeenCalled();
     });
 
     it('is a no-op for an already-paid invoice (no duplicate ledger entry)', async () => {

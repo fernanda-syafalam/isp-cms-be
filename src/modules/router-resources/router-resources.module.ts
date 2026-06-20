@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { CustomersModule } from '../customers/customers.module';
 import { RoutersModule } from '../routers/routers.module';
 import { PoolsController } from './pools.controller';
@@ -18,8 +18,10 @@ import { SessionsService } from './sessions.service';
 
 @Module({
   // RoutersModule for router existence + secretCount maintenance;
-  // CustomersModule to resolve a secret's customer by name.
-  imports: [RoutersModule, CustomersModule],
+  // CustomersModule to resolve a secret's customer by name. CustomersModule
+  // imports this module back (lifecycle isolir enforcement, ADR-0008), so the
+  // edge uses forwardRef to break the module-import cycle.
+  imports: [RoutersModule, forwardRef(() => CustomersModule)],
   controllers: [
     ProfilesController,
     SecretsController,
