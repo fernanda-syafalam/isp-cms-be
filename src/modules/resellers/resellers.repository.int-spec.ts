@@ -342,36 +342,30 @@ describe('ResellersRepository (integration)', () => {
       const r = await seed({ balance: 0 });
       // Insert with explicit at timestamps to guarantee order
       const base = new Date('2026-01-01T00:00:00Z');
-      await db
-        .insert(resellerLedger)
-        .values({
-          resellerId: r.id,
-          type: 'topup',
-          amount: 1,
-          note: 'oldest',
-          balanceAfter: 1,
-          at: new Date(base.getTime()),
-        });
-      await db
-        .insert(resellerLedger)
-        .values({
-          resellerId: r.id,
-          type: 'topup',
-          amount: 2,
-          note: 'middle',
-          balanceAfter: 2,
-          at: new Date(base.getTime() + 1000),
-        });
-      await db
-        .insert(resellerLedger)
-        .values({
-          resellerId: r.id,
-          type: 'topup',
-          amount: 3,
-          note: 'newest',
-          balanceAfter: 3,
-          at: new Date(base.getTime() + 2000),
-        });
+      await db.insert(resellerLedger).values({
+        resellerId: r.id,
+        type: 'topup',
+        amount: 1,
+        note: 'oldest',
+        balanceAfter: 1,
+        at: new Date(base.getTime()),
+      });
+      await db.insert(resellerLedger).values({
+        resellerId: r.id,
+        type: 'topup',
+        amount: 2,
+        note: 'middle',
+        balanceAfter: 2,
+        at: new Date(base.getTime() + 1000),
+      });
+      await db.insert(resellerLedger).values({
+        resellerId: r.id,
+        type: 'topup',
+        amount: 3,
+        note: 'newest',
+        balanceAfter: 3,
+        at: new Date(base.getTime() + 2000),
+      });
 
       const result = await repo.listLedger(r.id, {
         sort: 'at',
@@ -385,26 +379,22 @@ describe('ResellersRepository (integration)', () => {
     it('unknown sort key falls back to at desc without throwing', async () => {
       const r = await seed({ balance: 0 });
       const base = new Date('2026-01-01T00:00:00Z');
-      await db
-        .insert(resellerLedger)
-        .values({
-          resellerId: r.id,
-          type: 'topup',
-          amount: 1,
-          note: 'oldest',
-          balanceAfter: 1,
-          at: new Date(base.getTime()),
-        });
-      await db
-        .insert(resellerLedger)
-        .values({
-          resellerId: r.id,
-          type: 'topup',
-          amount: 2,
-          note: 'newest',
-          balanceAfter: 2,
-          at: new Date(base.getTime() + 1000),
-        });
+      await db.insert(resellerLedger).values({
+        resellerId: r.id,
+        type: 'topup',
+        amount: 1,
+        note: 'oldest',
+        balanceAfter: 1,
+        at: new Date(base.getTime()),
+      });
+      await db.insert(resellerLedger).values({
+        resellerId: r.id,
+        type: 'topup',
+        amount: 2,
+        note: 'newest',
+        balanceAfter: 2,
+        at: new Date(base.getTime() + 1000),
+      });
 
       const result = await repo.listLedger(r.id, {
         sort: 'notAColumn',
@@ -432,36 +422,30 @@ describe('ResellersRepository (integration)', () => {
     it('offset skips rows while total stays the full count', async () => {
       const r = await seed({ balance: 0 });
       const base = new Date('2026-01-01T00:00:00Z');
-      await db
-        .insert(resellerLedger)
-        .values({
-          resellerId: r.id,
-          type: 'topup',
-          amount: 1,
-          note: 'first',
-          balanceAfter: 1,
-          at: new Date(base.getTime() + 2000),
-        });
-      await db
-        .insert(resellerLedger)
-        .values({
-          resellerId: r.id,
-          type: 'topup',
-          amount: 2,
-          note: 'second',
-          balanceAfter: 2,
-          at: new Date(base.getTime() + 1000),
-        });
-      await db
-        .insert(resellerLedger)
-        .values({
-          resellerId: r.id,
-          type: 'topup',
-          amount: 3,
-          note: 'third',
-          balanceAfter: 3,
-          at: new Date(base.getTime()),
-        });
+      await db.insert(resellerLedger).values({
+        resellerId: r.id,
+        type: 'topup',
+        amount: 1,
+        note: 'first',
+        balanceAfter: 1,
+        at: new Date(base.getTime() + 2000),
+      });
+      await db.insert(resellerLedger).values({
+        resellerId: r.id,
+        type: 'topup',
+        amount: 2,
+        note: 'second',
+        balanceAfter: 2,
+        at: new Date(base.getTime() + 1000),
+      });
+      await db.insert(resellerLedger).values({
+        resellerId: r.id,
+        type: 'topup',
+        amount: 3,
+        note: 'third',
+        balanceAfter: 3,
+        at: new Date(base.getTime()),
+      });
 
       // Default at desc: first, second, third → offset=1 skips "first"
       const result = await repo.listLedger(r.id, { limit: 50, offset: 1 });
