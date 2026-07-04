@@ -169,16 +169,16 @@ export class CustomersController {
   @Audit('customer.onu_reboot')
   @Post(':id/onu/reboot')
   @ZodSerializerDto(CustomerResponseDto)
-  rebootOnu(@Param('id') id: string) {
-    return this.customers.rebootOnu(id);
+  rebootOnu(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.customers.rebootOnu(id, user);
   }
 
   @Roles('admin', 'staff', 'teknisi')
   @Audit('customer.onu_wifi')
   @Post(':id/onu/wifi')
   @ZodSerializerDto(CustomerResponseDto)
-  setOnuWifi(@Param('id') id: string, @Body() body: SetOnuWifiDto) {
-    return this.customers.setOnuWifi(id, body);
+  setOnuWifi(@Param('id') id: string, @Body() body: SetOnuWifiDto, @CurrentUser() user: AuthUser) {
+    return this.customers.setOnuWifi(id, body, user);
   }
 
   @Roles('admin', 'staff')

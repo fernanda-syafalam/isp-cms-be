@@ -35,7 +35,9 @@ export function buildOrderBy(
     return defaultOrder;
   }
 
-  const column = whitelist[sortKey];
+  // Object.hasOwn: '?sort=__proto__' / 'constructor' must fall back to
+  // the default order, not resolve a prototype member (P1 review L4).
+  const column = Object.hasOwn(whitelist, sortKey) ? whitelist[sortKey] : undefined;
   if (!column) {
     return defaultOrder;
   }

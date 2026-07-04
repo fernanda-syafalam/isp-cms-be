@@ -174,17 +174,21 @@ export class CustomersService {
   }
 
   /** Reboot the customer's ONU — acknowledgment only (GenieACS owns the device). */
-  async rebootOnu(id: string): Promise<CustomerResponse> {
+  async rebootOnu(id: string, user?: AuthUser): Promise<CustomerResponse> {
     const row = await this.requireById(id);
     this.logger.log({ customerId: id }, 'onu reboot requested');
-    return toCustomerResponse(row);
+    return toActionResponse(row, user);
   }
 
   /** Set the ONU WiFi — acknowledgment only (credentials not persisted here). */
-  async setOnuWifi(id: string, _input: SetOnuWifiInput): Promise<CustomerResponse> {
+  async setOnuWifi(
+    id: string,
+    _input: SetOnuWifiInput,
+    user?: AuthUser,
+  ): Promise<CustomerResponse> {
     const row = await this.requireById(id);
     this.logger.log({ customerId: id }, 'onu wifi set');
-    return toCustomerResponse(row);
+    return toActionResponse(row, user);
   }
 
   /** Fire a WhatsApp billing reminder to the customer. */
@@ -268,6 +272,19 @@ function scopeForUser(filter: CustomerListFilter, user?: AuthUser): CustomerList
   if (!user || user.role !== 'mitra') return filter;
   if (!user.resellerId) return null;
   return { ...filter, resellerId: user.resellerId };
+}
+
+/**
+ * Action acknowledgment shape for field (teknisi) callers: same contract
+ * as CustomerResponse, but the identity/billing fields a field tech has
+ * no business reading (KTP/NPWP/outstanding) are nulled — otherwise the
+ * ONU endpoints double as a bulk PII harvest by id iteration (P1 security
+ * review M1). Staff/admin get the full row.
+ */
+function toActionResponse(row: CustomerRow, user?: AuthUser): CustomerResponse {
+  const full = toCustomerResponse(row);
+  if (!user || user.role !== 'teknisi') return full;
+  return { ...full, ktp: null, npwp: null, outstanding: 0 };
 }
 
 function toCustomerResponse(row: CustomerRow): CustomerResponse {
