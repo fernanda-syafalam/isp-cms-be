@@ -217,4 +217,24 @@ describe('TicketsRepository (integration)', () => {
       breached: 1,
     });
   });
+
+  it('markBreachedPastSla breaches only overdue open/in-progress tickets', async () => {
+    const now = new Date('2026-06-20T00:00:00.000Z');
+    const past = new Date('2026-06-19T00:00:00.000Z');
+    const future = new Date('2026-06-21T00:00:00.000Z');
+
+    const overdueOpen = await repo.create(newTicket({ status: 'open', slaDueAt: past }));
+    const overdueInProgress = await repo.create(
+      newTicket({ status: 'in_progress', slaDueAt: past }),
+    );
+    const withinSla = await repo.create(newTicket({ status: 'open', slaDueAt: future }));
+    // Already resolved past its SLA — not re-touched by the scan.
+    const resolvedLate = await repo.create(newTicket({ status: 'resolved', slaDueAt: past }));
+
+    const breached = await repo.markBreachedPastSla(now);
+
+    expect(breached.map((t) => t.id).sort()).toEqual([overdueOpen.id, overdueInProgress.id].sort());
+    expect((await repo.findById(withinSla.id))?.status).toBe('open');
+    expect((await repo.findById(resolvedLate.id))?.status).toBe('resolved');
+  });
 });

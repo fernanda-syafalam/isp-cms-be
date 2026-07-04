@@ -119,6 +119,27 @@ export class TicketsService {
     return toTicketResponse(updated);
   }
 
+  /**
+   * SLA breach scan (P2.1, every 15 min). Transitions open/in-progress
+   * tickets past their deadline to `breached` and records a status event
+   * per ticket as the escalation trail. Returns how many breached.
+   */
+  async scanSla(): Promise<{ breached: number }> {
+    const breached = await this.repo.markBreachedPastSla(new Date());
+    for (const ticket of breached) {
+      await this.repo.addEvent({
+        ticketId: ticket.id,
+        kind: 'status',
+        author: 'Sistem',
+        body: 'SLA terlampaui → breached',
+      });
+    }
+    if (breached.length > 0) {
+      this.logger.log({ breached: breached.length }, 'sla scan marked breached');
+    }
+    return { breached: breached.length };
+  }
+
   async addComment(id: string, input: AddCommentInput, author: string): Promise<void> {
     const ticket = await this.repo.findById(id);
     if (!ticket) throw new NotFoundException('ticket not found');

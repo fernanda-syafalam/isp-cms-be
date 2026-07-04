@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { and, asc, count, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ilike, inArray, isNotNull, lt, or, sql } from 'drizzle-orm';
 import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
@@ -143,6 +143,25 @@ export class TicketsRepository {
       result[row.status] = row.value;
     }
     return result;
+  }
+
+  /**
+   * Mark every open/in-progress ticket past its SLA deadline as `breached`
+   * and return the rows transitioned. Used by the SLA scan (P2.1) so a
+   * breach is detected on the clock, not only when someone resolves late.
+   */
+  async markBreachedPastSla(now: Date): Promise<Ticket[]> {
+    return this.db
+      .update(tickets)
+      .set({ status: 'breached', updatedAt: sql`now()` })
+      .where(
+        and(
+          inArray(tickets.status, ['open', 'in_progress']),
+          lt(tickets.slaDueAt, now),
+          isNotNull(tickets.slaDueAt),
+        ),
+      )
+      .returning();
   }
 
   // --- Timeline -------------------------------------------------------
