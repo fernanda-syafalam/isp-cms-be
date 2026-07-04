@@ -16,7 +16,7 @@ const ListQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
-@Roles('admin', 'staff')
+@Roles('admin', 'staff', 'teknisi')
 @Controller({ path: 'routers', version: '1' })
 export class RoutersController {
   constructor(private readonly routers: RoutersService) {}

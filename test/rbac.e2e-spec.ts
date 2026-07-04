@@ -10,6 +10,7 @@ import type { User } from '../src/infrastructure/database/schema/users.schema';
 import { RedisService } from '../src/infrastructure/redis/redis.service';
 import { CustomersRepository } from '../src/modules/customers/customers.repository';
 import { UsersRepository } from '../src/modules/users/users.repository';
+import { WorkOrdersRepository } from '../src/modules/work-orders/work-orders.repository';
 
 /**
  * Regression coverage for P0.2: the staff read surface is class-gated with
@@ -49,6 +50,10 @@ describe('Staff read-surface gate (e2e)', () => {
     findByEmail: vi.fn(async () => null),
   };
 
+  const fakeWorkOrdersRepo = {
+    list: vi.fn(async () => ({ items: [], total: 0 })),
+  };
+
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
@@ -76,6 +81,8 @@ describe('Staff read-surface gate (e2e)', () => {
       .useValue(fakeUsersRepo)
       .overrideProvider(CustomersRepository)
       .useValue(fakeCustomersRepo)
+      .overrideProvider(WorkOrdersRepository)
+      .useValue(fakeWorkOrdersRepo)
       .compile();
 
     app = moduleFixture.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
@@ -142,6 +149,40 @@ describe('Staff read-surface gate (e2e)', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ items: [], total: 0 });
+  });
+
+  // P1.2: teknisi is authorized for exactly its journey (network + tickets),
+  // and nothing else.
+  it('serves teknisi on its journey surface (work-orders list)', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/work-orders',
+      headers: { authorization: `Bearer ${await tokenFor('teknisi')}` },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('keeps teknisi out of the staff-only surface', async () => {
+    const token = await tokenFor('teknisi');
+    for (const url of ['/v1/customers', '/v1/invoices', '/v1/users', '/v1/resellers']) {
+      const res = await app.inject({
+        method: 'GET',
+        url,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect({ url, status: res.statusCode }).toEqual({ url, status: 403 });
+    }
+  });
+
+  it('keeps ticket creation staff-only while teknisi can read tickets', async () => {
+    const token = await tokenFor('teknisi');
+    const create = await app.inject({
+      method: 'POST',
+      url: '/v1/tickets',
+      payload: { subject: 'x', customerName: 'y' },
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    });
+    expect(create.statusCode).toBe(403);
   });
 
   it('keeps the customer portal reachable for the customer role', async () => {

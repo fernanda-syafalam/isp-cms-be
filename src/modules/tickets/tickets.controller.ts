@@ -30,7 +30,7 @@ const ListQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
-@Roles('admin', 'staff')
+@Roles('admin', 'staff', 'teknisi')
 @Controller({ path: 'tickets', version: '1' })
 export class TicketsController {
   constructor(private readonly tickets: TicketsService) {}
@@ -60,7 +60,7 @@ export class TicketsController {
     return this.tickets.create(body, user.fullName);
   }
 
-  @Roles('admin', 'staff')
+  @Roles('admin', 'staff', 'teknisi')
   @Audit('ticket.update')
   @Patch(':id')
   @ZodSerializerDto(TicketResponseDto)
@@ -68,7 +68,7 @@ export class TicketsController {
     return this.tickets.update(id, body, user.fullName);
   }
 
-  @Roles('admin', 'staff')
+  @Roles('admin', 'staff', 'teknisi')
   @Audit('ticket.comment')
   @Post(':id/comments')
   @HttpCode(HttpStatus.CREATED)
@@ -81,7 +81,7 @@ export class TicketsController {
   }
 
   // Dispatch a repair work order from this ticket.
-  @Roles('admin', 'staff')
+  @Roles('admin', 'staff', 'teknisi')
   @Audit('ticket.work_order')
   @Post(':id/work-order')
   @HttpCode(HttpStatus.CREATED)

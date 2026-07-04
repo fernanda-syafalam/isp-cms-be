@@ -13,7 +13,7 @@ const ListQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
-@Roles('admin', 'staff')
+@Roles('admin', 'staff', 'teknisi')
 @Controller({ path: 'acs', version: '1' })
 export class AcsController {
   constructor(private readonly acs: AcsService) {}
@@ -24,7 +24,7 @@ export class AcsController {
   }
 
   // One endpoint for reboot / firmware / wifi across many devices.
-  @Roles('admin', 'staff')
+  @Roles('admin', 'staff', 'teknisi')
   @Audit('acs.bulk')
   @Post('bulk')
   @HttpCode(HttpStatus.OK)
