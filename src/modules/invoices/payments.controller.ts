@@ -1,5 +1,6 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { z } from 'zod';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { InvoicesService } from './invoices.service';
 
 const ListQuerySchema = z.object({
@@ -12,6 +13,7 @@ const ListQuerySchema = z.object({
 
 // The recorded-payments ledger. Read-only here; payments are created as a
 // side effect of settling an invoice.
+@Roles('admin', 'staff')
 @Controller({ path: 'payments', version: '1' })
 export class PaymentsController {
   constructor(private readonly invoices: InvoicesService) {}

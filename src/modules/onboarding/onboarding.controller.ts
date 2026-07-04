@@ -10,6 +10,7 @@ import { OnboardingService } from './onboarding.service';
  * Subscriber onboarding wizard endpoint. Creates the customer + install work
  * order in a single call and returns the new customer.
  */
+@Roles('admin', 'staff')
 @Controller({ path: 'onboarding', version: '1' })
 export class OnboardingController {
   constructor(private readonly onboarding: OnboardingService) {}

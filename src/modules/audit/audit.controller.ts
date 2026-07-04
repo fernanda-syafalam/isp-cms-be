@@ -16,6 +16,7 @@ const ListQuerySchema = z.object({
  * Read-only audit trail. Gated to admin/staff — the mutation history is an
  * operations concern and must not be exposed to customer-role accounts.
  */
+@Roles('admin', 'staff')
 @Controller({ path: 'audit', version: '1' })
 export class AuditController {
   constructor(private readonly audit: AuditService) {}

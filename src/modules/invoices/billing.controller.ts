@@ -14,6 +14,7 @@ import { BillingRunResultDto } from './dto/billing-run-result.dto';
 import { InvoicesService } from './invoices.service';
 
 // Billing automation: generation + dunning + auto-isolir + scheduler.
+@Roles('admin', 'staff')
 @Controller({ path: 'billing', version: '1' })
 export class BillingController {
   constructor(

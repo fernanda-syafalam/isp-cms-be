@@ -36,6 +36,7 @@ function toUserResponse<T extends { passwordHash: string; deletedAt: Date | null
   return rest;
 }
 
+@Roles('admin', 'staff')
 @Controller({ path: 'users', version: '1' })
 export class UsersController {
   constructor(private readonly users: UsersService) {}

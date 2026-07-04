@@ -24,6 +24,7 @@ const AlertsQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
+@Roles('admin', 'staff')
 @Controller({ path: 'monitoring', version: '1' })
 export class MonitoringController {
   constructor(private readonly monitoring: MonitoringService) {}
