@@ -30,7 +30,7 @@ const ListQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
-@Roles('admin', 'staff')
+@Roles('admin', 'staff', 'teknisi')
 @Controller({ path: 'routers/:routerId/secrets', version: '1' })
 export class SecretsController {
   constructor(private readonly secrets: SecretsService) {}
@@ -41,7 +41,7 @@ export class SecretsController {
     return this.secrets.list(routerId, ListQuerySchema.parse(query));
   }
 
-  @Roles('admin', 'staff')
+  @Roles('admin', 'staff', 'teknisi')
   @Audit('router.secret_create')
   @Post()
   @ZodSerializerDto(SecretResponseDto)
@@ -49,7 +49,7 @@ export class SecretsController {
     return this.secrets.create(routerId, body);
   }
 
-  @Roles('admin', 'staff')
+  @Roles('admin', 'staff', 'teknisi')
   @Audit('router.secret_update')
   @Patch(':sid')
   @ZodSerializerDto(SecretResponseDto)

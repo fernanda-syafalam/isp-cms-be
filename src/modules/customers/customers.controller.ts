@@ -162,7 +162,7 @@ export class CustomersController {
     return this.customers.changePlan(id, body);
   }
 
-  @Roles('admin', 'staff')
+  @Roles('admin', 'staff', 'teknisi')
   @Audit('customer.onu_reboot')
   @Post(':id/onu/reboot')
   @ZodSerializerDto(CustomerResponseDto)
@@ -170,7 +170,7 @@ export class CustomersController {
     return this.customers.rebootOnu(id);
   }
 
-  @Roles('admin', 'staff')
+  @Roles('admin', 'staff', 'teknisi')
   @Audit('customer.onu_wifi')
   @Post(':id/onu/wifi')
   @ZodSerializerDto(CustomerResponseDto)

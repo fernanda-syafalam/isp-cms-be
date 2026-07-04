@@ -24,7 +24,7 @@ import { TopologyService } from './topology.service';
  * authenticated user; mutations (node form + customer-drop install + cable
  * re-route) are gated to admin/staff and audited.
  */
-@Roles('admin', 'staff')
+@Roles('admin', 'staff', 'teknisi')
 @Controller({ version: '1' })
 export class TopologyController {
   constructor(
@@ -69,7 +69,7 @@ export class TopologyController {
 
   // ---- Mutations (admin/staff, audited) ------------------------------------
 
-  @Roles('admin', 'staff')
+  @Roles('admin', 'staff', 'teknisi')
   @Audit('topology.create')
   @Post('topology')
   @HttpCode(HttpStatus.CREATED)
@@ -77,7 +77,7 @@ export class TopologyController {
     return this.mutation.createNode(body);
   }
 
-  @Roles('admin', 'staff')
+  @Roles('admin', 'staff', 'teknisi')
   @Audit('topology.install')
   @Post('topology/customer-drop')
   @HttpCode(HttpStatus.CREATED)
@@ -85,14 +85,14 @@ export class TopologyController {
     return this.mutation.customerDrop(body);
   }
 
-  @Roles('admin', 'staff')
+  @Roles('admin', 'staff', 'teknisi')
   @Audit('topology.update')
   @Patch('topology/:id')
   updateNode(@Param('id') id: string, @Body() body: UpdateNodeDto) {
     return this.mutation.updateNode(id, body);
   }
 
-  @Roles('admin', 'staff')
+  @Roles('admin', 'staff', 'teknisi')
   @Audit('topology.delete')
   @Delete('topology/:id')
   @HttpCode(HttpStatus.NO_CONTENT)
@@ -100,7 +100,7 @@ export class TopologyController {
     return this.mutation.deleteNode(id);
   }
 
-  @Roles('admin', 'staff')
+  @Roles('admin', 'staff', 'teknisi')
   @Audit('topology.cable.update')
   @Patch('cables/:id')
   updateCableRoute(@Param('id') id: string, @Body() body: UpdateCableRouteDto) {

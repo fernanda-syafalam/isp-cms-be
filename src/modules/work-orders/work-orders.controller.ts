@@ -16,7 +16,7 @@ const ListQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
-@Roles('admin', 'staff')
+@Roles('admin', 'staff', 'teknisi')
 @Controller({ path: 'work-orders', version: '1' })
 export class WorkOrdersController {
   constructor(private readonly workOrders: WorkOrdersService) {}
@@ -28,7 +28,7 @@ export class WorkOrdersController {
 
   // Complete an order. For installs this runs the activation cascade
   // (customer + connection + first invoice). Idempotent.
-  @Roles('admin', 'staff')
+  @Roles('admin', 'staff', 'teknisi')
   @Audit('work_order.complete')
   @Post(':id/complete')
   @ZodSerializerDto(WorkOrderResponseDto)
