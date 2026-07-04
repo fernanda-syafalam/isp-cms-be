@@ -28,6 +28,7 @@ describe('Staff read-surface gate (e2e)', () => {
     fullName: 'Actor',
     passwordHash: 'irrelevant',
     role: 'customer',
+    resellerId: null,
     createdAt: new Date('2026-01-01T00:00:00Z'),
     updatedAt: new Date('2026-01-01T00:00:00Z'),
     deletedAt: null,

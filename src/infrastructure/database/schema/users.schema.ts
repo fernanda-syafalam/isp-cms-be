@@ -1,6 +1,9 @@
 import { index, pgEnum, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import { resellers } from './resellers.schema';
 
-export const userRole = pgEnum('user_role', ['admin', 'staff', 'customer']);
+// The five real roles (ADR-0005). teknisi/mitra added in P1.1 — the FE
+// permission matrix already models them; the BE enum was the laggard.
+export const userRole = pgEnum('user_role', ['admin', 'staff', 'customer', 'teknisi', 'mitra']);
 
 export const users = pgTable(
   'users',
@@ -10,6 +13,9 @@ export const users = pgTable(
     fullName: varchar('full_name', { length: 120 }).notNull(),
     passwordHash: varchar('password_hash', { length: 255 }).notNull(),
     role: userRole('role').notNull().default('customer'),
+    // A mitra principal is scoped to one reseller (ADR-0010): server-side
+    // reads filter to this id. Null for every other role.
+    resellerId: uuid('reseller_id').references(() => resellers.id),
     // Millisecond precision matches what JS Date / cursor encoding can
     // represent, so cursor pagination predicates (lt(createdAt) etc.)
     // never miss rows whose stored microseconds differ from the

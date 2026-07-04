@@ -46,6 +46,10 @@ const CANONICAL_USERS: SeedUser[] = [
     fullName: 'Cara Customer',
     role: 'customer',
   },
+  { email: 'teknisi@example.com', fullName: 'Tono Teknisi', role: 'teknisi' },
+  // The mitra account is seeded without a resellerId — link it manually (or
+  // via the users UI) once a reseller row exists; scoped reads land in P1.5.
+  { email: 'mitra@example.com', fullName: 'Mira Mitra', role: 'mitra' },
 ];
 
 // Extra customers so the list spans more than one page (FE page size is 10).

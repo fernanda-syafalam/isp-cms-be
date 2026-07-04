@@ -10,7 +10,7 @@ export const CreateUserSchema = z
     email: z.email().max(255),
     fullName: z.string().trim().min(1).max(120),
     password: z.string().min(12).max(128),
-    role: z.enum(['admin', 'staff', 'customer']).default('customer'),
+    role: z.enum(['admin', 'staff', 'customer', 'teknisi', 'mitra']).default('customer'),
   })
   .strict();
 

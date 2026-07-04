@@ -11,7 +11,7 @@ import { z } from 'zod';
 export const UpdateUserSchema = z
   .object({
     fullName: z.string().trim().min(1).max(120).optional(),
-    role: z.enum(['admin', 'staff', 'customer']).optional(),
+    role: z.enum(['admin', 'staff', 'customer', 'teknisi', 'mitra']).optional(),
   })
   .strict();
 
