@@ -38,7 +38,7 @@ describe('Usage seam — CustomersRepository.findForUsage (integration)', () => 
       CREATE TABLE customers (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         customer_no varchar(32) NOT NULL UNIQUE DEFAULT ('CUST-' || nextval('customer_no_seq')),
-        full_name varchar(120) NOT NULL, phone varchar(20) NOT NULL, email varchar(255),
+        full_name varchar(120) NOT NULL, phone varchar(20) NOT NULL, email varchar(255), user_id uuid UNIQUE,
         address varchar(255) NOT NULL, area_id uuid, area_name varchar(120),
         plan_id uuid NOT NULL REFERENCES plans(id), status customer_status NOT NULL DEFAULT 'prospek',
         outstanding integer NOT NULL DEFAULT 0, npwp varchar(40), ktp varchar(32),
