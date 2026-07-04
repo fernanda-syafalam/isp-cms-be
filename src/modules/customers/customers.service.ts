@@ -42,15 +42,15 @@ export class CustomersService {
   }
 
   /**
-   * Resolve the subscriber behind a portal session. A real backend resolves
-   * strictly from the auth token; here we match the user's email and fall
-   * back to a representative customer so staff/admin can preview the portal
-   * (mock-first, ADR-0003).
+   * Resolve the subscriber behind a portal session, strictly from the
+   * token's email. Fails closed: a session with no email or no matching
+   * customer gets 404 — never someone else's account. (The old
+   * `findFirst()` preview fallback served a stranger's data to any
+   * mismatched login — P0.3.) Real customer↔user linkage lands in P1.3.
    */
   async resolveForPortal(email: string | null): Promise<CustomerResponse> {
-    const row =
-      (email ? await this.repo.findByEmail(email) : null) ?? (await this.repo.findFirst());
-    if (!row) throw new NotFoundException('no customer found');
+    const row = email ? await this.repo.findByEmail(email) : null;
+    if (!row) throw new NotFoundException('no customer account for this login');
     return toCustomerResponse(row);
   }
 
