@@ -28,3 +28,11 @@ export const QueueResponseSchema = z.object({
 });
 export type QueueResponse = z.infer<typeof QueueResponseSchema>;
 export class QueueResponseDto extends createZodDto(QueueResponseSchema) {}
+
+/** Paginated list response for GET /v1/routers/:routerId/queues. */
+export const QueueListResponseSchema = z.object({
+  items: z.array(QueueResponseSchema),
+  total: z.number().int().nonnegative(),
+});
+export type QueueListResponse = z.infer<typeof QueueListResponseSchema>;
+export class QueueListResponseDto extends createZodDto(QueueListResponseSchema) {}

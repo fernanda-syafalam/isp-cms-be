@@ -2,7 +2,10 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import type { SimpleQueue } from '../../infrastructure/database/schema/mikrotik-resources.schema';
 import { RoutersRepository } from '../routers/routers.repository';
 import type { CreateQueueInput, QueueResponse, UpdateQueueInput } from './dto/queue.dto';
+import type { QueueListFilter } from './queues.repository';
 import { QueuesRepository } from './queues.repository';
+
+export type { QueueListFilter };
 
 @Injectable()
 export class QueuesService {
@@ -11,9 +14,12 @@ export class QueuesService {
     private readonly routers: RoutersRepository,
   ) {}
 
-  async list(routerId: string): Promise<{ items: QueueResponse[]; total: number }> {
+  async list(
+    routerId: string,
+    filter?: QueueListFilter,
+  ): Promise<{ items: QueueResponse[]; total: number }> {
     await this.requireRouter(routerId);
-    const { items, total } = await this.repo.listByRouter(routerId);
+    const { items, total } = await this.repo.listByRouter(routerId, filter);
     return { items: items.map(toQueueResponse), total };
   }
 
