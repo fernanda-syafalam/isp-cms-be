@@ -38,6 +38,7 @@ describe('TicketsService', () => {
       update: vi.fn(),
       addEvent: vi.fn(),
       listEvents: vi.fn(),
+      markBreachedPastSla: vi.fn(),
     };
     customers = { findIdByFullName: vi.fn() };
     workOrders = { createFromTicket: vi.fn() };
@@ -246,6 +247,27 @@ describe('TicketsService', () => {
       await expect(service.createWorkOrder('missing', AUTHOR)).rejects.toBeInstanceOf(
         NotFoundException,
       );
+    });
+  });
+
+  describe('scanSla (P2.1)', () => {
+    it('marks overdue tickets breached and records an escalation event each', async () => {
+      repo.markBreachedPastSla.mockResolvedValue([{ id: 't-1' }, { id: 't-2' }]);
+
+      const result = await service.scanSla();
+
+      expect(result).toEqual({ breached: 2 });
+      expect(repo.addEvent).toHaveBeenCalledTimes(2);
+      expect(repo.addEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ ticketId: 't-1', kind: 'status', author: 'Sistem' }),
+      );
+    });
+
+    it('does nothing when no ticket is overdue', async () => {
+      repo.markBreachedPastSla.mockResolvedValue([]);
+      const result = await service.scanSla();
+      expect(result).toEqual({ breached: 0 });
+      expect(repo.addEvent).not.toHaveBeenCalled();
     });
   });
 });

@@ -62,6 +62,7 @@ describe('PaymentIntentsService', () => {
       findById: vi.fn(),
       markPaid: vi.fn(),
       markExpired: vi.fn(),
+      expireStalePending: vi.fn(),
     };
     invoices = {
       findById: vi.fn(),
@@ -227,6 +228,17 @@ describe('PaymentIntentsService', () => {
       await expect(service.confirmForCustomer(OWNER_ID, 'missing')).rejects.toBeInstanceOf(
         NotFoundException,
       );
+    });
+  });
+
+  describe('expireStale (P2.1)', () => {
+    it('bulk-expires stale pending intents and reports the count', async () => {
+      repo.expireStalePending.mockResolvedValue(3);
+
+      const result = await service.expireStale();
+
+      expect(result).toEqual({ expired: 3 });
+      expect(repo.expireStalePending).toHaveBeenCalledWith(expect.any(Date));
     });
   });
 });
