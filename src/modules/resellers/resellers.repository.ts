@@ -23,9 +23,26 @@ const RESELLER_SORT_WHITELIST = {
   createdAt: resellers.createdAt,
 } satisfies Record<string, (typeof resellers)[keyof typeof resellers]>;
 
+// Columns the frontend may sort on for ledger entries.
+// Unknown/absent key falls back to `at desc` via buildOrderBy — never throws.
+const LEDGER_SORT_WHITELIST = {
+  at: resellerLedger.at,
+  amount: resellerLedger.amount,
+  balanceAfter: resellerLedger.balanceAfter,
+  type: resellerLedger.type,
+} satisfies Record<string, (typeof resellerLedger)[keyof typeof resellerLedger]>;
+
 export interface ResellerListFilter {
   q?: string;
   status?: Reseller['status'];
+  sort?: string;
+  order?: 'asc' | 'desc';
+  limit: number;
+  offset: number;
+}
+
+export interface LedgerListFilter {
+  q?: string;
   sort?: string;
   order?: 'asc' | 'desc';
   limit: number;
@@ -97,13 +114,31 @@ export class ResellersRepository {
     return row;
   }
 
-  async listLedger(resellerId: string): Promise<{ items: ResellerLedgerEntry[]; total: number }> {
+  async listLedger(
+    resellerId: string,
+    filter: LedgerListFilter,
+  ): Promise<{ items: ResellerLedgerEntry[]; total: number }> {
+    const where = and(
+      eq(resellerLedger.resellerId, resellerId),
+      filter.q ? ilike(resellerLedger.note, `%${filter.q}%`) : undefined,
+    );
+
+    const orderBy = buildOrderBy(
+      filter.sort,
+      filter.order,
+      LEDGER_SORT_WHITELIST,
+      desc(resellerLedger.at),
+    );
+
     const items = await this.db
       .select()
       .from(resellerLedger)
-      .where(eq(resellerLedger.resellerId, resellerId))
-      .orderBy(desc(resellerLedger.at));
-    return { items, total: items.length };
+      .where(where)
+      .orderBy(orderBy)
+      .limit(filter.limit)
+      .offset(filter.offset);
+    const [totals] = await this.db.select({ value: count() }).from(resellerLedger).where(where);
+    return { items, total: totals?.value ?? 0 };
   }
 
   /**
