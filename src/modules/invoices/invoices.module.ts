@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { CustomersModule } from '../customers/customers.module';
+import { RouterResourcesModule } from '../router-resources/router-resources.module';
 import { BillingAutomationService } from './billing-automation.service';
 import { BillingController } from './billing.controller';
 import { InvoicesController } from './invoices.controller';
@@ -13,8 +14,10 @@ import { PaymentsController } from './payments.controller';
 @Module({
   // CustomersModule exports CustomersRepository, which billing uses to
   // read active customers + plan price and to write the outstanding
-  // balance / payment-driven reactivation.
-  imports: [CustomersModule],
+  // balance / payment-driven reactivation. RouterResourcesModule exports
+  // SecretsRepository so auto-isolir + payment reactivation enforce on the
+  // PPPoE secret (ADR-0008); it does not import invoices, so no cycle.
+  imports: [CustomersModule, RouterResourcesModule],
   controllers: [
     InvoicesController,
     PaymentsController,

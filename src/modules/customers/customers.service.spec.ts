@@ -3,6 +3,7 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PlansRepository } from '../plans/plans.repository';
+import { SecretsRepository } from '../router-resources/secrets.repository';
 import { type CustomerRow, CustomersRepository } from './customers.repository';
 import { CustomersService } from './customers.service';
 
@@ -36,6 +37,7 @@ describe('CustomersService', () => {
   let repo: Record<string, ReturnType<typeof vi.fn>>;
   let plans: { findById: ReturnType<typeof vi.fn> };
   let notifications: { send: ReturnType<typeof vi.fn> };
+  let secrets: { setDisabledByCustomerId: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     repo = {
@@ -54,12 +56,14 @@ describe('CustomersService', () => {
     };
     plans = { findById: vi.fn() };
     notifications = { send: vi.fn() };
+    secrets = { setDisabledByCustomerId: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         CustomersService,
         { provide: CustomersRepository, useValue: repo },
         { provide: PlansRepository, useValue: plans },
         { provide: NotificationsService, useValue: notifications },
+        { provide: SecretsRepository, useValue: secrets },
       ],
     }).compile();
     service = moduleRef.get(CustomersService);
@@ -234,6 +238,23 @@ describe('CustomersService', () => {
       const result = await service.stop(sampleRow.id);
       expect(repo.setStatus).toHaveBeenCalledWith(sampleRow.id, 'berhenti', {});
       expect(result.status).toBe('berhenti');
+    });
+
+    // ADR-0008: the PPPoE secret follows the lifecycle — non-active states cut
+    // the session, `aktif` restores it.
+    it('disables the PPPoE secret on every non-active transition', async () => {
+      for (const status of ['isolir', 'berhenti'] as const) {
+        secrets.setDisabledByCustomerId.mockClear();
+        repo.setStatus.mockResolvedValue({ ...sampleRow, status });
+        await (status === 'isolir' ? service.isolate(sampleRow.id) : service.stop(sampleRow.id));
+        expect(secrets.setDisabledByCustomerId).toHaveBeenCalledWith(sampleRow.id, true);
+      }
+    });
+
+    it('re-enables the PPPoE secret when the customer goes active', async () => {
+      repo.setStatus.mockResolvedValue({ ...sampleRow, status: 'aktif', outstanding: 0 });
+      await service.activate(sampleRow.id);
+      expect(secrets.setDisabledByCustomerId).toHaveBeenCalledWith(sampleRow.id, false);
     });
   });
 
