@@ -30,13 +30,14 @@ describe('UsersRepository (integration)', () => {
     // Apply schema by hand here — this test bypasses drizzle-kit so it
     // can run against any commit without first regenerating SQL.
     await db.execute(`
-      CREATE TYPE user_role AS ENUM ('admin', 'staff', 'customer');
+      CREATE TYPE user_role AS ENUM ('admin', 'staff', 'customer', 'teknisi', 'mitra');
       CREATE TABLE users (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         email varchar(255) NOT NULL UNIQUE,
         full_name varchar(120) NOT NULL,
         password_hash varchar(255) NOT NULL,
         role user_role NOT NULL DEFAULT 'customer',
+        reseller_id uuid,
         created_at timestamptz(3) NOT NULL DEFAULT now(),
         updated_at timestamptz(3) NOT NULL DEFAULT now(),
         deleted_at timestamptz(3)
