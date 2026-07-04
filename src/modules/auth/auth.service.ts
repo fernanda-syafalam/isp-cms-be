@@ -51,7 +51,13 @@ export class AuthService {
       accessToken,
       refreshToken: refresh.token,
       refreshExpiresInSeconds: refresh.expiresInSeconds,
-      user: { id: user.id, email: user.email, fullName: user.fullName, role: user.role },
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+        resellerId: user.resellerId,
+      },
     };
   }
 
@@ -72,7 +78,13 @@ export class AuthService {
       accessToken,
       refreshToken: refresh.token,
       refreshExpiresInSeconds: refresh.expiresInSeconds,
-      user: { id: user.id, email: user.email, fullName: user.fullName, role: user.role },
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+        resellerId: user.resellerId,
+      },
     };
   }
 

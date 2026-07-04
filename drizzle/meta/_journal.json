@@ -218,6 +218,13 @@
       "when": 1783193164315,
       "tag": "0030_vengeful_kid_colt",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1783194403067,
+      "tag": "0031_faulty_mysterio",
+      "breakpoints": true
     }
   ]
 }

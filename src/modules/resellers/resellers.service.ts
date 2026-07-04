@@ -1,4 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import type { AuthUser } from '../../common/decorators/current-user.decorator';
 import type {
   Reseller,
   ResellerLedgerEntry,
@@ -33,7 +34,8 @@ export class ResellersService {
     };
   }
 
-  async findById(id: string): Promise<ResellerResponse> {
+  async findById(id: string, user?: AuthUser): Promise<ResellerResponse> {
+    assertResellerAccess(id, user);
     const reseller = await this.requireById(id);
     return this.withCount(reseller);
   }
@@ -47,7 +49,9 @@ export class ResellersService {
   async listLedger(
     id: string,
     filter: LedgerListFilter,
+    user?: AuthUser,
   ): Promise<{ items: LedgerEntryResponse[]; total: number }> {
+    assertResellerAccess(id, user);
     await this.requireById(id);
     const { items, total } = await this.repo.listLedger(id, filter);
     return { items: items.map(toLedgerEntryResponse), total };
@@ -97,4 +101,14 @@ function toLedgerEntryResponse(row: ResellerLedgerEntry): LedgerEntryResponse {
     balanceAfter: row.balanceAfter,
     at: row.at.toISOString(),
   };
+}
+
+/**
+ * A mitra principal may only read their own reseller (P1.5, ADR-0010).
+ * Misses 404 (not 403) so other resellers' existence is not probeable.
+ * Staff/admin (and internal calls with no user) pass through.
+ */
+function assertResellerAccess(id: string, user?: AuthUser): void {
+  if (!user || user.role !== 'mitra') return;
+  if (user.resellerId !== id) throw new NotFoundException('reseller not found');
 }

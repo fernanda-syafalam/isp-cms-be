@@ -11,6 +11,7 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 import { plans } from './plans.schema';
+import { resellers } from './resellers.schema';
 import { users } from './users.schema';
 
 // Subscriber lifecycle. prospek -> instalasi -> aktif <-> isolir, and
@@ -86,7 +87,12 @@ export const customers = pgTable(
       withTimezone: true,
       precision: 3,
     }),
+    // Transitional display string; resellerId (below) is the real link.
+    // Contract the string once every consumer reads through the FK.
     resellerName: varchar('reseller_name', { length: 120 }),
+    // Acquisition channel (ADR-0010): which reseller/mitra brought this
+    // subscriber. Mitra reads are scoped to this server-side (P1.5).
+    resellerId: uuid('reseller_id').references(() => resellers.id),
     connection: jsonb('connection').$type<CustomerConnection>(),
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
@@ -95,6 +101,7 @@ export const customers = pgTable(
     index('customers_status_idx').on(t.status),
     index('customers_full_name_idx').on(t.fullName),
     index('customers_plan_id_idx').on(t.planId),
+    index('customers_reseller_id_idx').on(t.resellerId),
   ],
 );
 

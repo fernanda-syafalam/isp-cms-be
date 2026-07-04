@@ -186,6 +186,38 @@ describe('Staff read-surface gate (e2e)', () => {
     expect(create.statusCode).toBe(403);
   });
 
+  // P1.5: a mitra principal is scoped to their own reseller.
+  it('scopes a mitra with no linked reseller to an empty customer list', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/customers',
+      headers: { authorization: `Bearer ${await tokenFor('mitra')}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ items: [], total: 0 });
+  });
+
+  it('404s a mitra reading a reseller that is not theirs', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/resellers/00000000-0000-0000-0000-0000000000e9',
+      headers: { authorization: `Bearer ${await tokenFor('mitra')}` },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('keeps mitra out of the staff-only surface', async () => {
+    const token = await tokenFor('mitra');
+    for (const url of ['/v1/invoices', '/v1/tickets', '/v1/users', '/v1/work-orders']) {
+      const res = await app.inject({
+        method: 'GET',
+        url,
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect({ url, status: res.statusCode }).toEqual({ url, status: 403 });
+    }
+  });
+
   it('keeps the customer portal reachable for the customer role', async () => {
     // resolveForPortal fails closed with 404 for an unlinked login (P0.3) —
     // the point here is that the portal is NOT role-blocked (no 401/403).

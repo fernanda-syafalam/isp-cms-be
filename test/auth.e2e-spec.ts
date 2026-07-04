@@ -158,6 +158,7 @@ describe('Auth (e2e)', () => {
       email: storedUser.email,
       fullName: storedUser.fullName,
       role: storedUser.role,
+      resellerId: null,
     });
   });
 

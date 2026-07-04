@@ -12,6 +12,7 @@ import {
 import { ZodSerializerDto } from 'nestjs-zod';
 import { z } from 'zod';
 import { Audit } from '../../common/decorators/audit.decorator';
+import { type AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CustomersService } from './customers.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
@@ -43,11 +44,13 @@ const ListQuerySchema = z.object({
 export class CustomersController {
   constructor(private readonly customers: CustomersService) {}
 
-  // Any authenticated staff member may read the subscriber base.
+  // Staff read the whole subscriber base; a mitra principal reads only
+  // their own reseller's acquisitions (scoped server-side, P1.5).
+  @Roles('admin', 'staff', 'mitra')
   @Get()
-  list(@Query() query: unknown) {
+  list(@Query() query: unknown, @CurrentUser() user: AuthUser) {
     const filter = ListQuerySchema.parse(query);
-    return this.customers.list(filter);
+    return this.customers.list(filter, user);
   }
 
   @Get(':id')

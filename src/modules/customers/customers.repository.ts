@@ -31,6 +31,9 @@ export type CustomerRow = Customer & { planName: string };
 
 export interface CustomerListFilter {
   q?: string;
+  // Scope to one reseller's acquisitions — set server-side for mitra
+  // principals (P1.5), never taken from client input for them.
+  resellerId?: string;
   status?: Customer['status'];
   // Repeatable area filter: return customers whose areaName is IN this list
   // OR whose areaName IS NULL (unassigned customers are always visible).
@@ -55,7 +58,7 @@ const CUSTOMERS_SORT_WHITELIST = {
 // Mutable base-profile fields a client may PATCH. Lifecycle, balance and
 // provisioning are NOT here — they move through dedicated methods.
 type ProfilePatch = Partial<
-  Pick<NewCustomer, 'fullName' | 'phone' | 'email' | 'address' | 'planId'>
+  Pick<NewCustomer, 'fullName' | 'phone' | 'email' | 'address' | 'planId' | 'resellerId'>
 >;
 
 /**
@@ -96,6 +99,7 @@ export class CustomersRepository {
       filter.area && filter.area.length > 0
         ? or(inArray(customers.areaName, filter.area), isNull(customers.areaName))
         : undefined,
+      filter.resellerId ? eq(customers.resellerId, filter.resellerId) : undefined,
     );
 
     const orderBy = buildOrderBy(

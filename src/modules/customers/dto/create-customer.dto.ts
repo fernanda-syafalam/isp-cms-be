@@ -16,6 +16,9 @@ export const CreateCustomerSchema = z
     email: z.union([z.email().max(255), z.literal('')]),
     address: z.string().trim().min(1).max(255),
     planId: z.uuid(),
+    // Acquisition channel (ADR-0010): which reseller brought this
+    // subscriber. Staff-set; a mitra's own reads are scoped server-side.
+    resellerId: z.uuid().nullable().optional(),
   })
   .strict();
 
