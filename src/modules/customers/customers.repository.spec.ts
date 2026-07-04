@@ -1,4 +1,4 @@
-import { and, asc, desc, ilike, inArray, isNull, or } from 'drizzle-orm';
+import { asc, desc, ilike, inArray, isNull, or } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { buildOrderBy } from '../../common/utils/list-sort';
 import { customers } from '../../infrastructure/database/schema/customers.schema';

@@ -92,7 +92,7 @@ describe('ResellersService', () => {
     expect(result.balance).toBe(1_500_000);
   });
 
-  it('listLedger maps entries', async () => {
+  it('listLedger maps entries and forwards filter to repo', async () => {
     repo.findById.mockResolvedValue(reseller);
     repo.listLedger.mockResolvedValue({
       items: [
@@ -108,8 +108,19 @@ describe('ResellersService', () => {
       ],
       total: 1,
     });
-    const result = await service.listLedger(reseller.id);
+    const filter = { q: 'Komisi', sort: 'at', order: 'desc' as const, limit: 10, offset: 0 };
+    const result = await service.listLedger(reseller.id, filter);
+    expect(repo.listLedger).toHaveBeenCalledWith(reseller.id, filter);
     expect(result.items[0]?.at).toBe('2026-06-15T10:00:00.000Z');
     expect(result.items[0]?.amount).toBe(175_000);
+    expect(result.total).toBe(1);
+  });
+
+  it('listLedger with default filter (no q) forwards full filter to repo', async () => {
+    repo.findById.mockResolvedValue(reseller);
+    repo.listLedger.mockResolvedValue({ items: [], total: 0 });
+    const filter = { limit: 50, offset: 0 };
+    await service.listLedger(reseller.id, filter);
+    expect(repo.listLedger).toHaveBeenCalledWith(reseller.id, filter);
   });
 });
