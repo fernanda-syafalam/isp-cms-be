@@ -49,15 +49,6 @@ const DEFAULT_TEMPLATES: NewNotificationTemplate[] = [
   },
 ];
 
-// Sample substitution values until the send payload carries real customer/
-// invoice context (the FE mock uses the same hardcoded values).
-const SAMPLE_VARS: Record<string, string> = {
-  nama: 'Budi Santoso',
-  no_tagihan: 'INV-2026-100',
-  jumlah: 'Rp250.000',
-  jatuh_tempo: '10 Mei 2026',
-};
-
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
@@ -101,7 +92,7 @@ export class NotificationsService {
     await this.repo.addLog({
       recipient: input.to,
       templateName: template.name,
-      body: renderTemplate(template.body),
+      body: renderTemplate(template.body, input.vars ?? {}),
       status: 'sent',
     });
     this.logger.log({ event: input.event, to: input.to }, 'notification sent');
@@ -117,8 +108,10 @@ export class NotificationsService {
   }
 }
 
-function renderTemplate(body: string): string {
-  return body.replace(/\{(\w+)\}/g, (match, key: string) => SAMPLE_VARS[key] ?? match);
+// Substitute {placeholder} tokens with the send payload's vars. A missing
+// key is left literal — an honest gap beats a fabricated sample value (P2.2).
+function renderTemplate(body: string, vars: Record<string, string>): string {
+  return body.replace(/\{(\w+)\}/g, (match, key: string) => vars[key] ?? match);
 }
 
 function toTemplateResponse(row: NotificationTemplate): NotificationTemplateResponse {

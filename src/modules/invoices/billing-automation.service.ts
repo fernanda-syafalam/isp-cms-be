@@ -99,8 +99,14 @@ export class BillingAutomationService {
     for (const id of customerIds) {
       const customer = await this.customers.findById(id);
       if (!customer?.phone) continue;
+      const outstanding = await this.repo.sumUnpaidByCustomer(id);
       await this.notifications.enqueue(
-        { event, to: customer.phone },
+        {
+          event,
+          to: customer.phone,
+          // Real per-recipient template variables (P2.2) — no more SAMPLE_VARS.
+          vars: { nama: customer.fullName, jumlah: formatIdr(outstanding) },
+        },
         `dun:${event}:${id}:${period}`,
       );
     }
@@ -139,4 +145,9 @@ function currentPeriodStart(): string {
   const now = new Date();
   const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
   return `${now.getUTCFullYear()}-${mm}-01`;
+}
+
+// Whole-rupiah formatting for dunning message variables, e.g. "Rp250.000".
+function formatIdr(amount: number): string {
+  return `Rp${amount.toLocaleString('id-ID')}`;
 }

@@ -58,15 +58,34 @@ describe('NotificationsService', () => {
   });
 
   describe('send', () => {
-    it('renders the template placeholders and appends a sent log entry', async () => {
+    it('renders the template with the send payload vars and appends a sent log entry', async () => {
       repo.findTemplateByEvent.mockResolvedValue(template);
-      await service.send({ event: 'invoice_created', to: '081200000000' });
+      await service.send({
+        event: 'invoice_created',
+        to: '081200000000',
+        vars: {
+          nama: 'Siti Rahma',
+          no_tagihan: 'INV-2026-207',
+          jumlah: 'Rp180.000',
+          jatuh_tempo: '20 Jun 2026',
+        },
+      });
       expect(repo.addLog).toHaveBeenCalledWith(
         expect.objectContaining({
           recipient: '081200000000',
           templateName: 'Tagihan terbit',
           status: 'sent',
-          body: 'Halo Budi Santoso, tagihan INV-2026-100 sebesar Rp250.000 jatuh tempo 10 Mei 2026.',
+          body: 'Halo Siti Rahma, tagihan INV-2026-207 sebesar Rp180.000 jatuh tempo 20 Jun 2026.',
+        }),
+      );
+    });
+
+    it('leaves a placeholder literal when its var is missing (no fabricated value)', async () => {
+      repo.findTemplateByEvent.mockResolvedValue(template);
+      await service.send({ event: 'invoice_created', to: '081200000000', vars: { nama: 'Ana' } });
+      expect(repo.addLog).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: 'Halo Ana, tagihan {no_tagihan} sebesar {jumlah} jatuh tempo {jatuh_tempo}.',
         }),
       );
     });
