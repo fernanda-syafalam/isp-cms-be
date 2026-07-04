@@ -42,14 +42,15 @@ export class CustomersService {
   }
 
   /**
-   * Resolve the subscriber behind a portal session, strictly from the
-   * token's email. Fails closed: a session with no email or no matching
-   * customer gets 404 — never someone else's account. (The old
-   * `findFirst()` preview fallback served a stranger's data to any
-   * mismatched login — P0.3.) Real customer↔user linkage lands in P1.3.
+   * Resolve the subscriber behind a portal session. Authoritative mapping
+   * is the customers.user_id FK (P1.3); email is the transition fallback
+   * for subscribers created before the linkage existed. Fails closed: no
+   * match on either → 404 — never someone else's account (P0.3).
    */
-  async resolveForPortal(email: string | null): Promise<CustomerResponse> {
-    const row = email ? await this.repo.findByEmail(email) : null;
+  async resolveForPortal(session: { id: string; email: string | null }): Promise<CustomerResponse> {
+    const row =
+      (await this.repo.findByUserId(session.id)) ??
+      (session.email ? await this.repo.findByEmail(session.email) : null);
     if (!row) throw new NotFoundException('no customer account for this login');
     return toCustomerResponse(row);
   }
@@ -74,7 +75,9 @@ export class CustomersService {
    * area and opens the customer in `instalasi` (a linked install work order
    * is scheduled by the onboarding flow).
    */
-  async onboard(input: CreateCustomerInput & { areaName: string }): Promise<CustomerResponse> {
+  async onboard(
+    input: CreateCustomerInput & { areaName: string; userId?: string | null },
+  ): Promise<CustomerResponse> {
     await this.requirePlan(input.planId);
     const row = await this.repo.create({
       fullName: input.fullName,
@@ -84,6 +87,9 @@ export class CustomersService {
       areaName: input.areaName,
       planId: input.planId,
       status: 'instalasi',
+      // Portal login linkage — provisioned by OnboardingService (P1.3),
+      // never accepted from the HTTP DTO (no mass-assignment).
+      userId: input.userId ?? null,
     });
     this.logger.log({ customerId: row.id }, 'customer onboarded');
     return toCustomerResponse(row);

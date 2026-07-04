@@ -45,6 +45,7 @@ describe('CustomersRepository (integration)', () => {
         full_name varchar(120) NOT NULL,
         phone varchar(20) NOT NULL,
         email varchar(255),
+        user_id uuid UNIQUE,
         address varchar(255) NOT NULL,
         area_id uuid,
         area_name varchar(120),

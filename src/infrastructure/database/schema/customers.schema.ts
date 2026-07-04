@@ -11,6 +11,7 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 import { plans } from './plans.schema';
+import { users } from './users.schema';
 
 // Subscriber lifecycle. prospek -> instalasi -> aktif <-> isolir, and
 // berhenti (churn). Values are the API enum — never translated here; the
@@ -53,6 +54,13 @@ export const customers = pgTable(
     fullName: varchar('full_name', { length: 120 }).notNull(),
     phone: varchar('phone', { length: 20 }).notNull(),
     email: varchar('email', { length: 255 }),
+    // Portal login linkage (P1.3, ADR-0005): the subscriber's user account.
+    // Unique — one login maps to at most one subscriber. Null until the
+    // login is provisioned (onboarding does this; legacy rows use the
+    // email fallback in resolveForPortal during the transition).
+    userId: uuid('user_id')
+      .unique()
+      .references(() => users.id),
     address: varchar('address', { length: 255 }).notNull(),
     // Area is denormalized and nullable until a dedicated areas/coverage
     // module owns it. areaName is the label shown in the UI.

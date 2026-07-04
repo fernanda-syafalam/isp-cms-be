@@ -15,6 +15,7 @@ const sampleRow: CustomerRow = {
   fullName: 'Budi Santoso',
   phone: '081234567890',
   email: null,
+  userId: null,
   address: 'Jl. Mawar 1',
   areaId: null,
   areaName: null,
@@ -44,6 +45,7 @@ describe('CustomersService', () => {
       list: vi.fn(),
       findById: vi.fn(),
       findByEmail: vi.fn(),
+      findByUserId: vi.fn(),
       create: vi.fn(),
       updateProfile: vi.fn(),
       setStatus: vi.fn(),
@@ -69,25 +71,41 @@ describe('CustomersService', () => {
   });
 
   describe('resolveForPortal', () => {
-    it('matches the session email when a subscriber has it', async () => {
-      repo.findByEmail.mockResolvedValue({ ...sampleRow, email: 'budi@example.com' });
+    const session = { id: '00000000-0000-0000-0000-0000000000u1', email: 'budi@example.com' };
 
-      const result = await service.resolveForPortal('budi@example.com');
+    it('resolves by the linked user id first (P1.3)', async () => {
+      repo.findByUserId.mockResolvedValue({ ...sampleRow, userId: session.id });
 
-      expect(repo.findByEmail).toHaveBeenCalledWith('budi@example.com');
-      expect(result.email).toBe('budi@example.com');
+      const result = await service.resolveForPortal(session);
+
+      expect(repo.findByUserId).toHaveBeenCalledWith(session.id);
+      expect(repo.findByEmail).not.toHaveBeenCalled();
+      expect(result.id).toBe(sampleRow.id);
     });
 
-    it('fails closed (404) when no subscriber matches the session email', async () => {
+    it('falls back to the session email for unlinked legacy subscribers', async () => {
+      repo.findByUserId.mockResolvedValue(null);
+      repo.findByEmail.mockResolvedValue({ ...sampleRow, email: session.email });
+
+      const result = await service.resolveForPortal(session);
+
+      expect(repo.findByEmail).toHaveBeenCalledWith(session.email);
+      expect(result.email).toBe(session.email);
+    });
+
+    it('fails closed (404) when neither the link nor the email matches', async () => {
+      repo.findByUserId.mockResolvedValue(null);
       repo.findByEmail.mockResolvedValue(null);
 
-      await expect(service.resolveForPortal('staff@example.com')).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
+      await expect(service.resolveForPortal(session)).rejects.toBeInstanceOf(NotFoundException);
     });
 
-    it('fails closed (404) when the session has no email', async () => {
-      await expect(service.resolveForPortal(null)).rejects.toBeInstanceOf(NotFoundException);
+    it('fails closed (404) when the session has no email and no link', async () => {
+      repo.findByUserId.mockResolvedValue(null);
+
+      await expect(
+        service.resolveForPortal({ id: session.id, email: null }),
+      ).rejects.toBeInstanceOf(NotFoundException);
       expect(repo.findByEmail).not.toHaveBeenCalled();
     });
   });
