@@ -34,6 +34,8 @@ import { PaymentsController } from './payments.controller';
     PaymentIntentsService,
     PaymentIntentsRepository,
   ],
-  exports: [InvoicesService, InvoicesRepository],
+  // PaymentIntentsService is exported for the portal's customer-scoped
+  // pay-intent endpoints (P0.4).
+  exports: [InvoicesService, InvoicesRepository, PaymentIntentsService],
 })
 export class InvoicesModule {}

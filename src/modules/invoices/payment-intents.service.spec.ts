@@ -174,4 +174,59 @@ describe('PaymentIntentsService', () => {
       expect(invoices.pay).not.toHaveBeenCalled();
     });
   });
+
+  describe('customer-scoped variants (portal, P0.4)', () => {
+    const OWNER_ID = '00000000-0000-0000-0000-0000000000c1';
+    const STRANGER_ID = '00000000-0000-0000-0000-0000000000c2';
+
+    it('createForCustomer charges the customer own invoice', async () => {
+      invoices.findById.mockResolvedValue(invoice({ customerId: OWNER_ID }));
+
+      const result = await service.createForCustomer(OWNER_ID, {
+        invoiceId: INVOICE_ID,
+        channel: 'qris',
+      });
+
+      expect(result.invoiceId).toBe(INVOICE_ID);
+      expect(repo.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('createForCustomer 404s on someone else invoice without creating a charge', async () => {
+      invoices.findById.mockResolvedValue(invoice({ customerId: OWNER_ID }));
+
+      await expect(
+        service.createForCustomer(STRANGER_ID, { invoiceId: INVOICE_ID, channel: 'qris' }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(repo.create).not.toHaveBeenCalled();
+    });
+
+    it('confirmForCustomer settles the customer own intent', async () => {
+      repo.findById.mockResolvedValue(intentRow());
+      repo.markPaid.mockResolvedValue(intentRow({ status: 'paid', paidAt: new Date() }));
+      invoices.findById.mockResolvedValue(invoice({ customerId: OWNER_ID }));
+
+      const result = await service.confirmForCustomer(OWNER_ID, INTENT_ID);
+
+      expect(result.status).toBe('paid');
+      expect(invoices.pay).toHaveBeenCalledWith(INVOICE_ID, { method: 'qris' });
+    });
+
+    it('confirmForCustomer 404s on someone else intent without settling', async () => {
+      repo.findById.mockResolvedValue(intentRow());
+      invoices.findById.mockResolvedValue(invoice({ customerId: OWNER_ID }));
+
+      await expect(service.confirmForCustomer(STRANGER_ID, INTENT_ID)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(invoices.pay).not.toHaveBeenCalled();
+      expect(repo.markPaid).not.toHaveBeenCalled();
+    });
+
+    it('confirmForCustomer 404s on an unknown intent', async () => {
+      repo.findById.mockResolvedValue(null);
+      await expect(service.confirmForCustomer(OWNER_ID, 'missing')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+  });
 });

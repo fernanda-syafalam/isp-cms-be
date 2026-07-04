@@ -4,6 +4,7 @@ import type { AuthUser } from '../../common/decorators/current-user.decorator';
 import { CustomersService } from '../customers/customers.service';
 import type { CustomerResponse } from '../customers/dto/customer-response.dto';
 import { InvoicesService } from '../invoices/invoices.service';
+import { PaymentIntentsService } from '../invoices/payment-intents.service';
 import { TicketsService } from '../tickets/tickets.service';
 import { PortalService } from './portal.service';
 
@@ -45,6 +46,7 @@ describe('PortalService', () => {
   let customers: Record<string, ReturnType<typeof vi.fn>>;
   let invoices: Record<string, ReturnType<typeof vi.fn>>;
   let tickets: Record<string, ReturnType<typeof vi.fn>>;
+  let intents: Record<string, ReturnType<typeof vi.fn>>;
 
   beforeEach(async () => {
     customers = { resolveForPortal: vi.fn().mockResolvedValue(customer()) };
@@ -56,12 +58,17 @@ describe('PortalService', () => {
       listByCustomer: vi.fn().mockResolvedValue([{ id: 'tkt-1' }]),
       create: vi.fn(),
     };
+    intents = {
+      createForCustomer: vi.fn().mockResolvedValue({ id: 'int-1', status: 'pending' }),
+      confirmForCustomer: vi.fn().mockResolvedValue({ id: 'int-1', status: 'paid' }),
+    };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         PortalService,
         { provide: CustomersService, useValue: customers },
         { provide: InvoicesService, useValue: invoices },
         { provide: TicketsService, useValue: tickets },
+        { provide: PaymentIntentsService, useValue: intents },
       ],
     }).compile();
     service = moduleRef.get(PortalService);
@@ -79,6 +86,29 @@ describe('PortalService', () => {
       expect(snapshot.invoices).toHaveLength(1);
       expect(snapshot.payments).toHaveLength(1);
       expect(snapshot.tickets).toHaveLength(1);
+    });
+  });
+
+  describe('pay intents (P0.4)', () => {
+    it('creates a charge scoped to the resolved customer', async () => {
+      const result = await service.createPayIntent(user, {
+        invoiceId: 'inv-1',
+        channel: 'qris',
+      });
+
+      expect(customers.resolveForPortal).toHaveBeenCalledWith('budi@example.com');
+      expect(intents.createForCustomer).toHaveBeenCalledWith(CUSTOMER_ID, {
+        invoiceId: 'inv-1',
+        channel: 'qris',
+      });
+      expect(result).toEqual({ id: 'int-1', status: 'pending' });
+    });
+
+    it('confirms a charge scoped to the resolved customer', async () => {
+      const result = await service.confirmPayIntent(user, 'int-1');
+
+      expect(intents.confirmForCustomer).toHaveBeenCalledWith(CUSTOMER_ID, 'int-1');
+      expect(result).toEqual({ id: 'int-1', status: 'paid' });
     });
   });
 
