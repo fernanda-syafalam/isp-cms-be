@@ -74,6 +74,30 @@ export class PaymentIntentsService {
     this.logger.log({ intentId: id, invoiceId: intent.invoiceId }, 'payment intent settled');
     return toIntentResponse(paid);
   }
+
+  // --- Portal (customer-scoped) variants --------------------------------
+  // Staff act on anyone via the /v1/payments routes; a customer acts only
+  // on their own invoices. Ownership misses 404 (not 403) so a probing
+  // caller cannot distinguish "not yours" from "does not exist".
+
+  async createForCustomer(
+    customerId: string,
+    input: CreatePaymentIntentInput,
+  ): Promise<PaymentIntentResponse> {
+    const invoice = await this.invoices.findById(input.invoiceId);
+    if (invoice.customerId !== customerId) throw new NotFoundException('invoice not found');
+    return this.create(input);
+  }
+
+  async confirmForCustomer(customerId: string, id: string): Promise<PaymentIntentResponse> {
+    const intent = await this.repo.findById(id);
+    if (!intent) throw new NotFoundException('payment intent not found');
+    const invoice = await this.invoices.findById(intent.invoiceId);
+    if (invoice.customerId !== customerId) {
+      throw new NotFoundException('payment intent not found');
+    }
+    return this.confirm(id);
+  }
 }
 
 function isVaChannel(channel: Channel): channel is keyof typeof VA_PREFIX {
