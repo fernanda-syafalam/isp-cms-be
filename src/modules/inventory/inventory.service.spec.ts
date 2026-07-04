@@ -105,10 +105,25 @@ describe('InventoryService', () => {
         assignedTo: 'Budi',
         assignedCustomerId: 'cust-1',
       });
+      // No work order supplied -> the movement records a null link.
       expect(repo.addMovement).toHaveBeenCalledWith(
-        expect.objectContaining({ type: 'assign', note: 'Budi' }),
+        expect.objectContaining({ type: 'assign', note: 'Budi', workOrderId: null }),
       );
       expect(result.assignedCustomerId).toBe('cust-1');
+    });
+
+    // ADR-0003/0009: an install-driven assign records its work order so stock
+    // consumption reconciles with the order.
+    it('records the work order id on the movement when supplied', async () => {
+      repo.findById.mockResolvedValue(item);
+      customers.findIdByFullName.mockResolvedValue('cust-1');
+      repo.update.mockResolvedValue({ ...item, status: 'installed', assignedTo: 'Budi' });
+
+      await service.move(item.id, { type: 'assign', note: 'Budi', workOrderId: 'wo-1' });
+
+      expect(repo.addMovement).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'assign', workOrderId: 'wo-1' }),
+      );
     });
 
     it('return sends the item back to the warehouse and clears the assignment', async () => {

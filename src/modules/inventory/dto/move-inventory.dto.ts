@@ -10,6 +10,8 @@ export const MoveInventorySchema = z
   .object({
     type: z.enum(['assign', 'return', 'broken']),
     note: z.string().trim().max(120).optional(),
+    // The driving work order, when an install assigns this item (ADR-0003/0009).
+    workOrderId: z.uuid().optional(),
   })
   .strict();
 
