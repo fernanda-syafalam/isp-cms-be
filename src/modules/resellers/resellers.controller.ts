@@ -17,6 +17,14 @@ const ListQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
+const LedgerListQuerySchema = z.object({
+  q: z.string().trim().min(1).optional(),
+  sort: z.string().optional(),
+  order: z.enum(['asc', 'desc']).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
 @Controller({ path: 'resellers', version: '1' })
 export class ResellersController {
   constructor(private readonly resellers: ResellersService) {}
@@ -33,8 +41,8 @@ export class ResellersController {
   }
 
   @Get(':id/ledger')
-  listLedger(@Param('id') id: string) {
-    return this.resellers.listLedger(id);
+  listLedger(@Param('id') id: string, @Query() query: unknown) {
+    return this.resellers.listLedger(id, LedgerListQuerySchema.parse(query));
   }
 
   @Roles('admin', 'staff')

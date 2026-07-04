@@ -4,7 +4,11 @@ import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import * as schema from '../../infrastructure/database/schema';
-import { resellerLedger, resellers } from '../../infrastructure/database/schema/resellers.schema';
+import {
+  type ResellerLedgerEntry,
+  resellerLedger,
+  resellers,
+} from '../../infrastructure/database/schema/resellers.schema';
 import { ResellersRepository } from './resellers.repository';
 
 /**
@@ -189,7 +193,7 @@ describe('ResellersRepository (integration)', () => {
     });
     expect(afterWithdraw.balance).toBe(600_000);
 
-    const ledger = await repo.listLedger(r.id);
+    const ledger = await repo.listLedger(r.id, { limit: 50, offset: 0 });
     expect(ledger.total).toBe(2);
     // newest first; balanceAfter tracks the running total
     expect(ledger.items[0]?.amount).toBe(-400_000);
@@ -203,6 +207,267 @@ describe('ResellersRepository (integration)', () => {
     ).rejects.toThrow();
     // balance unchanged, no ledger row
     expect((await repo.findById(r.id))?.balance).toBe(100_000);
-    expect((await repo.listLedger(r.id)).total).toBe(0);
+    expect((await repo.listLedger(r.id, { limit: 50, offset: 0 })).total).toBe(0);
+  });
+
+  describe('listLedger — pagination, search, sort', () => {
+    async function seedLedger(
+      resellerId: string,
+      entries: Array<{
+        type: ResellerLedgerEntry['type'];
+        amount: number;
+        note: string;
+        balanceAfter: number;
+      }>,
+    ) {
+      for (const entry of entries) {
+        await db.insert(resellerLedger).values({ resellerId, ...entry });
+      }
+    }
+
+    it('returns {items, total} for a reseller; total equals full count when no q', async () => {
+      const r = await seed({ balance: 0 });
+      await seedLedger(r.id, [
+        { type: 'topup', amount: 100_000, note: 'Setoran A', balanceAfter: 100_000 },
+        { type: 'commission', amount: 50_000, note: 'Komisi B', balanceAfter: 150_000 },
+        { type: 'withdrawal', amount: -30_000, note: 'Tarik C', balanceAfter: 120_000 },
+      ]);
+
+      const result = await repo.listLedger(r.id, { limit: 50, offset: 0 });
+      expect(result.total).toBe(3);
+      expect(result.items).toHaveLength(3);
+    });
+
+    it('q filters by note substring case-insensitively; total reflects filtered count', async () => {
+      const r = await seed({ balance: 0 });
+      await seedLedger(r.id, [
+        { type: 'topup', amount: 100_000, note: 'Setoran Pagi', balanceAfter: 100_000 },
+        { type: 'topup', amount: 200_000, note: 'setoran malam', balanceAfter: 300_000 },
+        { type: 'commission', amount: 50_000, note: 'Komisi Bulan', balanceAfter: 350_000 },
+      ]);
+
+      const result = await repo.listLedger(r.id, { q: 'setoran', limit: 50, offset: 0 });
+      expect(result.total).toBe(2);
+      expect(result.items).toHaveLength(2);
+      for (const item of result.items) {
+        expect(item.note.toLowerCase()).toContain('setoran');
+      }
+    });
+
+    it('q returns empty result when note matches nothing', async () => {
+      const r = await seed({ balance: 0 });
+      await seedLedger(r.id, [
+        { type: 'topup', amount: 100_000, note: 'Setoran Pagi', balanceAfter: 100_000 },
+      ]);
+
+      const result = await repo.listLedger(r.id, { q: 'tidakada', limit: 50, offset: 0 });
+      expect(result.total).toBe(0);
+      expect(result.items).toHaveLength(0);
+    });
+
+    it('sorts by amount ascending', async () => {
+      const r = await seed({ balance: 0 });
+      await seedLedger(r.id, [
+        { type: 'topup', amount: 300_000, note: 'C', balanceAfter: 300_000 },
+        { type: 'topup', amount: 100_000, note: 'A', balanceAfter: 100_000 },
+        { type: 'topup', amount: 200_000, note: 'B', balanceAfter: 200_000 },
+      ]);
+
+      const result = await repo.listLedger(r.id, {
+        sort: 'amount',
+        order: 'asc',
+        limit: 50,
+        offset: 0,
+      });
+      const amounts = result.items.map((i) => i.amount);
+      expect(amounts).toEqual([100_000, 200_000, 300_000]);
+    });
+
+    it('sorts by amount descending', async () => {
+      const r = await seed({ balance: 0 });
+      await seedLedger(r.id, [
+        { type: 'topup', amount: 300_000, note: 'C', balanceAfter: 300_000 },
+        { type: 'topup', amount: 100_000, note: 'A', balanceAfter: 100_000 },
+        { type: 'topup', amount: 200_000, note: 'B', balanceAfter: 200_000 },
+      ]);
+
+      const result = await repo.listLedger(r.id, {
+        sort: 'amount',
+        order: 'desc',
+        limit: 50,
+        offset: 0,
+      });
+      const amounts = result.items.map((i) => i.amount);
+      expect(amounts).toEqual([300_000, 200_000, 100_000]);
+    });
+
+    it('sorts by balanceAfter ascending', async () => {
+      const r = await seed({ balance: 0 });
+      await seedLedger(r.id, [
+        { type: 'topup', amount: 300_000, note: 'C', balanceAfter: 500_000 },
+        { type: 'topup', amount: 100_000, note: 'A', balanceAfter: 100_000 },
+        { type: 'topup', amount: 200_000, note: 'B', balanceAfter: 300_000 },
+      ]);
+
+      const result = await repo.listLedger(r.id, {
+        sort: 'balanceAfter',
+        order: 'asc',
+        limit: 50,
+        offset: 0,
+      });
+      const balances = result.items.map((i) => i.balanceAfter);
+      expect(balances).toEqual([100_000, 300_000, 500_000]);
+    });
+
+    it('sorts by type ascending (enum definition order: topup < commission < withdrawal)', async () => {
+      const r = await seed({ balance: 0 });
+      await seedLedger(r.id, [
+        { type: 'withdrawal', amount: -100_000, note: 'W', balanceAfter: 900_000 },
+        { type: 'commission', amount: 50_000, note: 'C', balanceAfter: 950_000 },
+        { type: 'topup', amount: 1_000_000, note: 'T', balanceAfter: 1_000_000 },
+      ]);
+
+      const result = await repo.listLedger(r.id, {
+        sort: 'type',
+        order: 'asc',
+        limit: 50,
+        offset: 0,
+      });
+      const types = result.items.map((i) => i.type);
+      // Postgres ENUM sorts by definition order: topup(0) < commission(1) < withdrawal(3)
+      expect(types).toEqual(['topup', 'commission', 'withdrawal']);
+    });
+
+    it('sorts by at descending (newest first — default)', async () => {
+      const r = await seed({ balance: 0 });
+      // Insert with explicit at timestamps to guarantee order
+      const base = new Date('2026-01-01T00:00:00Z');
+      await db
+        .insert(resellerLedger)
+        .values({
+          resellerId: r.id,
+          type: 'topup',
+          amount: 1,
+          note: 'oldest',
+          balanceAfter: 1,
+          at: new Date(base.getTime()),
+        });
+      await db
+        .insert(resellerLedger)
+        .values({
+          resellerId: r.id,
+          type: 'topup',
+          amount: 2,
+          note: 'middle',
+          balanceAfter: 2,
+          at: new Date(base.getTime() + 1000),
+        });
+      await db
+        .insert(resellerLedger)
+        .values({
+          resellerId: r.id,
+          type: 'topup',
+          amount: 3,
+          note: 'newest',
+          balanceAfter: 3,
+          at: new Date(base.getTime() + 2000),
+        });
+
+      const result = await repo.listLedger(r.id, {
+        sort: 'at',
+        order: 'desc',
+        limit: 50,
+        offset: 0,
+      });
+      expect(result.items.map((i) => i.note)).toEqual(['newest', 'middle', 'oldest']);
+    });
+
+    it('unknown sort key falls back to at desc without throwing', async () => {
+      const r = await seed({ balance: 0 });
+      const base = new Date('2026-01-01T00:00:00Z');
+      await db
+        .insert(resellerLedger)
+        .values({
+          resellerId: r.id,
+          type: 'topup',
+          amount: 1,
+          note: 'oldest',
+          balanceAfter: 1,
+          at: new Date(base.getTime()),
+        });
+      await db
+        .insert(resellerLedger)
+        .values({
+          resellerId: r.id,
+          type: 'topup',
+          amount: 2,
+          note: 'newest',
+          balanceAfter: 2,
+          at: new Date(base.getTime() + 1000),
+        });
+
+      const result = await repo.listLedger(r.id, {
+        sort: 'notAColumn',
+        order: 'asc',
+        limit: 50,
+        offset: 0,
+      });
+      // default: at desc → newest first
+      expect(result.items[0]?.note).toBe('newest');
+    });
+
+    it('limit=1 returns 1 item but total stays the full count', async () => {
+      const r = await seed({ balance: 0 });
+      await seedLedger(r.id, [
+        { type: 'topup', amount: 100_000, note: 'A', balanceAfter: 100_000 },
+        { type: 'topup', amount: 200_000, note: 'B', balanceAfter: 300_000 },
+        { type: 'topup', amount: 300_000, note: 'C', balanceAfter: 600_000 },
+      ]);
+
+      const result = await repo.listLedger(r.id, { limit: 1, offset: 0 });
+      expect(result.items).toHaveLength(1);
+      expect(result.total).toBe(3);
+    });
+
+    it('offset skips rows while total stays the full count', async () => {
+      const r = await seed({ balance: 0 });
+      const base = new Date('2026-01-01T00:00:00Z');
+      await db
+        .insert(resellerLedger)
+        .values({
+          resellerId: r.id,
+          type: 'topup',
+          amount: 1,
+          note: 'first',
+          balanceAfter: 1,
+          at: new Date(base.getTime() + 2000),
+        });
+      await db
+        .insert(resellerLedger)
+        .values({
+          resellerId: r.id,
+          type: 'topup',
+          amount: 2,
+          note: 'second',
+          balanceAfter: 2,
+          at: new Date(base.getTime() + 1000),
+        });
+      await db
+        .insert(resellerLedger)
+        .values({
+          resellerId: r.id,
+          type: 'topup',
+          amount: 3,
+          note: 'third',
+          balanceAfter: 3,
+          at: new Date(base.getTime()),
+        });
+
+      // Default at desc: first, second, third → offset=1 skips "first"
+      const result = await repo.listLedger(r.id, { limit: 50, offset: 1 });
+      expect(result.total).toBe(3);
+      expect(result.items).toHaveLength(2);
+      expect(result.items[0]?.note).toBe('second');
+    });
   });
 });
