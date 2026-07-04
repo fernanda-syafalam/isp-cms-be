@@ -1,7 +1,9 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import type { NewVoucher, Voucher } from '../../infrastructure/database/schema/vouchers.schema';
+import { CustomersRepository } from '../customers/customers.repository';
 import type { GenerateBatchInput } from './dto/generate-batch.dto';
+import type { RedeemVoucherInput } from './dto/redeem-voucher.dto';
 import type { BatchResult, VoucherListResponse, VoucherResponse } from './dto/voucher-response.dto';
 import { type VoucherListFilter, VouchersRepository } from './vouchers.repository';
 
@@ -12,7 +14,11 @@ const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export class VouchersService {
   private readonly logger = new Logger(VouchersService.name);
 
-  constructor(private readonly repo: VouchersRepository) {}
+  constructor(
+    private readonly repo: VouchersRepository,
+    // Resolve the buyer + credit their bill when a voucher is sold at a loket.
+    private readonly customers: CustomersRepository,
+  ) {}
 
   async list(filter: VoucherListFilter): Promise<VoucherListResponse> {
     const { items, total, summary } = await this.repo.list(filter);
@@ -34,9 +40,28 @@ export class VouchersService {
     return { batchId, created };
   }
 
-  async redeem(id: string): Promise<VoucherResponse> {
-    const voucher = await this.repo.redeem(id);
-    this.logger.log({ voucherId: id }, 'voucher redeemed');
+  /**
+   * Redeem a voucher. With a `customerName` it is a loket sale to that
+   * subscriber: the voucher's face value pays down their outstanding balance
+   * (floored at zero) and the redemption is linked to them (ADR-0010/0007).
+   * Without one it is an anonymous hotspot redemption — status only.
+   */
+  async redeem(id: string, input: RedeemVoucherInput = {}): Promise<VoucherResponse> {
+    const customerId = input.customerName
+      ? await this.customers.findIdByFullName(input.customerName)
+      : null;
+    const voucher = await this.repo.redeem(id, {
+      redeemedCustomerId: customerId,
+      usedBy: input.customerName ?? null,
+    });
+    if (customerId) {
+      const customer = await this.customers.findById(customerId);
+      if (customer) {
+        const outstanding = Math.max(0, customer.outstanding - voucher.priceIdr);
+        await this.customers.setBilling(customerId, { outstanding });
+      }
+    }
+    this.logger.log({ voucherId: id, customerId }, 'voucher redeemed');
     return toVoucherResponse(voucher);
   }
 }

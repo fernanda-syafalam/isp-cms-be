@@ -34,6 +34,7 @@ describe('VouchersRepository (integration)', () => {
         status voucher_status NOT NULL DEFAULT 'unused',
         used_at timestamptz(3),
         used_by varchar(120),
+        redeemed_customer_id uuid,
         created_at timestamptz(3) NOT NULL DEFAULT now(),
         updated_at timestamptz(3) NOT NULL DEFAULT now()
       );
