@@ -45,7 +45,7 @@ describe('WorkOrdersRepository (integration)', () => {
         status customer_status NOT NULL DEFAULT 'prospek',
         outstanding integer NOT NULL DEFAULT 0, npwp varchar(40), ktp varchar(32),
         consent_at timestamptz(3), data_deletion_requested_at timestamptz(3),
-        reseller_name varchar(120), connection jsonb,
+        reseller_name varchar(120), reseller_id uuid, connection jsonb,
         created_at timestamptz(3) NOT NULL DEFAULT now(),
         updated_at timestamptz(3) NOT NULL DEFAULT now()
       );

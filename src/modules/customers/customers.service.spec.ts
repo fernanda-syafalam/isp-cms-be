@@ -27,6 +27,7 @@ const sampleRow: CustomerRow = {
   consentAt: null,
   dataDeletionRequestedAt: null,
   resellerName: null,
+  resellerId: null,
   connection: null,
   createdAt: new Date('2026-01-01T00:00:00.000Z'),
   updatedAt: new Date('2026-01-01T00:00:00.000Z'),
@@ -68,6 +69,41 @@ describe('CustomersService', () => {
       ],
     }).compile();
     service = moduleRef.get(CustomersService);
+  });
+
+  describe('list scoping (P1.5)', () => {
+    const mitra = {
+      id: 'u-1',
+      email: 'mitra@example.com',
+      fullName: 'Mira Mitra',
+      role: 'mitra' as const,
+      resellerId: '00000000-0000-0000-0000-0000000000r1',
+    };
+
+    it('forces the mitra reseller scope over any client filter', async () => {
+      repo.list.mockResolvedValue({ items: [], total: 0 });
+
+      await service.list({ resellerId: 'someone-else', limit: 50, offset: 0 }, mitra);
+
+      expect(repo.list).toHaveBeenCalledWith(
+        expect.objectContaining({ resellerId: mitra.resellerId }),
+      );
+    });
+
+    it('returns empty for a mitra with no linked reseller', async () => {
+      const result = await service.list({ limit: 50, offset: 0 }, { ...mitra, resellerId: null });
+
+      expect(result).toEqual({ items: [], total: 0 });
+      expect(repo.list).not.toHaveBeenCalled();
+    });
+
+    it('leaves staff reads unscoped', async () => {
+      repo.list.mockResolvedValue({ items: [sampleRow], total: 1 });
+
+      await service.list({ limit: 50, offset: 0 }, { ...mitra, role: 'staff' });
+
+      expect(repo.list).toHaveBeenCalledWith({ limit: 50, offset: 0 });
+    });
   });
 
   describe('resolveForPortal', () => {

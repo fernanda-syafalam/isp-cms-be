@@ -6,6 +6,8 @@ export interface AuthUser {
   email: string;
   fullName: string;
   role: 'admin' | 'staff' | 'customer' | 'teknisi' | 'mitra';
+  // The mitra principal's scope anchor (ADR-0010); null for other roles.
+  resellerId: string | null;
 }
 
 /**

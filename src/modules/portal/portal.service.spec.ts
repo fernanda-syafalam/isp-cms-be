@@ -15,6 +15,7 @@ const user: AuthUser = {
   email: 'budi@example.com',
   fullName: 'Budi Santoso',
   role: 'customer',
+  resellerId: null,
 };
 
 function customer(over: Partial<CustomerResponse> = {}): CustomerResponse {

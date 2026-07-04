@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import type { AuthUser } from '../../common/decorators/current-user.decorator';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PlansRepository } from '../plans/plans.repository';
 import { SecretsRepository } from '../router-resources/secrets.repository';
@@ -30,8 +31,14 @@ export class CustomersService {
     private readonly secrets: SecretsRepository,
   ) {}
 
-  async list(filter: CustomerListFilter): Promise<{ items: CustomerResponse[]; total: number }> {
-    const { items, total } = await this.repo.list(filter);
+  async list(
+    filter: CustomerListFilter,
+    user?: AuthUser,
+  ): Promise<{ items: CustomerResponse[]; total: number }> {
+    const scoped = scopeForUser(filter, user);
+    // A mitra with no reseller linked sees nothing rather than everything.
+    if (!scoped) return { items: [], total: 0 };
+    const { items, total } = await this.repo.list(scoped);
     return { items: items.map(toCustomerResponse), total };
   }
 
@@ -63,6 +70,7 @@ export class CustomersService {
       email: normalizeEmail(input.email),
       address: input.address,
       planId: input.planId,
+      resellerId: input.resellerId ?? null,
       // status defaults to 'prospek'; balance/area/provisioning come later.
     });
     this.logger.log({ customerId: row.id }, 'customer created');
@@ -103,6 +111,7 @@ export class CustomersService {
       ...(input.email !== undefined ? { email: normalizeEmail(input.email) } : {}),
       ...(input.address !== undefined ? { address: input.address } : {}),
       ...(input.planId !== undefined ? { planId: input.planId } : {}),
+      ...(input.resellerId !== undefined ? { resellerId: input.resellerId } : {}),
     });
     this.logger.log({ customerId: row.id }, 'customer updated');
     return toCustomerResponse(row);
@@ -248,6 +257,19 @@ function normalizeEmail(email: string): string | null {
  * planName, ISO date strings, and the provisioning snapshot. Internal
  * columns (updatedAt, dataDeletionRequestedAt) are dropped.
  */
+/**
+ * Server-side read scoping (P1.5, ADR-0010): a mitra principal only ever
+ * sees their own reseller's acquisitions. The client-supplied filter can
+ * never widen this — the reseller constraint is overwritten, and a mitra
+ * with no linked reseller gets null (callers return an empty result).
+ * Staff/admin (and absent user, e.g. internal calls) pass through.
+ */
+function scopeForUser(filter: CustomerListFilter, user?: AuthUser): CustomerListFilter | null {
+  if (!user || user.role !== 'mitra') return filter;
+  if (!user.resellerId) return null;
+  return { ...filter, resellerId: user.resellerId };
+}
+
 function toCustomerResponse(row: CustomerRow): CustomerResponse {
   return {
     id: row.id,

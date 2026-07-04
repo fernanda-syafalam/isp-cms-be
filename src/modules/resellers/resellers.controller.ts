@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common
 import { ZodSerializerDto } from 'nestjs-zod';
 import { z } from 'zod';
 import { Audit } from '../../common/decorators/audit.decorator';
+import { type AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { AddLedgerEntryDto } from './dto/add-ledger-entry.dto';
 import { ResellerResponseDto } from './dto/reseller-response.dto';
@@ -35,15 +36,19 @@ export class ResellersController {
     return this.resellers.list(ListQuerySchema.parse(query));
   }
 
+  // A mitra reads their own reseller only (ownership enforced in the
+  // service — misses 404); staff read anyone.
+  @Roles('admin', 'staff', 'mitra')
   @Get(':id')
   @ZodSerializerDto(ResellerResponseDto)
-  findOne(@Param('id') id: string) {
-    return this.resellers.findById(id);
+  findOne(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.resellers.findById(id, user);
   }
 
+  @Roles('admin', 'staff', 'mitra')
   @Get(':id/ledger')
-  listLedger(@Param('id') id: string, @Query() query: unknown) {
-    return this.resellers.listLedger(id, LedgerListQuerySchema.parse(query));
+  listLedger(@Param('id') id: string, @Query() query: unknown, @CurrentUser() user: AuthUser) {
+    return this.resellers.listLedger(id, LedgerListQuerySchema.parse(query), user);
   }
 
   @Roles('admin', 'staff')

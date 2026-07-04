@@ -56,7 +56,7 @@ describe('CustomersRepository (integration)', () => {
         ktp varchar(32),
         consent_at timestamptz(3),
         data_deletion_requested_at timestamptz(3),
-        reseller_name varchar(120),
+        reseller_name varchar(120), reseller_id uuid,
         connection jsonb,
         created_at timestamptz(3) NOT NULL DEFAULT now(),
         updated_at timestamptz(3) NOT NULL DEFAULT now()
