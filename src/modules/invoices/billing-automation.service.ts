@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { CustomersRepository } from '../customers/customers.repository';
+import { SecretsRepository } from '../router-resources/secrets.repository';
 import type {
   IsolirResult,
   RemindInput,
@@ -22,6 +23,8 @@ export class BillingAutomationService {
     private readonly invoices: InvoicesService,
     private readonly repo: InvoicesRepository,
     private readonly customers: CustomersRepository,
+    // Auto-isolir must cut network access, not just flip the DB status (ADR-0008).
+    private readonly secrets: SecretsRepository,
   ) {}
 
   /** Mark overdue + apply late fee, then suspend active debtors. */
@@ -77,6 +80,8 @@ export class BillingAutomationService {
       if (customer?.status === 'aktif') {
         const outstanding = await this.repo.sumUnpaidByCustomer(id);
         await this.customers.setBilling(id, { status: 'isolir', outstanding });
+        // Enforce on the router: disable the customer's PPPoE secret (ADR-0008).
+        await this.secrets.setDisabledByCustomerId(id, true);
         isolated += 1;
       }
     }

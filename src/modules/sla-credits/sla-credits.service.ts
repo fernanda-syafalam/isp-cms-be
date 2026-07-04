@@ -41,16 +41,27 @@ export class SlaCreditsService {
   }
 
   /**
-   * Apply a pending credit (deduction from the next invoice happens with the
-   * billing-application flow; here it transitions state). Idempotent for an
-   * already-applied credit; a void credit cannot be applied.
+   * Apply a pending credit: transition it to `applied` AND reduce the
+   * customer's outstanding balance by the credit amount (floored at zero), so
+   * the goodwill credit actually lowers what they owe (ADR-0007). This mirrors
+   * how plan-change proration adjusts `outstanding` directly; a formal credit
+   * invoice-line is a follow-up. Idempotent for an already-applied credit; a
+   * void credit cannot be applied. A credit with no resolved customer only
+   * transitions state (nothing to deduct).
    */
   async apply(id: string): Promise<SlaCreditResponse> {
     const credit = await this.requireById(id);
     if (credit.status === 'applied') return toSlaCreditResponse(credit);
     if (credit.status === 'void') throw new BadRequestException('credit is void');
     const applied = await this.repo.apply(id);
-    this.logger.log({ creditId: id }, 'sla credit applied');
+    if (applied.customerId) {
+      const customer = await this.customers.findById(applied.customerId);
+      if (customer) {
+        const outstanding = Math.max(0, customer.outstanding - applied.amount);
+        await this.customers.setBilling(applied.customerId, { outstanding });
+      }
+    }
+    this.logger.log({ creditId: id, customerId: applied.customerId }, 'sla credit applied');
     return toSlaCreditResponse(applied);
   }
 

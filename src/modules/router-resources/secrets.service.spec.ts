@@ -6,6 +6,7 @@ import { CustomersRepository } from '../customers/customers.repository';
 import { RoutersRepository } from '../routers/routers.repository';
 import { ProfilesRepository } from './profiles.repository';
 import { SecretsRepository } from './secrets.repository';
+import type { SecretListFilter } from './secrets.service';
 import { SecretsService } from './secrets.service';
 
 const ROUTER_ID = '00000000-0000-0000-0000-00000000a101';
@@ -23,6 +24,8 @@ const secret: PppSecret = {
   createdAt: new Date('2026-06-15T00:00:00.000Z'),
   updatedAt: new Date('2026-06-15T00:00:00.000Z'),
 };
+
+const DEFAULT_FILTER: SecretListFilter = { limit: 50, offset: 0 };
 
 describe('SecretsService', () => {
   let service: SecretsService;
@@ -52,6 +55,66 @@ describe('SecretsService', () => {
       ],
     }).compile();
     service = moduleRef.get(SecretsService);
+  });
+
+  describe('list', () => {
+    it('returns list items with inline connection fields for enabled secrets', async () => {
+      routers.findById.mockResolvedValue({ id: ROUTER_ID });
+      repo.listByRouter.mockResolvedValue({ items: [secret], total: 1 });
+
+      const result = await service.list(ROUTER_ID, DEFAULT_FILTER);
+      expect(result.total).toBe(1);
+      const item = result.items[0];
+      expect(item?.online).toBe(true);
+      expect(item?.address).toMatch(/^100\.64\.\d+\.\d+$/);
+      expect(item?.uptime).toMatch(/^\d+h\d+m$/);
+      expect(item?.sessionId).toBe(secret.id);
+    });
+
+    it('disabled secret has online=false, null connection fields', async () => {
+      routers.findById.mockResolvedValue({ id: ROUTER_ID });
+      const disabled = { ...secret, disabled: true };
+      repo.listByRouter.mockResolvedValue({ items: [disabled], total: 1 });
+
+      const result = await service.list(ROUTER_ID, DEFAULT_FILTER);
+      const item = result.items[0];
+      expect(item?.online).toBe(false);
+      expect(item?.address).toBeNull();
+      expect(item?.uptime).toBeNull();
+      expect(item?.sessionId).toBeNull();
+    });
+
+    it('passes filter to repository', async () => {
+      routers.findById.mockResolvedValue({ id: ROUTER_ID });
+      repo.listByRouter.mockResolvedValue({ items: [], total: 0 });
+
+      const filter: SecretListFilter = {
+        q: 'budi',
+        sort: 'username',
+        order: 'asc',
+        limit: 10,
+        offset: 20,
+      };
+      await service.list(ROUTER_ID, filter);
+      expect(repo.listByRouter).toHaveBeenCalledWith(ROUTER_ID, filter);
+    });
+
+    it('address/uptime are stable: same secret id always yields same values', async () => {
+      routers.findById.mockResolvedValue({ id: ROUTER_ID });
+      repo.listByRouter.mockResolvedValue({ items: [secret], total: 1 });
+
+      const r1 = await service.list(ROUTER_ID, DEFAULT_FILTER);
+      const r2 = await service.list(ROUTER_ID, { ...DEFAULT_FILTER, offset: 0 });
+      expect(r1.items[0]?.address).toBe(r2.items[0]?.address);
+      expect(r1.items[0]?.uptime).toBe(r2.items[0]?.uptime);
+    });
+
+    it('404s on unknown router', async () => {
+      routers.findById.mockResolvedValue(null);
+      await expect(service.list(ROUTER_ID, DEFAULT_FILTER)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
   });
 
   describe('create', () => {
