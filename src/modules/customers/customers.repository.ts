@@ -128,13 +128,6 @@ export class CustomersRepository {
     return row ?? null;
   }
 
-  // First customer by name — a deterministic representative for the portal
-  // when the session has no matching subscriber (staff/admin preview).
-  async findFirst(): Promise<CustomerRow | null> {
-    const [row] = await this.baseSelect().orderBy(asc(customers.fullName)).limit(1);
-    return row ?? null;
-  }
-
   // How many customers are linked to a reseller name. Customers reference a
   // reseller by name (not FK), so the count is derived here for the
   // resellers module.

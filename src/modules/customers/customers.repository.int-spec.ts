@@ -215,7 +215,7 @@ describe('CustomersRepository (integration)', () => {
     ).rejects.toThrow();
   });
 
-  it('resolves a customer by email and a representative via findFirst (portal)', async () => {
+  it('resolves a customer strictly by email (portal fails closed)', async () => {
     await repo.create({
       fullName: 'Zaki',
       phone: '0813',
@@ -229,10 +229,6 @@ describe('CustomersRepository (integration)', () => {
     expect(byEmail?.fullName).toBe('Zaki');
     expect(byEmail?.planName).toBe('Home 20');
     expect(await repo.findByEmail('nobody@example.com')).toBeNull();
-
-    // findFirst is deterministic (alphabetical by full_name).
-    const first = await repo.findFirst();
-    expect(first?.fullName).toBe('Ani');
   });
 
   it('aggregates status counts, new-since and at-risk for the dashboard', async () => {
