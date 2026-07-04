@@ -169,4 +169,21 @@ describe('PaymentIntentsRepository (integration)', () => {
     const found = await repo.findById(created.id);
     expect(found?.status).toBe('expired');
   });
+
+  it('expireStalePending only expires pending intents past their window', async () => {
+    const now = new Date('2026-06-20T00:00:00.000Z');
+    const stale = await repo.create(pending({ expiresAt: new Date('2026-06-19T00:00:00.000Z') }));
+    const fresh = await repo.create(pending({ expiresAt: new Date('2026-06-21T00:00:00.000Z') }));
+    const alreadyPaid = await repo.create(
+      pending({ expiresAt: new Date('2026-06-18T00:00:00.000Z') }),
+    );
+    await repo.markPaid(alreadyPaid.id);
+
+    const expired = await repo.expireStalePending(now);
+
+    expect(expired).toBe(1);
+    expect((await repo.findById(stale.id))?.status).toBe('expired');
+    expect((await repo.findById(fresh.id))?.status).toBe('pending');
+    expect((await repo.findById(alreadyPaid.id))?.status).toBe('paid');
+  });
 });

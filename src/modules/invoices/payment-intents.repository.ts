@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, lt, sql } from 'drizzle-orm';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type NewPaymentIntent,
@@ -53,5 +53,18 @@ export class PaymentIntentsRepository {
       .update(paymentIntents)
       .set({ status: 'expired' })
       .where(eq(paymentIntents.id, id));
+  }
+
+  /**
+   * Expire every still-`pending` intent whose window has closed. Used by the
+   * hourly expire-sweep (P2.1) — without it stale intents pile up forever.
+   * Returns the number of rows expired.
+   */
+  async expireStalePending(now: Date): Promise<number> {
+    const result = await this.db
+      .update(paymentIntents)
+      .set({ status: 'expired' })
+      .where(and(eq(paymentIntents.status, 'pending'), lt(paymentIntents.expiresAt, now)));
+    return result.rowCount ?? 0;
   }
 }

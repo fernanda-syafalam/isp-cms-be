@@ -98,6 +98,17 @@ export class PaymentIntentsService {
     }
     return this.confirm(id);
   }
+
+  /**
+   * Expire every stale `pending` intent in one sweep (P2.1 hourly job). The
+   * per-intent expiry check in confirm() only fires when someone confirms;
+   * abandoned intents never get there, so this bulk-expires them.
+   */
+  async expireStale(): Promise<{ expired: number }> {
+    const expired = await this.repo.expireStalePending(new Date());
+    if (expired > 0) this.logger.log({ expired }, 'expired stale payment intents');
+    return { expired };
+  }
 }
 
 function isVaChannel(channel: Channel): channel is keyof typeof VA_PREFIX {
