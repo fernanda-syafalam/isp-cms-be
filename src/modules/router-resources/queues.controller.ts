@@ -8,20 +8,36 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
+import { z } from 'zod';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { CreateQueueDto, QueueResponseDto, UpdateQueueDto } from './dto/queue.dto';
+import {
+  CreateQueueDto,
+  QueueListResponseDto,
+  QueueResponseDto,
+  UpdateQueueDto,
+} from './dto/queue.dto';
 import { QueuesService } from './queues.service';
+
+const ListQuerySchema = z.object({
+  q: z.string().optional(),
+  sort: z.string().optional(),
+  order: z.enum(['asc', 'desc']).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  offset: z.coerce.number().int().min(0).default(0),
+});
 
 @Controller({ path: 'routers/:routerId/queues', version: '1' })
 export class QueuesController {
   constructor(private readonly queues: QueuesService) {}
 
   @Get()
-  list(@Param('routerId') routerId: string) {
-    return this.queues.list(routerId);
+  @ZodSerializerDto(QueueListResponseDto)
+  list(@Param('routerId') routerId: string, @Query() query: unknown) {
+    return this.queues.list(routerId, ListQuerySchema.parse(query));
   }
 
   @Roles('admin', 'staff')
