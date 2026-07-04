@@ -41,9 +41,12 @@ function intentRow(over: Partial<PaymentIntent> = {}): PaymentIntent {
     status: 'pending',
     vaNumber: null,
     qrPayload: 'ID.MOCK.QRIS|qris|INV-2026-100|116000',
-    expiresAt: new Date('2026-06-17T00:00:00.000Z'),
+    // A fresh intent is valid for 24h. Anchor to the run clock so the
+    // not-yet-expired path never rots into a date-based flake; the
+    // already-expired path overrides this with a fixed past date.
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     paidAt: null,
-    createdAt: new Date('2026-06-16T00:00:00.000Z'),
+    createdAt: new Date(),
     ...over,
   };
 }

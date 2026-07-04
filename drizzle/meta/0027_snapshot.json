@@ -1,5 +1,5 @@
 {
-  "id": "c6a290c6-8230-4fa3-bb5a-a9dc32309347",
+  "id": "74204a07-e42e-4b12-9def-2acafbeeb09a",
   "prevId": "8e1d24b9-9b22-4dfc-abb0-7ace7b10f07c",
   "version": "7",
   "dialect": "postgresql",
@@ -1025,6 +1025,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "work_order_id": {
+          "name": "work_order_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "at": {
           "name": "at",
           "type": "timestamp (3) with time zone",
@@ -1054,6 +1060,21 @@
           "columns": [
             {
               "expression": "at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "stock_movements_work_order_id_idx": {
+          "name": "stock_movements_work_order_id_idx",
+          "columns": [
+            {
+              "expression": "work_order_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -4023,12 +4044,6 @@
         "used_by": {
           "name": "used_by",
           "type": "varchar(120)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "redeemed_customer_id": {
-          "name": "redeemed_customer_id",
-          "type": "uuid",
           "primaryKey": false,
           "notNull": false
         },

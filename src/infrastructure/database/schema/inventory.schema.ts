@@ -43,11 +43,16 @@ export const stockMovements = pgTable(
     kind: inventoryKind('kind').notNull(),
     type: stockMovementType('type').notNull(),
     note: varchar('note', { length: 255 }).notNull(),
+    // The work order that drove this movement (an install assign), so stock
+    // consumption reconciles with the order. Denormalized like the rest of the
+    // ledger — null for manual / non-WO moves.
+    workOrderId: uuid('work_order_id'),
     at: timestamp('at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },
   (t) => [
     index('stock_movements_item_id_idx').on(t.itemId),
     index('stock_movements_at_idx').on(t.at),
+    index('stock_movements_work_order_id_idx').on(t.workOrderId),
   ],
 );
 

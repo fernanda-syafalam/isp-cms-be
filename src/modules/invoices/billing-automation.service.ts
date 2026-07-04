@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { CustomersRepository } from '../customers/customers.repository';
+import { NotificationsService } from '../notifications/notifications.service';
+import { SecretsRepository } from '../router-resources/secrets.repository';
 import type {
   IsolirResult,
   RemindInput,
@@ -22,6 +24,11 @@ export class BillingAutomationService {
     private readonly invoices: InvoicesService,
     private readonly repo: InvoicesRepository,
     private readonly customers: CustomersRepository,
+    // Auto-isolir must cut network access, not just flip the DB status (ADR-0008).
+    private readonly secrets: SecretsRepository,
+    // Dunning must actually send, via the retried queue, not just stamp
+    // lastRemindedAt (ADR-0012).
+    private readonly notifications: NotificationsService,
   ) {}
 
   /** Mark overdue + apply late fee, then suspend active debtors. */
@@ -37,6 +44,9 @@ export class BillingAutomationService {
     const reminded = input.invoiceIds?.length
       ? await this.repo.markRemindedByIds(input.invoiceIds)
       : await this.repo.markRemindedOverdue();
+    // Stamping lastRemindedAt is the audit trail; the actual WhatsApp goes to
+    // the overdue debtors via the queue (ADR-0012).
+    await this.dispatchDunning('overdue', await this.repo.customerIdsWithOverdue());
     return { reminded, channel: 'whatsapp' };
   }
 
@@ -62,9 +72,33 @@ export class BillingAutomationService {
     await this.repo.markOverduePastDue(LATE_FEE);
     const remindedUpcoming = await this.repo.markRemindedDueSoon(REMIND_UPCOMING_DAYS);
     const remindedOverdue = await this.repo.markRemindedOverdue();
+    // Dispatch the actual WhatsApp dunning for both cohorts (ADR-0012).
+    await this.dispatchDunning(
+      'due_soon',
+      await this.repo.customerIdsWithPendingDueSoon(REMIND_UPCOMING_DAYS),
+    );
+    await this.dispatchDunning('overdue', await this.repo.customerIdsWithOverdue());
     const isolated = await this.isolateActiveDebtors();
     this.logger.log({ period, created, isolated }, 'billing scheduler run');
     return { period, created, remindedUpcoming, remindedOverdue, isolated };
+  }
+
+  // Enqueue one WhatsApp dunning message per customer in the cohort. The job id
+  // is per customer + event + month, so re-running the cycle never double-sends
+  // (BullMQ rejects the duplicate jobId). Customers without a phone are skipped.
+  private async dispatchDunning(
+    event: 'due_soon' | 'overdue',
+    customerIds: string[],
+  ): Promise<void> {
+    const period = currentPeriodStart();
+    for (const id of customerIds) {
+      const customer = await this.customers.findById(id);
+      if (!customer?.phone) continue;
+      await this.notifications.enqueue(
+        { event, to: customer.phone },
+        `dun:${event}:${id}:${period}`,
+      );
+    }
   }
 
   // Suspend (isolir) only currently-active customers that have an overdue
@@ -77,6 +111,8 @@ export class BillingAutomationService {
       if (customer?.status === 'aktif') {
         const outstanding = await this.repo.sumUnpaidByCustomer(id);
         await this.customers.setBilling(id, { status: 'isolir', outstanding });
+        // Enforce on the router: disable the customer's PPPoE secret (ADR-0008).
+        await this.secrets.setDisabledByCustomerId(id, true);
         isolated += 1;
       }
     }

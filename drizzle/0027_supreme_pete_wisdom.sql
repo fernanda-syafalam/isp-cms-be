@@ -1,1 +1,0 @@
-ALTER TABLE "vouchers" ADD COLUMN "redeemed_customer_id" uuid;
