@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { CustomersModule } from '../customers/customers.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { RouterResourcesModule } from '../router-resources/router-resources.module';
+import { SettingsModule } from '../settings/settings.module';
 import { BillingAutomationService } from './billing-automation.service';
 import { BillingController } from './billing.controller';
 import { InvoicesController } from './invoices.controller';
@@ -19,8 +20,10 @@ import { PaymentsController } from './payments.controller';
   // SecretsRepository so auto-isolir + payment reactivation enforce on the
   // PPPoE secret (ADR-0008); it does not import invoices, so no cycle.
   // NotificationsModule exports NotificationsService so dunning is actually
-  // dispatched via the queue (ADR-0012).
-  imports: [CustomersModule, RouterResourcesModule, NotificationsModule],
+  // dispatched via the queue (ADR-0012). SettingsModule exports SettingsService
+  // so tax/due-days/late-fee come from admin-editable settings (P2.3); it does
+  // not import invoices, so no cycle.
+  imports: [CustomersModule, RouterResourcesModule, NotificationsModule, SettingsModule],
   controllers: [
     InvoicesController,
     PaymentsController,

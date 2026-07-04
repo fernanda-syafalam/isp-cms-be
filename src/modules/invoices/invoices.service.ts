@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { Invoice, Payment } from '../../infrastructure/database/schema/invoices.schema';
 import { CustomersRepository } from '../customers/customers.repository';
 import { SecretsRepository } from '../router-resources/secrets.repository';
+import { SettingsService } from '../settings/settings.service';
 import type { BillingRunResult } from './dto/billing-run-result.dto';
 import type { InvoiceListResponse, InvoiceResponse } from './dto/invoice-response.dto';
 import type { PaymentResponse } from './dto/payment-response.dto';
@@ -12,11 +13,9 @@ import {
   type PaymentListFilter,
 } from './invoices.repository';
 
-// Billing policy constants. These belong in a settings module once it
-// exists; until then they are the documented defaults.
-const PKP = true; // issuer is a taxable enterprise -> charge PPN
-const TAX_RATE = 0.11; // PPN 11%
-const DUE_DAYS = 10; // invoice is due this many days after issue
+// Billing policy now comes from SettingsService (P2.3) — an admin edit in
+// Settings changes the next run. The constants below survive only as the
+// documented defaults, seeded into app_settings on first read.
 
 @Injectable()
 export class InvoicesService {
@@ -29,6 +28,8 @@ export class InvoicesService {
     private readonly customers: CustomersRepository,
     // Payment-driven reactivation must re-enable the PPPoE secret (ADR-0008).
     private readonly secrets: SecretsRepository,
+    // Tax + due-days policy (P2.3) — read at run time so admin edits apply.
+    private readonly settings: SettingsService,
   ) {}
 
   async list(filter: InvoiceListFilter): Promise<InvoiceListResponse> {
@@ -96,7 +97,8 @@ export class InvoicesService {
   async run(): Promise<BillingRunResult> {
     const now = new Date();
     const { periodStart, periodEnd, periodLabel } = currentPeriod(now);
-    const dueDate = isoDate(addDays(now, DUE_DAYS));
+    const policy = await this.settings.getBillingPolicy();
+    const dueDate = isoDate(addDays(now, policy.dueDays));
 
     const billables = await this.customers.findActiveBillable();
     let created = 0;
@@ -110,7 +112,7 @@ export class InvoicesService {
         periodEnd,
         dueDate,
         amount,
-        taxAmount: PKP ? ppnOf(amount) : 0,
+        taxAmount: policy.pkp ? ppnOf(amount, policy.ppnRate) : 0,
         status: 'pending',
       });
       created += 1;
@@ -133,15 +135,16 @@ export class InvoicesService {
     const { periodStart, periodEnd } = currentPeriod(now);
     if (await this.repo.existsForPeriod(customerId, periodStart)) return;
 
+    const policy = await this.settings.getBillingPolicy();
     const amount = info.planPriceMonthly;
     await this.repo.create({
       customerId,
       customerName: info.fullName,
       periodStart,
       periodEnd,
-      dueDate: isoDate(addDays(now, DUE_DAYS)),
+      dueDate: isoDate(addDays(now, policy.dueDays)),
       amount,
-      taxAmount: PKP ? ppnOf(amount) : 0,
+      taxAmount: policy.pkp ? ppnOf(amount, policy.ppnRate) : 0,
       status: 'pending',
     });
     this.logger.log({ customerId }, 'first invoice generated');
@@ -163,8 +166,8 @@ export class InvoicesService {
   }
 }
 
-function ppnOf(amount: number): number {
-  return Math.round(amount * TAX_RATE);
+function ppnOf(amount: number, rate: number): number {
+  return Math.round(amount * rate);
 }
 
 // --- date helpers (whole-day, UTC) ------------------------------------
