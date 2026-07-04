@@ -12,7 +12,7 @@ export const UserResponseSchema = z.object({
   id: z.uuid(),
   email: z.email(),
   fullName: z.string(),
-  role: z.enum(['admin', 'staff', 'customer']),
+  role: z.enum(['admin', 'staff', 'customer', 'teknisi', 'mitra']),
   createdAt: z.iso.datetime(),
 });
 

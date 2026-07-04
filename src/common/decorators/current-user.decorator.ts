@@ -5,7 +5,7 @@ export interface AuthUser {
   id: string;
   email: string;
   fullName: string;
-  role: 'admin' | 'staff' | 'customer';
+  role: 'admin' | 'staff' | 'customer' | 'teknisi' | 'mitra';
 }
 
 /**
