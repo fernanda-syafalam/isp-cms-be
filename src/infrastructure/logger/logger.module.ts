@@ -30,6 +30,7 @@ import type { AppConfig } from '../../config/configuration';
               'req.headers.authorization',
               'req.headers.cookie',
               'req.body.password',
+              '*.initialPassword',
               'req.body.passwordHash',
               'req.body.token',
               'req.body.accessToken',
