@@ -71,8 +71,10 @@ describe('InventoryRepository (integration)', () => {
         item_id uuid NOT NULL REFERENCES inventory_items(id),
         serial varchar(80) NOT NULL, kind inventory_kind NOT NULL,
         type stock_movement_type NOT NULL, note varchar(255) NOT NULL,
+        work_order_id uuid,
         at timestamptz(3) NOT NULL DEFAULT now()
       );
+      CREATE INDEX stock_movements_work_order_id_idx ON stock_movements (work_order_id);
     `);
 
     const [plan] = await db
