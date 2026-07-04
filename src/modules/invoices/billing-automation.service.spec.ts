@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CustomersRepository } from '../customers/customers.repository';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SecretsRepository } from '../router-resources/secrets.repository';
+import { SettingsService } from '../settings/settings.service';
 import { BillingAutomationService } from './billing-automation.service';
 import { InvoicesRepository } from './invoices.repository';
 import { InvoicesService } from './invoices.service';
@@ -39,6 +40,15 @@ describe('BillingAutomationService', () => {
     // Safe defaults so the dunning dispatch is a no-op unless a test opts in.
     repo.customerIdsWithOverdue.mockResolvedValue([]);
     repo.customerIdsWithPendingDueSoon.mockResolvedValue([]);
+    const settings = {
+      getBillingPolicy: vi.fn().mockResolvedValue({
+        pkp: true,
+        ppnRate: 0.11,
+        dueDays: 10,
+        lateFeeIdr: 25_000,
+        isolirGraceDays: 3,
+      }),
+    };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         BillingAutomationService,
@@ -47,6 +57,7 @@ describe('BillingAutomationService', () => {
         { provide: CustomersRepository, useValue: customers },
         { provide: SecretsRepository, useValue: secrets },
         { provide: NotificationsService, useValue: notifications },
+        { provide: SettingsService, useValue: settings },
       ],
     }).compile();
     service = moduleRef.get(BillingAutomationService);

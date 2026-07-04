@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { CustomersRepository } from '../customers/customers.repository';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SecretsRepository } from '../router-resources/secrets.repository';
+import { SettingsService } from '../settings/settings.service';
 import type {
   IsolirResult,
   RemindInput,
@@ -12,8 +13,8 @@ import type {
 import { InvoicesRepository } from './invoices.repository';
 import { InvoicesService } from './invoices.service';
 
-// Billing-policy constants (belong in settings; documented defaults for now).
-const LATE_FEE = 25_000;
+// Late fee now comes from settings (P2.3). REMIND_UPCOMING_DAYS has no
+// settings column yet, so it stays a documented default.
 const REMIND_UPCOMING_DAYS = 3;
 
 @Injectable()
@@ -29,11 +30,14 @@ export class BillingAutomationService {
     // Dunning must actually send, via the retried queue, not just stamp
     // lastRemindedAt (ADR-0012).
     private readonly notifications: NotificationsService,
+    // Late-fee policy (P2.3) — read at run time so admin edits apply.
+    private readonly settings: SettingsService,
   ) {}
 
   /** Mark overdue + apply late fee, then suspend active debtors. */
   async isolirOverdue(): Promise<IsolirResult> {
-    const markedOverdue = await this.repo.markOverduePastDue(LATE_FEE);
+    const { lateFeeIdr } = await this.settings.getBillingPolicy();
+    const markedOverdue = await this.repo.markOverduePastDue(lateFeeIdr);
     const isolated = await this.isolateActiveDebtors();
     this.logger.log({ markedOverdue, isolated }, 'billing isolir-overdue');
     return { markedOverdue, isolated };
@@ -69,7 +73,8 @@ export class BillingAutomationService {
   /** Run the full cycle: bill -> mark overdue -> dun -> auto-isolir. */
   async schedulerRun(): Promise<SchedulerRunResult> {
     const { period, created } = await this.invoices.run();
-    await this.repo.markOverduePastDue(LATE_FEE);
+    const { lateFeeIdr } = await this.settings.getBillingPolicy();
+    await this.repo.markOverduePastDue(lateFeeIdr);
     const remindedUpcoming = await this.repo.markRemindedDueSoon(REMIND_UPCOMING_DAYS);
     const remindedOverdue = await this.repo.markRemindedOverdue();
     // Dispatch the actual WhatsApp dunning for both cohorts (ADR-0012).

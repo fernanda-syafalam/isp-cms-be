@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Invoice } from '../../infrastructure/database/schema/invoices.schema';
 import { CustomersRepository } from '../customers/customers.repository';
 import { SecretsRepository } from '../router-resources/secrets.repository';
+import { SettingsService } from '../settings/settings.service';
 import { InvoicesRepository } from './invoices.repository';
 import { InvoicesService } from './invoices.service';
 
@@ -60,12 +61,22 @@ describe('InvoicesService', () => {
       findById: vi.fn(),
     };
     secrets = { setDisabledByCustomerId: vi.fn() };
+    const settings = {
+      getBillingPolicy: vi.fn().mockResolvedValue({
+        pkp: true,
+        ppnRate: 0.11,
+        dueDays: 10,
+        lateFeeIdr: 25_000,
+        isolirGraceDays: 3,
+      }),
+    };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         InvoicesService,
         { provide: InvoicesRepository, useValue: repo },
         { provide: CustomersRepository, useValue: customers },
         { provide: SecretsRepository, useValue: secrets },
+        { provide: SettingsService, useValue: settings },
       ],
     }).compile();
     service = moduleRef.get(InvoicesService);
