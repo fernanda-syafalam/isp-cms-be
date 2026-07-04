@@ -15,6 +15,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CreateProfileDto, ProfileResponseDto, UpdateProfileDto } from './dto/profile.dto';
 import { ProfilesService } from './profiles.service';
 
+@Roles('admin', 'staff')
 @Controller({ path: 'routers/:routerId/profiles', version: '1' })
 export class ProfilesController {
   constructor(private readonly profiles: ProfilesService) {}

@@ -2,6 +2,7 @@ import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post } from '@nestj
 import { ZodSerializerDto } from 'nestjs-zod';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { type AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { EnableTwoFactorDto } from './dto/enable-two-factor.dto';
 import { SecurityStateResponseDto } from './dto/security-response.dto';
 import { SecurityService } from './security.service';
@@ -11,6 +12,7 @@ import { SecurityService } from './security.service';
  * every user manages their own 2FA and sessions (JwtAuthGuard already
  * requires authentication).
  */
+@Roles('admin', 'staff')
 @Controller({ path: 'security', version: '1' })
 export class SecurityController {
   constructor(private readonly security: SecurityService) {}

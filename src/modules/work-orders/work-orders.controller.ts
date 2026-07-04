@@ -16,6 +16,7 @@ const ListQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
+@Roles('admin', 'staff')
 @Controller({ path: 'work-orders', version: '1' })
 export class WorkOrdersController {
   constructor(private readonly workOrders: WorkOrdersService) {}

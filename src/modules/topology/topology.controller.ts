@@ -24,6 +24,7 @@ import { TopologyService } from './topology.service';
  * authenticated user; mutations (node form + customer-drop install + cable
  * re-route) are gated to admin/staff and audited.
  */
+@Roles('admin', 'staff')
 @Controller({ version: '1' })
 export class TopologyController {
   constructor(

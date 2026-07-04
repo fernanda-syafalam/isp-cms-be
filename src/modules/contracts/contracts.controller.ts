@@ -6,6 +6,7 @@ import { ContractsService } from './contracts.service';
 import { ContractResponseDto } from './dto/contract-response.dto';
 
 // Nested under the subscriber — a contract (PKS) belongs to one customer.
+@Roles('admin', 'staff')
 @Controller({ path: 'customers/:customerId/contract', version: '1' })
 export class ContractsController {
   constructor(private readonly contracts: ContractsService) {}

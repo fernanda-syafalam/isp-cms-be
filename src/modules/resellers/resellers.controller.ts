@@ -25,6 +25,7 @@ const LedgerListQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
+@Roles('admin', 'staff')
 @Controller({ path: 'resellers', version: '1' })
 export class ResellersController {
   constructor(private readonly resellers: ResellersService) {}

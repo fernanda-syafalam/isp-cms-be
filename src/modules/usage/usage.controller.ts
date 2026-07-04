@@ -1,5 +1,6 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { z } from 'zod';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { UsageService } from './usage.service';
 
 // Sort keys the FE is allowed to use for the usage table.
@@ -13,8 +14,8 @@ const UsageQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(100),
   offset: z.coerce.number().int().min(0).default(0),
 });
-
-// Read-only global data-usage list (any authenticated user).
+// Read-only global data-usage list (staff surface, P0.2).
+@Roles('admin', 'staff')
 @Controller({ path: 'usage', version: '1' })
 export class UsageController {
   constructor(private readonly usage: UsageService) {}

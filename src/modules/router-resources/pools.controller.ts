@@ -5,6 +5,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CreatePoolDto, PoolResponseDto } from './dto/pool.dto';
 import { PoolsService } from './pools.service';
 
+@Roles('admin', 'staff')
 @Controller({ path: 'routers/:routerId/pools', version: '1' })
 export class PoolsController {
   constructor(private readonly pools: PoolsService) {}

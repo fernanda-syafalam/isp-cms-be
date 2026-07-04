@@ -1,6 +1,7 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { z } from 'zod';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { AccountingService } from './accounting.service';
 import { JournalResponseDto } from './dto/journal-response.dto';
 
@@ -14,11 +15,11 @@ const JournalQuerySchema = z.object({
   offset: z.coerce.number().int().nonnegative().default(0),
 });
 
+@Roles('admin', 'staff')
 @Controller({ path: 'accounting', version: '1' })
 export class AccountingController {
   constructor(private readonly accounting: AccountingService) {}
-
-  // Read-only settlement journal for a period (any authenticated user).
+  // Read-only settlement journal for a period (staff surface, P0.2).
   @Get('journal')
   @ZodSerializerDto(JournalResponseDto)
   journal(@Query() query: unknown) {

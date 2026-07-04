@@ -1,5 +1,6 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { z } from 'zod';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { OdpService } from './odp.service';
 
 // Sort keys the FE is allowed to use for the ODP list.
@@ -14,8 +15,8 @@ const OdpQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(100),
   offset: z.coerce.number().int().min(0).default(0),
 });
-
-// Read-only ODP capacity dashboard (any authenticated user).
+// Read-only ODP capacity dashboard (staff surface, P0.2).
+@Roles('admin', 'staff')
 @Controller({ path: 'odp', version: '1' })
 export class OdpController {
   constructor(private readonly odp: OdpService) {}
