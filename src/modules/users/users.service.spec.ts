@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import * as argon2 from 'argon2';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -27,6 +27,7 @@ describe('UsersService', () => {
     listPage: ReturnType<typeof vi.fn>;
     update: ReturnType<typeof vi.fn>;
     softDelete: ReturnType<typeof vi.fn>;
+    updatePasswordHash: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
@@ -37,6 +38,7 @@ describe('UsersService', () => {
       listPage: vi.fn(),
       update: vi.fn(),
       softDelete: vi.fn(),
+      updatePasswordHash: vi.fn(),
     };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [UsersService, { provide: UsersRepository, useValue: repo }],
@@ -136,6 +138,56 @@ describe('UsersService', () => {
 
       const ok = await argon2.verify(created.passwordHash, 'another-secret-pass-9');
       expect(ok).toBe(true);
+    });
+  });
+
+  describe('changePassword (P1.4)', () => {
+    it('verifies the current password and stores a new argon2id hash', async () => {
+      const currentHash = await argon2.hash('old-password-12ch', { type: argon2.argon2id });
+      repo.findById.mockResolvedValue({ ...sampleUser, passwordHash: currentHash });
+
+      await service.changePassword(sampleUser.id, 'old-password-12ch', 'new-password-12ch');
+
+      expect(repo.updatePasswordHash).toHaveBeenCalledTimes(1);
+      const [id, newHash] = repo.updatePasswordHash.mock.calls[0] as [string, string];
+      expect(id).toBe(sampleUser.id);
+      expect(await argon2.verify(newHash, 'new-password-12ch')).toBe(true);
+    });
+
+    it('rejects a wrong current password with 400 and leaves the hash untouched', async () => {
+      const currentHash = await argon2.hash('old-password-12ch', { type: argon2.argon2id });
+      repo.findById.mockResolvedValue({ ...sampleUser, passwordHash: currentHash });
+
+      await expect(
+        service.changePassword(sampleUser.id, 'wrong-password-12', 'new-password-12ch'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(repo.updatePasswordHash).not.toHaveBeenCalled();
+    });
+
+    it('404s for an unknown user', async () => {
+      repo.findById.mockResolvedValue(null);
+      await expect(
+        service.changePassword('missing', 'irrelevant', 'new-password-12ch'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('resetPassword (P1.4)', () => {
+    it('overwrites the credential and returns the one-time password once', async () => {
+      repo.findById.mockResolvedValue(sampleUser);
+
+      const { initialPassword } = await service.resetPassword(sampleUser.id);
+
+      expect(initialPassword).toMatch(/^[\w-]{18}$/);
+      const [id, newHash] = repo.updatePasswordHash.mock.calls[0] as [string, string];
+      expect(id).toBe(sampleUser.id);
+      expect(await argon2.verify(newHash, initialPassword)).toBe(true);
+    });
+
+    it('404s for an unknown user without touching the credential', async () => {
+      repo.findById.mockResolvedValue(null);
+      await expect(service.resetPassword('missing')).rejects.toBeInstanceOf(NotFoundException);
+      expect(repo.updatePasswordHash).not.toHaveBeenCalled();
     });
   });
 });
