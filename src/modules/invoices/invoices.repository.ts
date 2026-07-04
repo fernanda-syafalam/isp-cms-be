@@ -249,6 +249,17 @@ export class InvoicesRepository {
     return rows.map((r) => r.customerId);
   }
 
+  /** Distinct customers with a pending invoice due within `days` (dunning H-N). */
+  async customerIdsWithPendingDueSoon(days: number): Promise<string[]> {
+    const rows = await this.db
+      .selectDistinct({ customerId: invoices.customerId })
+      .from(invoices)
+      .where(
+        and(eq(invoices.status, 'pending'), sql`${invoices.dueDate} <= current_date + ${days}`),
+      );
+    return rows.map((r) => r.customerId);
+  }
+
   // Paid invoices settled within a YYYY-MM period (cash-basis) — the source
   // of the accounting journal. Ordered by settlement time.
   async findPaidInPeriod(period: string): Promise<Invoice[]> {
