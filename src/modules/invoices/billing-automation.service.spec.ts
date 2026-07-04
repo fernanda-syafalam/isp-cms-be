@@ -103,15 +103,20 @@ describe('BillingAutomationService', () => {
       repo.markRemindedOverdue.mockResolvedValue(2);
       repo.customerIdsWithOverdue.mockResolvedValue(['c1', 'c2']);
       customers.findById.mockImplementation((id: string) =>
-        Promise.resolve(id === 'c1' ? { id, phone: '0812' } : { id, phone: null }),
+        Promise.resolve(
+          id === 'c1'
+            ? { id, phone: '0812', fullName: 'Budi' }
+            : { id, phone: null, fullName: 'X' },
+        ),
       );
+      repo.sumUnpaidByCustomer.mockResolvedValue(247_000);
 
       await service.remind({});
 
-      // c1 has a phone -> enqueued; c2 has none -> skipped.
+      // c1 has a phone -> enqueued with real vars; c2 has none -> skipped.
       expect(notifications.enqueue).toHaveBeenCalledTimes(1);
       expect(notifications.enqueue).toHaveBeenCalledWith(
-        { event: 'overdue', to: '0812' },
+        { event: 'overdue', to: '0812', vars: { nama: 'Budi', jumlah: 'Rp247.000' } },
         expect.stringMatching(/^dun:overdue:c1:/),
       );
     });
