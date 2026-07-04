@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { CustomerConnection } from '../../infrastructure/database/schema/customers.schema';
 import type { WorkOrder } from '../../infrastructure/database/schema/work-orders.schema';
 import { type CustomerRow, CustomersRepository } from '../customers/customers.repository';
@@ -54,7 +54,13 @@ export class WorkOrdersService {
       return toWorkOrderResponse(wo);
     }
 
-    if (wo.type === 'install' && wo.customerId) {
+    if (wo.type === 'install') {
+      // An install order must carry its subscriber. Completing one without it
+      // used to silently skip activation + provisioning + first invoice, which
+      // is exactly the lead-convert break this guards against (ADR-0009).
+      if (!wo.customerId) {
+        throw new BadRequestException('install work order is not linked to a customer');
+      }
       const customer = await this.customers.findById(wo.customerId);
       if (customer) {
         const onuSerial = await this.assignOnu(customer.fullName);
@@ -147,19 +153,26 @@ export class WorkOrdersService {
   }
 
   /**
-   * Schedule an install work order for a freshly-converted lead. customerId
-   * is null — the subscriber is linked when onboarding completes (matches
-   * the FE convert flow).
+   * Schedule an install work order for a freshly-converted lead, LINKED to the
+   * new subscriber. customerId is required so completing the order runs the
+   * activation cascade (ADR-0009); the technician + exact date are filled in
+   * by the field team later, so they default to null / a two-day lead time.
    */
-  async scheduleInstall(customerName: string): Promise<WorkOrderResponse> {
+  async scheduleInstall(input: {
+    customerId: string;
+    customerName: string;
+  }): Promise<WorkOrderResponse> {
     const wo = await this.repo.create({
       type: 'install',
-      customerId: null,
-      customerName,
+      customerId: input.customerId,
+      customerName: input.customerName,
       technician: null,
       scheduledAt: new Date(Date.now() + INSTALL_LEAD_MS),
     });
-    this.logger.log({ workOrderId: wo.id }, 'install scheduled from lead');
+    this.logger.log(
+      { workOrderId: wo.id, customerId: input.customerId },
+      'install scheduled from lead',
+    );
     return toWorkOrderResponse(wo);
   }
 }
