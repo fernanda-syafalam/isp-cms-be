@@ -1,4 +1,5 @@
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { eq } from 'drizzle-orm';
 import { type NodePgDatabase, drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -160,6 +161,22 @@ describe('ResellersRepository (integration)', () => {
       const x = await seed({ name: 'X-Reseller', area: 'Jepara' });
       const y = await seed({ name: 'Y-Reseller', area: 'Kudus' });
       const z = await seed({ name: 'Z-Reseller', area: 'Semarang' });
+
+      // created_at is timestamptz(3); back-to-back inserts can tie at ms
+      // precision, so pin distinct timestamps to make the order observable
+      const base = new Date('2026-01-01T00:00:00Z');
+      await db
+        .update(resellers)
+        .set({ createdAt: new Date(base.getTime()) })
+        .where(eq(resellers.id, x.id));
+      await db
+        .update(resellers)
+        .set({ createdAt: new Date(base.getTime() + 1000) })
+        .where(eq(resellers.id, y.id));
+      await db
+        .update(resellers)
+        .set({ createdAt: new Date(base.getTime() + 2000) })
+        .where(eq(resellers.id, z.id));
 
       const result = await repo.list({ sort: 'notAColumn', order: 'asc', limit: 50, offset: 0 });
       // Default: createdAt desc → Z, Y, X

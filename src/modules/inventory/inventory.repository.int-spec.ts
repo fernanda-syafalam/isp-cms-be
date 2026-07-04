@@ -1,4 +1,5 @@
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { eq } from 'drizzle-orm';
 import { type NodePgDatabase, drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -221,7 +222,7 @@ describe('InventoryRepository (integration)', () => {
         serial: item.serial,
         kind: item.kind,
         type: 'return',
-        note: 'NOMATCH-NOTE',
+        note: 'OTHER-NOTE',
       });
 
       const result = await repo.listMovements({ q: 'MATCH-NOTE', limit: 50, offset: 0 });
@@ -396,7 +397,7 @@ describe('InventoryRepository (integration)', () => {
     it('total reflects the q filter, not the full table count', async () => {
       await repo.create({ kind: 'onu', serial: 'MATCH-001' });
       await repo.create({ kind: 'onu', serial: 'MATCH-002' });
-      await repo.create({ kind: 'router', serial: 'NOMATCH-001' });
+      await repo.create({ kind: 'router', serial: 'OTHER-001' });
 
       const result = await repo.list({ q: 'MATCH', limit: 50, offset: 0 });
       // total must equal only the 2 matching rows, even though 3 exist
@@ -437,6 +438,22 @@ describe('InventoryRepository (integration)', () => {
       const x = await repo.create({ kind: 'onu', serial: 'X-001' });
       const y = await repo.create({ kind: 'onu', serial: 'Y-002' });
       const z = await repo.create({ kind: 'onu', serial: 'Z-003' });
+
+      // created_at is timestamptz(3); back-to-back inserts can tie at ms
+      // precision, so pin distinct timestamps to make the order observable
+      const base = new Date('2026-01-01T00:00:00Z');
+      await db
+        .update(inventoryItems)
+        .set({ createdAt: new Date(base.getTime()) })
+        .where(eq(inventoryItems.id, x.id));
+      await db
+        .update(inventoryItems)
+        .set({ createdAt: new Date(base.getTime() + 1000) })
+        .where(eq(inventoryItems.id, y.id));
+      await db
+        .update(inventoryItems)
+        .set({ createdAt: new Date(base.getTime() + 2000) })
+        .where(eq(inventoryItems.id, z.id));
 
       const result = await repo.list({ sort: 'notAColumn', order: 'asc', limit: 50, offset: 0 });
       // Default: createdAt desc → Z, Y, X
