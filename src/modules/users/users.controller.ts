@@ -13,7 +13,6 @@ import {
 import { ZodSerializerDto } from 'nestjs-zod';
 import { z } from 'zod';
 import { Audit } from '../../common/decorators/audit.decorator';
-import { Public } from '../../common/decorators/public.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -25,25 +24,39 @@ const CursorQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 
+/**
+ * Strip sensitive columns before a user row leaves the API. The
+ * ZodSerializerDto annotations are NOT enforced at runtime (no global
+ * ZodSerializerInterceptor is registered — tracked as a follow-up), so
+ * every handler that returns a user must strip explicitly, like `list`
+ * always has.
+ */
+function toUserResponse<T extends { passwordHash: string; deletedAt: Date | null }>(user: T) {
+  const { passwordHash: _passwordHash, deletedAt: _deletedAt, ...rest } = user;
+  return rest;
+}
+
 @Controller({ path: 'users', version: '1' })
 export class UsersController {
   constructor(private readonly users: UsersService) {}
 
-  // Self-registration is the simplest reference flow — leave it public
-  // for now. In a real service this might be admin-only, behind an
-  // invite token, or hidden behind a separate signup module.
-  @Public()
+  // Creating an account is privileged: the payload carries `role`
+  // (including `admin`), so a public endpoint would let anyone mint an
+  // admin. Staff accounts are provisioned by an admin; customer logins
+  // arrive via onboarding (P1), never self-signup.
+  @Roles('admin')
+  @Audit('user.create')
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @ZodSerializerDto(UserResponseDto)
-  create(@Body() body: CreateUserDto) {
-    return this.users.create(body);
+  async create(@Body() body: CreateUserDto) {
+    return toUserResponse(await this.users.create(body));
   }
 
   @Get(':id')
   @ZodSerializerDto(UserResponseDto)
-  findOne(@Param('id') id: string) {
-    return this.users.findById(id);
+  async findOne(@Param('id') id: string) {
+    return toUserResponse(await this.users.findById(id));
   }
 
   @Get()
@@ -69,8 +82,8 @@ export class UsersController {
   @Audit('user.update')
   @Patch(':id')
   @ZodSerializerDto(UserResponseDto)
-  update(@Param('id') id: string, @Body() body: UpdateUserDto) {
-    return this.users.update(id, body);
+  async update(@Param('id') id: string, @Body() body: UpdateUserDto) {
+    return toUserResponse(await this.users.update(id, body));
   }
 
   // Soft-delete is admin-only and audited. Demonstrates the Pilar 4
