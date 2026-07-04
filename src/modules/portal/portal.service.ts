@@ -30,7 +30,7 @@ export class PortalService {
 
   /** The authenticated customer's self-service snapshot. */
   async getMe(user: AuthUser): Promise<PortalMeResponse> {
-    const customer = await this.customers.resolveForPortal(user.email);
+    const customer = await this.customers.resolveForPortal(user);
     const [invoices, payments, tickets] = await Promise.all([
       this.invoices.invoicesByCustomer(customer.id),
       this.invoices.paymentsByCustomer(customer.id),
@@ -48,19 +48,19 @@ export class PortalService {
     user: AuthUser,
     input: CreatePaymentIntentInput,
   ): Promise<PaymentIntentResponse> {
-    const customer = await this.customers.resolveForPortal(user.email);
+    const customer = await this.customers.resolveForPortal(user);
     return this.intents.createForCustomer(customer.id, input);
   }
 
   /** Confirm the customer's own gateway charge (mock settlement webhook). */
   async confirmPayIntent(user: AuthUser, intentId: string): Promise<PaymentIntentResponse> {
-    const customer = await this.customers.resolveForPortal(user.email);
+    const customer = await this.customers.resolveForPortal(user);
     return this.intents.confirmForCustomer(customer.id, intentId);
   }
 
   /** Customer reports a problem -> opens a support ticket on their account. */
   async reportIssue(user: AuthUser, input: ReportIssueInput): Promise<void> {
-    const customer = await this.customers.resolveForPortal(user.email);
+    const customer = await this.customers.resolveForPortal(user);
     await this.tickets.create(
       { subject: input.subject, customerName: customer.fullName, priority: REPORTED_PRIORITY },
       user.fullName,

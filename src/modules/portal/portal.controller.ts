@@ -2,6 +2,7 @@ import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post } from '@nestj
 import { ZodSerializerDto } from 'nestjs-zod';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { type AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { CreatePaymentIntentDto } from '../invoices/dto/create-payment-intent.dto';
 import { PaymentIntentResponseDto } from '../invoices/dto/payment-intent-response.dto';
 import { PortalMeResponseDto } from './dto/portal-me-response.dto';
@@ -9,10 +10,13 @@ import { ReportIssueDto } from './dto/report-issue.dto';
 import { PortalService } from './portal.service';
 
 /**
- * Self-service portal for the authenticated customer. Not role-gated — the
- * snapshot resolves per-user (a real backend scopes strictly to the token);
- * JwtAuthGuard already requires authentication.
+ * Self-service portal for the authenticated customer. Gated to the
+ * customer role now that the customer↔user linkage exists (P1.3): staff
+ * act on subscribers through the staff surfaces, never by resolving a
+ * portal session — this closes the email-collision impersonation path
+ * flagged in the P0 security review (L1).
  */
+@Roles('customer')
 @Controller({ path: 'portal', version: '1' })
 export class PortalController {
   constructor(private readonly portal: PortalService) {}

@@ -121,10 +121,17 @@ export class CustomersRepository {
     return row ?? null;
   }
 
-  // Resolve a customer by their (unique-in-practice) email. Used to map a
-  // portal auth session to its subscriber record.
+  // Resolve a customer by their (unique-in-practice) email. Transition
+  // fallback for portal sessions predating the userId linkage (P1.3).
   async findByEmail(email: string): Promise<CustomerRow | null> {
     const [row] = await this.baseSelect().where(eq(customers.email, email)).limit(1);
+    return row ?? null;
+  }
+
+  // Resolve a customer by their linked login (customers.user_id, unique).
+  // The authoritative portal-session mapping (P1.3).
+  async findByUserId(userId: string): Promise<CustomerRow | null> {
+    const [row] = await this.baseSelect().where(eq(customers.userId, userId)).limit(1);
     return row ?? null;
   }
 

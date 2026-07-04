@@ -48,6 +48,7 @@ describe('Staff read-surface gate (e2e)', () => {
     // resolveForPortal fails closed on a miss (P0.3) — returning null here
     // makes /v1/portal/me a deterministic 404 for the customer probe below.
     findByEmail: vi.fn(async () => null),
+    findByUserId: vi.fn(async () => null),
   };
 
   const fakeWorkOrdersRepo = {

@@ -2,8 +2,8 @@ import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { CustomerResponseDto } from '../customers/dto/customer-response.dto';
 import { OnboardCustomerDto } from './dto/onboard-customer.dto';
+import { OnboardResponseDto } from './dto/onboard-response.dto';
 import { OnboardingService } from './onboarding.service';
 
 /**
@@ -20,7 +20,7 @@ export class OnboardingController {
   @Audit('customer.onboard')
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @ZodSerializerDto(CustomerResponseDto)
+  @ZodSerializerDto(OnboardResponseDto)
   onboard(@Body() body: OnboardCustomerDto) {
     return this.onboarding.onboard(body);
   }

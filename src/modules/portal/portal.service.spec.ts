@@ -78,7 +78,7 @@ describe('PortalService', () => {
     it('resolves the customer by session email and aggregates their data', async () => {
       const snapshot = await service.getMe(user);
 
-      expect(customers.resolveForPortal).toHaveBeenCalledWith('budi@example.com');
+      expect(customers.resolveForPortal).toHaveBeenCalledWith(user);
       expect(invoices.invoicesByCustomer).toHaveBeenCalledWith(CUSTOMER_ID);
       expect(invoices.paymentsByCustomer).toHaveBeenCalledWith(CUSTOMER_ID);
       expect(tickets.listByCustomer).toHaveBeenCalledWith(CUSTOMER_ID);
@@ -96,7 +96,7 @@ describe('PortalService', () => {
         channel: 'qris',
       });
 
-      expect(customers.resolveForPortal).toHaveBeenCalledWith('budi@example.com');
+      expect(customers.resolveForPortal).toHaveBeenCalledWith(user);
       expect(intents.createForCustomer).toHaveBeenCalledWith(CUSTOMER_ID, {
         invoiceId: 'inv-1',
         channel: 'qris',
