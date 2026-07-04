@@ -101,6 +101,21 @@ export class UsersRepository {
     return row;
   }
 
+  /**
+   * Swap the credential hash of a non-deleted user. Separate from
+   * update() on purpose — the generic profile patch must never be able
+   * to touch the credential (mass-assignment boundary).
+   */
+  async updatePasswordHash(id: string, passwordHash: string): Promise<void> {
+    const result = await this.db
+      .update(users)
+      .set({ passwordHash, updatedAt: sql`now()` })
+      .where(and(eq(users.id, id), isNull(users.deletedAt)));
+    if (result.rowCount === 0) {
+      throw new NotFoundException('user not found');
+    }
+  }
+
   async softDelete(id: string): Promise<void> {
     const result = await this.db
       .update(users)

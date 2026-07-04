@@ -1,5 +1,5 @@
-import { randomBytes } from 'node:crypto';
 import { ConflictException, Injectable, Logger } from '@nestjs/common';
+import { generateInitialPassword } from '../../common/security/initial-password';
 import { CustomersService } from '../customers/customers.service';
 import type { CustomerResponse } from '../customers/dto/customer-response.dto';
 import { UsersService } from '../users/users.service';
@@ -92,10 +92,3 @@ export class OnboardingService {
 export type OnboardResult = CustomerResponse & {
   portalLogin: { email: string; initialPassword: string } | null;
 };
-
-// 18 base64url chars (~108 bits) — comfortably over the 12-char minimum in
-// CreateUserSchema and communicated once by staff; the subscriber rotates
-// it via the password lifecycle (P1.4).
-function generateInitialPassword(): string {
-  return randomBytes(13).toString('base64url').slice(0, 18);
-}

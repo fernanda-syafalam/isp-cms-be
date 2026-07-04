@@ -1,5 +1,12 @@
-import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import * as argon2 from 'argon2';
+import { generateInitialPassword } from '../../common/security/initial-password';
 import type { User } from '../../infrastructure/database/schema/users.schema';
 import type { CreateUserInput } from './dto/create-user.dto';
 import type { UpdateUserInput } from './dto/update-user.dto';
@@ -62,5 +69,36 @@ export class UsersService {
 
   async softDelete(id: string): Promise<void> {
     await this.repo.softDelete(id);
+  }
+
+  /**
+   * Self-service credential rotation (P1.4). The current password is
+   * re-verified even under a valid JWT so a hijacked session cannot
+   * lock the owner out. 400 (not 401) on a wrong current password — the
+   * session itself is authenticated; the input is what's wrong.
+   */
+  async changePassword(id: string, currentPassword: string, newPassword: string): Promise<void> {
+    const user = await this.findById(id);
+    const ok = await argon2.verify(user.passwordHash, currentPassword);
+    if (!ok) throw new BadRequestException('current password is incorrect');
+
+    const passwordHash = await argon2.hash(newPassword, ARGON2_OPTIONS);
+    await this.repo.updatePasswordHash(id, passwordHash);
+    this.logger.log({ userId: id }, 'password changed');
+  }
+
+  /**
+   * Admin-issued reset (P1.4): overwrite the credential with a fresh
+   * one-time password, returned exactly once to the caller for handoff.
+   * The holder rotates it via changePassword. A set-password token link
+   * replaces this handoff once P2 notifications exist.
+   */
+  async resetPassword(id: string): Promise<{ initialPassword: string }> {
+    const user = await this.findById(id);
+    const initialPassword = generateInitialPassword();
+    const passwordHash = await argon2.hash(initialPassword, ARGON2_OPTIONS);
+    await this.repo.updatePasswordHash(user.id, passwordHash);
+    this.logger.log({ userId: id }, 'password reset by admin');
+    return { initialPassword };
   }
 }

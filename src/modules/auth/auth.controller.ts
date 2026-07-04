@@ -10,9 +10,12 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { Audit } from '../../common/decorators/audit.decorator';
 import { type AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
+import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { LoginDto } from './dto/login.dto';
 
 /** @fastify/cookie augments FastifyRequest with a `cookies` record after plugin registration. */
@@ -23,7 +26,10 @@ const COOKIE_PATH = '/v1/auth';
 
 @Controller({ path: 'auth', version: '1' })
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly users: UsersService,
+  ) {}
 
   @Public()
   @Post('login')
@@ -88,6 +94,22 @@ export class AuthController {
   @Get('me')
   me(@CurrentUser() user: AuthUser): AuthUser {
     return user;
+  }
+
+  /**
+   * Self-service credential rotation (P1.4) — any authenticated role.
+   * Requires the current password so a hijacked session cannot rotate
+   * the credential. Existing refresh tokens stay valid until their own
+   * rotation/TTL (single-use); a compromised session is cut by logout.
+   */
+  @Audit('auth.change_password')
+  @Post('change-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async changePassword(
+    @CurrentUser() user: AuthUser,
+    @Body() body: ChangePasswordDto,
+  ): Promise<void> {
+    await this.users.changePassword(user.id, body.currentPassword, body.newPassword);
   }
 
   // ---------------------------------------------------------------------------

@@ -98,4 +98,15 @@ export class UsersController {
   remove(@Param('id') id: string): Promise<void> {
     return this.users.softDelete(id);
   }
+
+  // Admin-issued credential reset (P1.4). The fresh one-time password is
+  // returned exactly once for handoff; a set-password link replaces this
+  // once P2 notifications exist.
+  @Roles('admin')
+  @Audit('user.reset_password')
+  @Post(':id/reset-password')
+  @HttpCode(HttpStatus.OK)
+  resetPassword(@Param('id') id: string): Promise<{ initialPassword: string }> {
+    return this.users.resetPassword(id);
+  }
 }
