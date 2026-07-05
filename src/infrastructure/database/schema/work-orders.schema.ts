@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { index, pgEnum, pgSequence, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
 import { customers } from './customers.schema';
+import { tickets } from './tickets.schema';
 
 export const workOrderType = pgEnum('work_order_type', ['install', 'repair', 'dismantle']);
 export const workOrderStatus = pgEnum('work_order_status', [
@@ -35,12 +36,16 @@ export const workOrders = pgTable(
       precision: 3,
     }).notNull(),
     status: workOrderStatus('status').notNull().default('scheduled'),
+    // Nullable: only a repair WO dispatched from a ticket carries this link
+    // (P3.B.4). Completing such a WO auto-resolves the linked ticket.
+    ticketId: uuid('ticket_id').references(() => tickets.id),
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },
   (t) => [
     index('work_orders_status_idx').on(t.status),
     index('work_orders_customer_id_idx').on(t.customerId),
+    index('work_orders_ticket_id_idx').on(t.ticketId),
   ],
 );
 

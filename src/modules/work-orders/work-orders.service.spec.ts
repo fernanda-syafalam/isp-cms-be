@@ -8,10 +8,13 @@ import { InvoicesService } from '../invoices/invoices.service';
 import { ProfilesRepository } from '../router-resources/profiles.repository';
 import { SecretsRepository } from '../router-resources/secrets.repository';
 import { RoutersRepository } from '../routers/routers.repository';
+import { TicketsService } from '../tickets/tickets.service';
 import { WorkOrdersRepository } from './work-orders.repository';
 import { WorkOrdersService } from './work-orders.service';
 
 const CUSTOMER_ID = '00000000-0000-0000-0000-0000000000c1';
+
+const AUTHOR = 'Teknisi Budi';
 
 const installWo: WorkOrder = {
   id: '00000000-0000-0000-0000-00000000a001',
@@ -22,8 +25,18 @@ const installWo: WorkOrder = {
   technician: 'Teknisi Budi',
   scheduledAt: new Date('2026-06-16T00:00:00.000Z'),
   status: 'scheduled',
+  ticketId: null,
   createdAt: new Date('2026-06-15T00:00:00.000Z'),
   updatedAt: new Date('2026-06-15T00:00:00.000Z'),
+};
+
+// A repair WO spawned from a ticket — completing it closes the loop (P3.B.4).
+const repairWo: WorkOrder = {
+  ...installWo,
+  id: '00000000-0000-0000-0000-00000000a002',
+  code: 'WO-9002',
+  type: 'repair',
+  ticketId: '00000000-0000-0000-0000-0000000000t1',
 };
 
 const customerRow = {
@@ -42,6 +55,7 @@ describe('WorkOrdersService', () => {
   let routers: Record<string, ReturnType<typeof vi.fn>>;
   let profiles: { listByRouter: ReturnType<typeof vi.fn> };
   let secrets: { create: ReturnType<typeof vi.fn> };
+  let tickets: { resolveFromWorkOrder: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     repo = {
@@ -75,6 +89,7 @@ describe('WorkOrdersService', () => {
       }),
     };
     secrets = { create: vi.fn() };
+    tickets = { resolveFromWorkOrder: vi.fn() };
 
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
@@ -86,6 +101,7 @@ describe('WorkOrdersService', () => {
         { provide: RoutersRepository, useValue: routers },
         { provide: ProfilesRepository, useValue: profiles },
         { provide: SecretsRepository, useValue: secrets },
+        { provide: TicketsService, useValue: tickets },
       ],
     }).compile();
     service = moduleRef.get(WorkOrdersService);
@@ -97,7 +113,7 @@ describe('WorkOrdersService', () => {
       customers.findById.mockResolvedValue(customerRow);
       repo.markDone.mockResolvedValue({ ...installWo, status: 'done' });
 
-      const result = await service.complete(installWo.id);
+      const result = await service.complete(installWo.id, AUTHOR);
 
       // ONU consumed from warehouse and assigned to the subscriber, with the
       // movement linked back to this work order (ADR-0003/0009).
@@ -138,7 +154,7 @@ describe('WorkOrdersService', () => {
       inventory.findAvailableOnu.mockResolvedValue(null);
       repo.markDone.mockResolvedValue({ ...installWo, status: 'done' });
 
-      await service.complete(installWo.id);
+      await service.complete(installWo.id, AUTHOR);
 
       expect(inventory.move).not.toHaveBeenCalled();
       const [, connection] = customers.markInstalled.mock.calls[0] ?? [];
@@ -156,7 +172,7 @@ describe('WorkOrdersService', () => {
       });
       repo.markDone.mockResolvedValue({ ...installWo, status: 'done' });
 
-      await service.complete(installWo.id);
+      await service.complete(installWo.id, AUTHOR);
 
       expect(secrets.create).toHaveBeenCalledWith(
         expect.objectContaining({ profileId: 'prof-default', profileName: 'default' }),
@@ -169,7 +185,7 @@ describe('WorkOrdersService', () => {
       routers.findFirst.mockResolvedValue(null);
       repo.markDone.mockResolvedValue({ ...installWo, status: 'done' });
 
-      await service.complete(installWo.id);
+      await service.complete(installWo.id, AUTHOR);
 
       expect(secrets.create).not.toHaveBeenCalled();
       expect(routers.adjustSecretCount).not.toHaveBeenCalled();
@@ -180,7 +196,7 @@ describe('WorkOrdersService', () => {
 
     it('is idempotent for an already-done order (no re-provisioning)', async () => {
       repo.findById.mockResolvedValue({ ...installWo, status: 'done' });
-      const result = await service.complete(installWo.id);
+      const result = await service.complete(installWo.id, AUTHOR);
       expect(inventory.findAvailableOnu).not.toHaveBeenCalled();
       expect(customers.markInstalled).not.toHaveBeenCalled();
       expect(secrets.create).not.toHaveBeenCalled();
@@ -196,7 +212,7 @@ describe('WorkOrdersService', () => {
         type: 'repair',
         status: 'done',
       });
-      await service.complete(installWo.id);
+      await service.complete(installWo.id, AUTHOR);
       expect(inventory.findAvailableOnu).not.toHaveBeenCalled();
       expect(customers.markInstalled).not.toHaveBeenCalled();
       expect(secrets.create).not.toHaveBeenCalled();
@@ -206,15 +222,43 @@ describe('WorkOrdersService', () => {
 
     it('throws 404 for a missing order', async () => {
       repo.findById.mockResolvedValue(null);
-      await expect(service.complete('missing')).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.complete('missing', AUTHOR)).rejects.toBeInstanceOf(NotFoundException);
     });
 
     // ADR-0009: an install order with no subscriber must fail loud rather than
     // silently skip the activation cascade (the old lead-convert break).
     it('rejects completing an install order with no linked customer', async () => {
       repo.findById.mockResolvedValue({ ...installWo, customerId: null });
-      await expect(service.complete(installWo.id)).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.complete(installWo.id, AUTHOR)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
       expect(repo.markDone).not.toHaveBeenCalled();
+    });
+
+    // P3.B.4: completing a repair WO closes the linked ticket.
+    it('resolves the linked ticket when a repair order is completed', async () => {
+      repo.findById.mockResolvedValue(repairWo);
+      repo.markDone.mockResolvedValue({ ...repairWo, status: 'done' });
+
+      await service.complete(repairWo.id, AUTHOR);
+
+      expect(tickets.resolveFromWorkOrder).toHaveBeenCalledWith(
+        repairWo.ticketId,
+        repairWo.code,
+        AUTHOR,
+      );
+      // Repair path never touches the install cascade.
+      expect(customers.markInstalled).not.toHaveBeenCalled();
+      expect(invoices.generateFirstInvoice).not.toHaveBeenCalled();
+    });
+
+    it('does not touch tickets for a repair order with no linked ticket', async () => {
+      repo.findById.mockResolvedValue({ ...repairWo, ticketId: null });
+      repo.markDone.mockResolvedValue({ ...repairWo, ticketId: null, status: 'done' });
+
+      await service.complete(repairWo.id, AUTHOR);
+
+      expect(tickets.resolveFromWorkOrder).not.toHaveBeenCalled();
     });
   });
 
@@ -279,6 +323,7 @@ describe('WorkOrdersService', () => {
         technician: null,
       });
       const result = await service.createFromTicket({
+        ticketId: '00000000-0000-0000-0000-0000000000t1',
         customerId: CUSTOMER_ID,
         customerName: 'Budi Santoso',
       });
@@ -287,6 +332,7 @@ describe('WorkOrdersService', () => {
           type: 'repair',
           customerId: CUSTOMER_ID,
           technician: null,
+          ticketId: '00000000-0000-0000-0000-0000000000t1',
         }),
       );
       expect(result.type).toBe('repair');

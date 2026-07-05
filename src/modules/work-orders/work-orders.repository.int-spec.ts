@@ -63,6 +63,7 @@ describe('WorkOrdersRepository (integration)', () => {
         technician varchar(120),
         scheduled_at timestamptz(3) NOT NULL,
         status work_order_status NOT NULL DEFAULT 'scheduled',
+        ticket_id uuid,
         created_at timestamptz(3) NOT NULL DEFAULT now(),
         updated_at timestamptz(3) NOT NULL DEFAULT now()
       );
@@ -128,6 +129,15 @@ describe('WorkOrdersRepository (integration)', () => {
     const page = await repo.list({ limit: 1, offset: 0 });
     expect(page.items).toHaveLength(1);
     expect(page.total).toBe(3);
+  });
+
+  it('create: round-trips ticketId when the WO is linked to a ticket (P3.B.4)', async () => {
+    const ticketId = '00000000-0000-0000-0000-0000000000e1';
+    const wo = await repo.create(newWo({ type: 'repair', ticketId }));
+    expect(wo.ticketId).toBe(ticketId);
+
+    const found = await repo.findById(wo.id);
+    expect(found?.ticketId).toBe(ticketId);
   });
 
   it('markDone flips status and rejects a missing order', async () => {

@@ -1,7 +1,10 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, Logger, NotFoundException, forwardRef } from '@nestjs/common';
 import type { Ticket, TicketEvent } from '../../infrastructure/database/schema/tickets.schema';
 import { CustomersRepository } from '../customers/customers.repository';
 import type { WorkOrderResponse } from '../work-orders/dto/work-order-response.dto';
+// WorkOrdersService now injects TicketsService back (P3.B.4, to close the
+// repair loop on complete()) — a real two-file circular import, so this
+// injection needs forwardRef() on both sides (see work-orders.service.ts).
 import { WorkOrdersService } from '../work-orders/work-orders.service';
 import type { AddCommentInput } from './dto/add-comment.dto';
 import type { CreateTicketInput } from './dto/create-ticket.dto';
@@ -27,6 +30,7 @@ export class TicketsService {
     // Resolve the subscriber id from the typed-in customer name.
     private readonly customers: CustomersRepository,
     // Dispatch a repair work order from a ticket.
+    @Inject(forwardRef(() => WorkOrdersService))
     private readonly workOrders: WorkOrdersService,
   ) {}
 
@@ -91,10 +95,7 @@ export class TicketsService {
 
     let nextStatus: Ticket['status'] | undefined;
     if (input.status !== undefined && input.status !== ticket.status) {
-      nextStatus =
-        input.status === 'resolved' && ticket.slaDueAt.getTime() < Date.now()
-          ? 'breached'
-          : input.status;
+      nextStatus = this.downgradeIfBreached(ticket, input.status);
       patch.status = nextStatus;
     }
 
@@ -156,6 +157,7 @@ export class TicketsService {
     const ticket = await this.repo.findById(id);
     if (!ticket) throw new NotFoundException('ticket not found');
     const wo = await this.workOrders.createFromTicket({
+      ticketId: ticket.id,
       customerId: ticket.customerId,
       customerName: ticket.customerName,
     });
@@ -168,9 +170,46 @@ export class TicketsService {
     return wo;
   }
 
+  /**
+   * Close the repair loop (P3.B.4): called by WorkOrdersService when a
+   * repair WO linked to this ticket is completed. Idempotent — a ticket
+   * that is already `resolved`/`breached` is left untouched, so a second
+   * `complete()` call on the same WO (itself idempotent) never double-closes
+   * it. Reuses the exact resolve-vs-breach rule from `update()`.
+   */
+  async resolveFromWorkOrder(ticketId: string, woCode: string, author: string): Promise<void> {
+    const ticket = await this.repo.findById(ticketId);
+    if (!ticket) throw new NotFoundException('ticket not found');
+    if (ticket.status === 'resolved' || ticket.status === 'breached') return;
+
+    await this.repo.addEvent({
+      ticketId,
+      kind: 'workorder',
+      author,
+      body: `Perbaikan selesai — WO ${woCode}`,
+    });
+
+    const nextStatus = this.downgradeIfBreached(ticket, 'resolved');
+    await this.repo.update(ticketId, { status: nextStatus });
+    await this.repo.addEvent({
+      ticketId,
+      kind: 'status',
+      author,
+      body: `Status → ${nextStatus}`,
+    });
+  }
+
   async listEvents(id: string): Promise<{ items: TicketEventResponse[]; total: number }> {
     const { items, total } = await this.repo.listEvents(id);
     return { items: items.map(toTicketEventResponse), total };
+  }
+
+  // The single source of truth for the resolve-vs-breach rule: resolving a
+  // ticket after its SLA deadline records it as `breached`, not `resolved`.
+  // Shared by `update()` and `resolveFromWorkOrder()` so the rule never
+  // drifts between the two call sites.
+  private downgradeIfBreached(ticket: Ticket, status: Ticket['status']): Ticket['status'] {
+    return status === 'resolved' && ticket.slaDueAt.getTime() < Date.now() ? 'breached' : status;
   }
 }
 

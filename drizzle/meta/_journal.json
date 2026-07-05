@@ -260,6 +260,13 @@
       "when": 1783269203917,
       "tag": "0036_fancy_slyde",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1783276808558,
+      "tag": "0037_fine_secret_warriors",
+      "breakpoints": true
     }
   ]
 }
