@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { and, desc, eq, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import { type NewUser, type User, users } from '../../infrastructure/database/schema/users.schema';
 
@@ -7,6 +7,10 @@ export interface CursorPage<T> {
   items: T[];
   nextCursor: string | null;
 }
+
+// Transaction-scoped advisory-lock key that serializes concurrent first-run
+// bootstrap attempts (arbitrary constant, unique to this operation).
+const BOOTSTRAP_LOCK_KEY = 4_820_113;
 
 interface CursorPayload {
   id: string;
@@ -52,6 +56,32 @@ export class UsersRepository {
       throw new Error('users.insert returned no row');
     }
     return row;
+  }
+
+  /**
+   * Count every row in the table, INCLUDING soft-deleted ones. Used by the
+   * first-run bootstrap gate: if the sole admin is later soft-deleted the
+   * table is not "empty", so a stranger must not be able to re-bootstrap.
+   */
+  async countAll(): Promise<number> {
+    const [row] = await this.db.select({ value: count() }).from(users);
+    return row?.value ?? 0;
+  }
+
+  /**
+   * Insert the given user ONLY if the table is currently empty (first-run
+   * bootstrap). Runs under a transaction-scoped advisory lock so two
+   * concurrent bootstrap requests serialize and only one admin is created.
+   * Returns the created user, or null if any user already exists.
+   */
+  async createIfEmpty(input: NewUser): Promise<User | null> {
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${BOOTSTRAP_LOCK_KEY})`);
+      const [existing] = await tx.select({ value: count() }).from(users);
+      if ((existing?.value ?? 0) > 0) return null;
+      const [row] = await tx.insert(users).values(input).returning();
+      return row ?? null;
+    });
   }
 
   /**

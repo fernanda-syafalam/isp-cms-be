@@ -51,6 +51,35 @@ export class UsersService {
     return user;
   }
 
+  /** Total users incl. soft-deleted — the first-run bootstrap gate. */
+  count(): Promise<number> {
+    return this.repo.countAll();
+  }
+
+  /**
+   * First-run bootstrap: create the very first admin, but ONLY if the table
+   * is empty. Role is forced to 'admin' server-side (never client-supplied).
+   * Returns null when a user already exists (the caller maps that to 409).
+   * The empty-check + insert are serialized by an advisory lock in the repo.
+   */
+  async bootstrapAdmin(input: {
+    email: string;
+    fullName: string;
+    password: string;
+  }): Promise<User | null> {
+    const passwordHash = await argon2.hash(input.password, ARGON2_OPTIONS);
+    const user = await this.repo.createIfEmpty({
+      email: input.email,
+      fullName: input.fullName,
+      passwordHash,
+      role: 'admin',
+    });
+    if (user) {
+      this.logger.log({ userId: user.id }, 'bootstrap admin created');
+    }
+    return user;
+  }
+
   async findById(id: string): Promise<User> {
     const user = await this.repo.findById(id);
     if (!user) throw new NotFoundException('user not found');

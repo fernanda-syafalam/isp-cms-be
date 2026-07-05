@@ -1,10 +1,11 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Test, type TestingModule } from '@nestjs/testing';
 import * as argon2 from 'argon2';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { User } from '../../infrastructure/database/schema/users.schema';
 import { UsersRepository } from '../users/users.repository';
+import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
 import { RefreshTokenService } from './refresh-token.service';
 
@@ -13,6 +14,10 @@ describe('AuthService', () => {
   let repo: {
     findByEmail: ReturnType<typeof vi.fn>;
     findById: ReturnType<typeof vi.fn>;
+  };
+  let usersService: {
+    count: ReturnType<typeof vi.fn>;
+    bootstrapAdmin: ReturnType<typeof vi.fn>;
   };
   let jwt: { signAsync: ReturnType<typeof vi.fn> };
   let refresh: {
@@ -38,6 +43,7 @@ describe('AuthService', () => {
       deletedAt: null,
     };
     repo = { findByEmail: vi.fn(), findById: vi.fn() };
+    usersService = { count: vi.fn(), bootstrapAdmin: vi.fn() };
     jwt = { signAsync: vi.fn().mockResolvedValue('signed.jwt.value') };
     refresh = {
       mint: vi.fn().mockResolvedValue({ token: 'refresh-A', expiresInSeconds: 604_800 }),
@@ -49,6 +55,7 @@ describe('AuthService', () => {
       providers: [
         AuthService,
         { provide: UsersRepository, useValue: repo },
+        { provide: UsersService, useValue: usersService },
         { provide: JwtService, useValue: jwt },
         { provide: RefreshTokenService, useValue: refresh },
       ],
@@ -133,6 +140,38 @@ describe('AuthService', () => {
     it('revokes the supplied refresh token', async () => {
       await service.logout('refresh-Z');
       expect(refresh.revoke).toHaveBeenCalledWith('refresh-Z');
+    });
+  });
+
+  describe('bootstrapRequired', () => {
+    it('is true when there are no users', async () => {
+      usersService.count.mockResolvedValue(0);
+      await expect(service.bootstrapRequired()).resolves.toBe(true);
+    });
+
+    it('is false once any user exists', async () => {
+      usersService.count.mockResolvedValue(3);
+      await expect(service.bootstrapRequired()).resolves.toBe(false);
+    });
+  });
+
+  describe('bootstrapAdmin', () => {
+    const input = { email: 'root@ashnet.id', fullName: 'Root', password: 'correct-horse-staple' };
+
+    it('creates the admin and logs them in (access + refresh pair)', async () => {
+      usersService.bootstrapAdmin.mockResolvedValue({ ...user, role: 'admin' });
+      const out = await service.bootstrapAdmin(input);
+      expect(usersService.bootstrapAdmin).toHaveBeenCalledWith(input);
+      expect(out.accessToken).toBe('signed.jwt.value');
+      expect(out.refreshToken).toBe('refresh-A');
+      expect(out.user.role).toBe('admin');
+      expect(refresh.mint).toHaveBeenCalledWith(user.id);
+    });
+
+    it('rejects with 409 when a user already exists (returns null)', async () => {
+      usersService.bootstrapAdmin.mockResolvedValue(null);
+      await expect(service.bootstrapAdmin(input)).rejects.toBeInstanceOf(ConflictException);
+      expect(refresh.mint).not.toHaveBeenCalled();
     });
   });
 });

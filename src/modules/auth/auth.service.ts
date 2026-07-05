@@ -1,8 +1,10 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import type { AuthUser } from '../../common/decorators/current-user.decorator';
 import { UsersRepository } from '../users/users.repository';
+import { UsersService } from '../users/users.service';
+import type { BootstrapInput } from './dto/bootstrap.dto';
 import { RefreshTokenService } from './refresh-token.service';
 
 interface JwtPayload {
@@ -28,9 +30,43 @@ export interface LoginResult {
 export class AuthService {
   constructor(
     private readonly usersRepo: UsersRepository,
+    private readonly users: UsersService,
     private readonly jwt: JwtService,
     private readonly refreshTokens: RefreshTokenService,
   ) {}
+
+  /** True only when no user exists yet — the first-run bootstrap window. */
+  async bootstrapRequired(): Promise<boolean> {
+    return (await this.users.count()) === 0;
+  }
+
+  /**
+   * Create the first admin (empty-table only) and immediately log them in —
+   * returns a LoginResult so the controller sets the refresh cookie exactly
+   * like login(). Throws 409 once any user exists (single-use). Role is forced
+   * to 'admin' inside UsersService; the empty-check + insert are serialized by
+   * an advisory lock so concurrent bootstrap attempts cannot both succeed.
+   */
+  async bootstrapAdmin(input: BootstrapInput): Promise<LoginResult> {
+    const user = await this.users.bootstrapAdmin(input);
+    if (!user) {
+      throw new ConflictException('bootstrap already completed');
+    }
+    const accessToken = await this.signAccess(user.id, user.role);
+    const refresh = await this.refreshTokens.mint(user.id);
+    return {
+      accessToken,
+      refreshToken: refresh.token,
+      refreshExpiresInSeconds: refresh.expiresInSeconds,
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+        resellerId: user.resellerId,
+      },
+    };
+  }
 
   async login(email: string, password: string): Promise<LoginResult> {
     const user = await this.usersRepo.findByEmail(email);
