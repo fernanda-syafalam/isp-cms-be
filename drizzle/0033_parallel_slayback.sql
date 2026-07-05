@@ -1,0 +1,2 @@
+ALTER TABLE "reseller_ledger" ADD COLUMN "ref" varchar(64);--> statement-breakpoint
+CREATE UNIQUE INDEX "reseller_ledger_reseller_type_ref_idx" ON "reseller_ledger" USING btree ("reseller_id","type","ref") WHERE "reseller_ledger"."ref" is not null;

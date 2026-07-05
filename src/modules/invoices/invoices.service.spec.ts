@@ -3,6 +3,7 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Invoice } from '../../infrastructure/database/schema/invoices.schema';
 import { CustomersRepository } from '../customers/customers.repository';
+import { ResellersRepository } from '../resellers/resellers.repository';
 import { SecretsRepository } from '../router-resources/secrets.repository';
 import { SettingsService } from '../settings/settings.service';
 import { InvoicesRepository } from './invoices.repository';
@@ -39,6 +40,10 @@ const defaultSummary = {
 
 describe('InvoicesService', () => {
   let service: InvoicesService;
+  let resellersFake: {
+    findById: ReturnType<typeof vi.fn>;
+    postCommissionForInvoice: ReturnType<typeof vi.fn>;
+  };
   let repo: Record<string, ReturnType<typeof vi.fn>>;
   let customers: Record<string, ReturnType<typeof vi.fn>>;
   let secrets: { setDisabledByCustomerId: ReturnType<typeof vi.fn> };
@@ -58,9 +63,15 @@ describe('InvoicesService', () => {
     customers = {
       findActiveBillable: vi.fn(),
       setBilling: vi.fn(),
-      findById: vi.fn(),
+      // Default: no reseller, so commission is a no-op unless a test overrides.
+      findById: vi.fn().mockResolvedValue({ id: 'c1', resellerId: null }),
+      findBillingInfo: vi.fn(),
     };
     secrets = { setDisabledByCustomerId: vi.fn() };
+    const resellers = {
+      findById: vi.fn(),
+      postCommissionForInvoice: vi.fn().mockResolvedValue(true),
+    };
     const settings = {
       getBillingPolicy: vi.fn().mockResolvedValue({
         pkp: true,
@@ -77,9 +88,11 @@ describe('InvoicesService', () => {
         { provide: CustomersRepository, useValue: customers },
         { provide: SecretsRepository, useValue: secrets },
         { provide: SettingsService, useValue: settings },
+        { provide: ResellersRepository, useValue: resellers },
       ],
     }).compile();
     service = moduleRef.get(InvoicesService);
+    resellersFake = resellers;
   });
 
   // ---------------------------------------------------------------------------
@@ -229,6 +242,44 @@ describe('InvoicesService', () => {
       expect(secrets.setDisabledByCustomerId).toHaveBeenCalledWith(CUSTOMER_ID, false);
       expect(result.status).toBe('paid');
       expect(result.paidAt).toBe('2026-06-15T10:00:00.000Z');
+      // No reseller on this customer → no commission (P3.D.1).
+      expect(resellersFake.postCommissionForInvoice).not.toHaveBeenCalled();
+    });
+
+    it('posts the acquiring reseller commission on payment, keyed by invoice (P3.D.1)', async () => {
+      repo.findById.mockResolvedValue(pendingInvoice);
+      repo.markPaid.mockResolvedValue({ ...pendingInvoice, status: 'paid', paidAt: new Date() });
+      repo.sumUnpaidByCustomer.mockResolvedValue(0);
+      repo.countOverdueByCustomer.mockResolvedValue(0);
+      customers.findById.mockResolvedValue({
+        id: CUSTOMER_ID,
+        status: 'aktif',
+        resellerId: 'r-1',
+      });
+      resellersFake.findById.mockResolvedValue({ id: 'r-1', commissionPct: 0.05 });
+
+      await service.pay(pendingInvoice.id, { method: 'transfer' });
+
+      // 5% of the 222_000 total.
+      expect(resellersFake.postCommissionForInvoice).toHaveBeenCalledWith({
+        resellerId: 'r-1',
+        amount: 11_100,
+        invoiceId: pendingInvoice.id,
+        note: expect.stringContaining(pendingInvoice.id),
+      });
+    });
+
+    it('skips commission when the reseller rate is zero', async () => {
+      repo.findById.mockResolvedValue(pendingInvoice);
+      repo.markPaid.mockResolvedValue({ ...pendingInvoice, status: 'paid', paidAt: new Date() });
+      repo.sumUnpaidByCustomer.mockResolvedValue(0);
+      repo.countOverdueByCustomer.mockResolvedValue(0);
+      customers.findById.mockResolvedValue({ id: CUSTOMER_ID, status: 'aktif', resellerId: 'r-1' });
+      resellersFake.findById.mockResolvedValue({ id: 'r-1', commissionPct: 0 });
+
+      await service.pay(pendingInvoice.id, { method: 'transfer' });
+
+      expect(resellersFake.postCommissionForInvoice).not.toHaveBeenCalled();
     });
 
     it('keeps an active customer active and only refreshes the balance', async () => {

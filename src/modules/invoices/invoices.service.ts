@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { Invoice, Payment } from '../../infrastructure/database/schema/invoices.schema';
 import { CustomersRepository } from '../customers/customers.repository';
+import { ResellersRepository } from '../resellers/resellers.repository';
 import { SecretsRepository } from '../router-resources/secrets.repository';
 import { SettingsService } from '../settings/settings.service';
 import type { BillingRunResult } from './dto/billing-run-result.dto';
@@ -30,6 +31,8 @@ export class InvoicesService {
     private readonly secrets: SecretsRepository,
     // Tax + due-days policy (P2.3) — read at run time so admin edits apply.
     private readonly settings: SettingsService,
+    // Reseller commission on payment (P3.D.1, ADR-0010).
+    private readonly resellers: ResellersRepository,
   ) {}
 
   async list(filter: InvoiceListFilter): Promise<InvoiceListResponse> {
@@ -86,8 +89,42 @@ export class InvoicesService {
       method: input.method,
     });
     await this.refreshCustomerBilling(invoice.customerId);
+    await this.postResellerCommission(invoice.customerId, invoice.id, total);
     this.logger.log({ invoiceId: id, method: input.method }, 'invoice paid');
     return toInvoiceResponse(paid);
+  }
+
+  /**
+   * Credit the acquiring reseller's commission on a paid invoice (P3.D.1,
+   * ADR-0010). Idempotent by invoice id, so a re-paid/retried settlement
+   * never double-credits. No-op when the customer has no reseller or the
+   * reseller's commission rate is zero.
+   */
+  private async postResellerCommission(
+    customerId: string,
+    invoiceId: string,
+    paidTotal: number,
+  ): Promise<void> {
+    const customer = await this.customers.findById(customerId);
+    if (!customer?.resellerId) return;
+    const reseller = await this.resellers.findById(customer.resellerId);
+    if (!reseller || reseller.commissionPct <= 0) return;
+
+    const commission = Math.round(paidTotal * reseller.commissionPct);
+    if (commission <= 0) return;
+
+    const posted = await this.resellers.postCommissionForInvoice({
+      resellerId: reseller.id,
+      amount: commission,
+      invoiceId,
+      note: `Komisi tagihan ${invoiceId}`,
+    });
+    if (posted) {
+      this.logger.log(
+        { resellerId: reseller.id, invoiceId, commission },
+        'reseller commission posted',
+      );
+    }
   }
 
   /**
