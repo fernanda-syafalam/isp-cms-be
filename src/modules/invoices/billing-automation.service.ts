@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { CustomersRepository } from '../customers/customers.repository';
 import { NotificationsService } from '../notifications/notifications.service';
-import { SecretsRepository } from '../router-resources/secrets.repository';
+import { SecretEnforcementService } from '../router-resources/secret-enforcement.service';
 import { SettingsService } from '../settings/settings.service';
 import type {
   IsolirResult,
@@ -25,8 +25,9 @@ export class BillingAutomationService {
     private readonly invoices: InvoicesService,
     private readonly repo: InvoicesRepository,
     private readonly customers: CustomersRepository,
-    // Auto-isolir must cut network access, not just flip the DB status (ADR-0008).
-    private readonly secrets: SecretsRepository,
+    // Auto-isolir must cut network access, not just flip the DB status
+    // (ADR-0008 / P2.5): DB write + push to the router via the adapter.
+    private readonly secrets: SecretEnforcementService,
     // Dunning must actually send, via the retried queue, not just stamp
     // lastRemindedAt (ADR-0012).
     private readonly notifications: NotificationsService,
@@ -123,7 +124,7 @@ export class BillingAutomationService {
         const outstanding = await this.repo.sumUnpaidByCustomer(id);
         await this.customers.setBilling(id, { status: 'isolir', outstanding });
         // Enforce on the router: disable the customer's PPPoE secret (ADR-0008).
-        await this.secrets.setDisabledByCustomerId(id, true);
+        await this.secrets.applyDisabledForCustomer(id, true);
         isolated += 1;
       }
     }

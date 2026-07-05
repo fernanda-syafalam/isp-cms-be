@@ -7,6 +7,15 @@ import {
   type PppSecret,
   pppSecrets,
 } from '../../infrastructure/database/schema/pppoe.schema';
+import { routers } from '../../infrastructure/database/schema/routers.schema';
+
+/** A secret owned by a customer, joined with its router's API connection. */
+export type SecretRouterTarget = {
+  secretUsername: string;
+  host: string;
+  apiPort: number;
+  routerUser: string;
+};
 
 type SecretPatch = Partial<
   Pick<
@@ -141,5 +150,23 @@ export class SecretsRepository {
       .where(eq(pppSecrets.customerId, customerId))
       .returning({ id: pppSecrets.id });
     return rows.length;
+  }
+
+  /**
+   * The customer's secrets joined with their routers' API connection, for the
+   * live network push (P2.5). Read-only; the disabled flag is written by
+   * setDisabledByCustomerId above, this only tells the adapter where to push.
+   */
+  async findRouterTargetsByCustomerId(customerId: string): Promise<SecretRouterTarget[]> {
+    return this.db
+      .select({
+        secretUsername: pppSecrets.username,
+        host: routers.address,
+        apiPort: routers.apiPort,
+        routerUser: routers.username,
+      })
+      .from(pppSecrets)
+      .innerJoin(routers, eq(pppSecrets.routerId, routers.id))
+      .where(eq(pppSecrets.customerId, customerId));
   }
 }

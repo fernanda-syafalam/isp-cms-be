@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import type { AuthUser } from '../../common/decorators/current-user.decorator';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PlansRepository } from '../plans/plans.repository';
-import { SecretsRepository } from '../router-resources/secrets.repository';
+import { SecretEnforcementService } from '../router-resources/secret-enforcement.service';
 import {
   type CustomerListFilter,
   type CustomerRow,
@@ -26,9 +26,10 @@ export class CustomersService {
     // WhatsApp dunning reminders go through the notifications module.
     private readonly notifications: NotificationsService,
     // Network enforcement: lifecycle transitions toggle the customer's PPPoE
-    // secret (ADR-0008). RouterResourcesModule <-> CustomersModule is wired
-    // with forwardRef to break the module-import cycle.
-    private readonly secrets: SecretsRepository,
+    // secret in the DB and push it to the router (ADR-0008 / P2.5).
+    // RouterResourcesModule <-> CustomersModule is wired with forwardRef to
+    // break the module-import cycle.
+    private readonly secrets: SecretEnforcementService,
   ) {}
 
   async list(
@@ -236,7 +237,7 @@ export class CustomersService {
     // Network enforcement (ADR-0008): the PPPoE secret follows the lifecycle —
     // any non-active state cuts the session, `aktif` restores it. No-op while
     // the customer has no secret yet (prospek/instalasi).
-    await this.secrets.setDisabledByCustomerId(id, status !== 'aktif');
+    await this.secrets.applyDisabledForCustomer(id, status !== 'aktif');
     this.logger.log({ customerId: row.id, status }, `customer ${verb}`);
     return toCustomerResponse(row);
   }
