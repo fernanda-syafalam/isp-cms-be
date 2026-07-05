@@ -43,6 +43,7 @@ import { SatisfactionModule } from './modules/satisfaction/satisfaction.module';
 import { SchedulerModule } from './modules/scheduler/scheduler.module';
 import { SecurityModule } from './modules/security/security.module';
 import { SettingsModule } from './modules/settings/settings.module';
+import { SetupModule } from './modules/setup/setup.module';
 import { SlaCreditsModule } from './modules/sla-credits/sla-credits.module';
 import { TicketsModule } from './modules/tickets/tickets.module';
 import { TopologyModule } from './modules/topology/topology.module';
@@ -122,6 +123,7 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     SchedulerModule,
     SecurityModule,
     SettingsModule,
+    SetupModule,
     SlaCreditsModule,
     TicketsModule,
     TopologyModule,
