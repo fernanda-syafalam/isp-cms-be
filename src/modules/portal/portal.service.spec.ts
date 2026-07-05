@@ -63,6 +63,11 @@ describe('PortalService', () => {
     intents = {
       createForCustomer: vi.fn().mockResolvedValue({ id: 'int-1', status: 'pending' }),
       confirmForCustomer: vi.fn().mockResolvedValue({ id: 'int-1', status: 'paid' }),
+      // Only the still-resumable (pending, not expired) intent is returned —
+      // the paid/expired filtering itself is the repository's job (covered
+      // by payment-intents.repository.int-spec.ts); here we only assert
+      // PortalService plumbs whatever the service hands back into `/me`.
+      pendingForCustomer: vi.fn().mockResolvedValue([{ id: 'int-pending', status: 'pending' }]),
     };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
@@ -88,6 +93,21 @@ describe('PortalService', () => {
       expect(snapshot.invoices).toHaveLength(1);
       expect(snapshot.payments).toHaveLength(1);
       expect(snapshot.tickets).toHaveLength(1);
+    });
+
+    it('includes pendingIntents (P3.C.3), scoped to the resolved customer', async () => {
+      const snapshot = await service.getMe(user);
+
+      expect(intents.pendingForCustomer).toHaveBeenCalledWith(CUSTOMER_ID);
+      expect(snapshot.pendingIntents).toEqual([{ id: 'int-pending', status: 'pending' }]);
+    });
+
+    it('excludes paid/expired intents — only what the intents service reports as pending is surfaced', async () => {
+      intents.pendingForCustomer.mockResolvedValueOnce([]);
+
+      const snapshot = await service.getMe(user);
+
+      expect(snapshot.pendingIntents).toEqual([]);
     });
   });
 

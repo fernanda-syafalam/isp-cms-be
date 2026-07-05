@@ -100,6 +100,16 @@ export class PaymentIntentsService {
   }
 
   /**
+   * Still-resumable intents (pending, not expired) for one customer (P3.C.3)
+   * — feeds the portal `/me` payload so the FE can offer "resume payment"
+   * instead of discarding an in-flight intent on dialog close.
+   */
+  async pendingForCustomer(customerId: string): Promise<PaymentIntentResponse[]> {
+    const rows = await this.repo.listPendingByCustomer(customerId);
+    return rows.map(toIntentResponse);
+  }
+
+  /**
    * Expire every stale `pending` intent in one sweep (P2.1 hourly job). The
    * per-intent expiry check in confirm() only fires when someone confirms;
    * abandoned intents never get there, so this bulk-expires them.
