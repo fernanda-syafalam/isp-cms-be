@@ -46,6 +46,12 @@ export class AuditRepository {
     await this.db.insert(auditLog).values(defaults).onConflictDoNothing();
   }
 
+  // Persist a real audited action. Called fire-and-forget by AuditInterceptor
+  // on a successful mutation — ids are server-generated, so no conflict path.
+  async record(entry: NewAuditLogEntry): Promise<void> {
+    await this.db.insert(auditLog).values(entry);
+  }
+
   async list(filter: AuditListFilter): Promise<{ items: AuditLogEntry[]; total: number }> {
     const where = and(
       filter.entityId ? eq(auditLog.entityId, filter.entityId) : undefined,

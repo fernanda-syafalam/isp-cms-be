@@ -1,10 +1,10 @@
 import { index, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
 
-// Read-only audit trail of mutating actions, backing the FE audit page. The
-// runtime `@Audit('action')` interceptor currently writes to structured pino
-// logs, not a queryable table, so this seeded table is the readable history
-// (mock-first, ADR-0003). A real backend would have the interceptor persist
-// here. `entity_id` is indexed for the per-record history filter.
+// Audit trail of mutating actions, backing the FE audit page. The runtime
+// `@Audit('action')` interceptor persists a row here on each successful
+// audited action (in addition to the structured pino line). Seed defaults
+// (AuditService) provide demo continuity and coexist with real rows.
+// `entity_id` is indexed for the per-record history filter.
 export const auditLog = pgTable(
   'audit_log',
   {
