@@ -43,7 +43,7 @@ describe('InventoryRepository (integration)', () => {
       CREATE SEQUENCE customer_no_seq START WITH 9001;
       CREATE TABLE customers (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        lat double precision, lng double precision,
+        lat double precision, lng double precision, odp_id varchar(60),
         customer_no varchar(32) NOT NULL UNIQUE DEFAULT ('CUST-' || nextval('customer_no_seq')),
         full_name varchar(120) NOT NULL, phone varchar(20) NOT NULL, email varchar(255), user_id uuid UNIQUE,
         address varchar(255) NOT NULL, area_id uuid, area_name varchar(120),

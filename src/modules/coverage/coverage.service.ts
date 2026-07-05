@@ -37,6 +37,27 @@ export class CoverageService {
     const { items, total } = await this.repo.list(filter);
     return { items: items.map(toCoverageResponse), total };
   }
+
+  /**
+   * Pure query — never throws. The caller (onboarding) decides what a
+   * non-serviceable or degraded area means for the flow it is driving.
+   * `down` blocks; `maintenance` is a soft warn (still serviceable);
+   * `operational` and any area that seeds itself in are fully serviceable.
+   */
+  async checkServiceability(areaName: string): Promise<{ serviceable: boolean; reason?: string }> {
+    await this.repo.ensureSeeded(DEFAULTS);
+    const area = await this.repo.findByName(areaName);
+    if (!area) {
+      return { serviceable: false, reason: 'Area di luar jangkauan layanan' };
+    }
+    if (area.status === 'down') {
+      return { serviceable: false, reason: 'Area sedang gangguan, belum bisa dilayani' };
+    }
+    if (area.status === 'maintenance') {
+      return { serviceable: true, reason: 'Area sedang dalam pemeliharaan' };
+    }
+    return { serviceable: true };
+  }
 }
 
 function toCoverageResponse(row: CoverageArea): CoverageResponse {

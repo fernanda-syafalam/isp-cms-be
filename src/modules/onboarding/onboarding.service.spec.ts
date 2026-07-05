@@ -1,8 +1,11 @@
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, UnprocessableEntityException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ContractsService } from '../contracts/contracts.service';
+import { CoverageService } from '../coverage/coverage.service';
 import { CustomersService } from '../customers/customers.service';
 import type { CustomerResponse } from '../customers/dto/customer-response.dto';
+import { OdpService } from '../odp/odp.service';
 import { UsersService } from '../users/users.service';
 import { WorkOrdersService } from '../work-orders/work-orders.service';
 import type { OnboardCustomerInput } from './dto/onboard-customer.dto';
@@ -53,6 +56,9 @@ describe('OnboardingService', () => {
   let customers: Record<string, ReturnType<typeof vi.fn>>;
   let workOrders: Record<string, ReturnType<typeof vi.fn>>;
   let users: Record<string, ReturnType<typeof vi.fn>>;
+  let coverage: Record<string, ReturnType<typeof vi.fn>>;
+  let odp: Record<string, ReturnType<typeof vi.fn>>;
+  let contracts: Record<string, ReturnType<typeof vi.fn>>;
 
   beforeEach(async () => {
     customers = { onboard: vi.fn().mockResolvedValue(customer()) };
@@ -63,12 +69,24 @@ describe('OnboardingService', () => {
     users = {
       create: vi.fn().mockResolvedValue({ id: USER_ID, email: 'budi@example.com' }),
     };
+    coverage = {
+      checkServiceability: vi.fn().mockResolvedValue({ serviceable: true }),
+    };
+    odp = {
+      assignPort: vi.fn().mockResolvedValue({ id: 'odp-1', usedPorts: 1 }),
+    };
+    contracts = {
+      create: vi.fn().mockResolvedValue({ id: 'contract-1' }),
+    };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         OnboardingService,
         { provide: CustomersService, useValue: customers },
         { provide: WorkOrdersService, useValue: workOrders },
         { provide: UsersService, useValue: users },
+        { provide: CoverageService, useValue: coverage },
+        { provide: OdpService, useValue: odp },
+        { provide: ContractsService, useValue: contracts },
       ],
     }).compile();
     service = moduleRef.get(OnboardingService);
@@ -94,9 +112,10 @@ describe('OnboardingService', () => {
       areaName: 'Bangsri',
       planId: '00000000-0000-0000-0000-0000000000p1',
       userId: USER_ID,
-      // No geo/KYC on the base fixture — all default to null.
+      // No geo/KYC/ODP on the base fixture — all default to null.
       lat: null,
       lng: null,
+      odpId: null,
       ktp: null,
       npwp: null,
       consentAt: null,
@@ -116,6 +135,9 @@ describe('OnboardingService', () => {
       email: 'budi@example.com',
       initialPassword: expect.stringMatching(/^[\w-]{18}$/),
     });
+    // The serviceability gate ran first, and the draft PKS is auto-created.
+    expect(coverage.checkServiceability).toHaveBeenCalledWith('Bangsri');
+    expect(contracts.create).toHaveBeenCalledWith(CUSTOMER_ID);
   });
 
   it('persists the map pin and KYC, stamping consentAt when consent is ticked', async () => {
@@ -165,6 +187,61 @@ describe('OnboardingService', () => {
     expect(result.portalLogin).toBeNull();
   });
 
+  describe('serviceability gate (P3.A.1)', () => {
+    it('blocks onboarding with 422 when the area is not serviceable, and never creates the customer', async () => {
+      coverage.checkServiceability.mockResolvedValue({
+        serviceable: false,
+        reason: 'Area sedang gangguan, belum bisa dilayani',
+      });
+
+      await expect(service.onboard(input)).rejects.toThrow(UnprocessableEntityException);
+      expect(customers.onboard).not.toHaveBeenCalled();
+      expect(users.create).not.toHaveBeenCalled();
+      expect(odp.assignPort).not.toHaveBeenCalled();
+      expect(contracts.create).not.toHaveBeenCalled();
+    });
+
+    it('falls back to a generic Indonesian message when the gate gives no reason', async () => {
+      coverage.checkServiceability.mockResolvedValue({ serviceable: false });
+      await expect(service.onboard(input)).rejects.toThrow('Area belum terjangkau layanan');
+    });
+
+    it('proceeds (a soft warn) when the area is under maintenance', async () => {
+      coverage.checkServiceability.mockResolvedValue({
+        serviceable: true,
+        reason: 'Area sedang dalam pemeliharaan',
+      });
+      const result = await service.onboard(input);
+      expect(result.id).toBe(CUSTOMER_ID);
+      expect(customers.onboard).toHaveBeenCalled();
+    });
+  });
+
+  describe('ODP port reservation (P3.A.1)', () => {
+    it('reserves the port when odpId is given, before the customer is created', async () => {
+      await service.onboard({ ...input, odpId: 'odp-1' });
+      expect(odp.assignPort).toHaveBeenCalledWith('odp-1');
+      expect(customers.onboard).toHaveBeenCalledWith(expect.objectContaining({ odpId: 'odp-1' }));
+    });
+
+    it('skips port reservation when odpId is not given', async () => {
+      await service.onboard(input);
+      expect(odp.assignPort).not.toHaveBeenCalled();
+      expect(customers.onboard).toHaveBeenCalledWith(expect.objectContaining({ odpId: null }));
+    });
+
+    it('propagates the 409 when the ODP is full, and never creates the customer', async () => {
+      odp.assignPort.mockRejectedValue(new ConflictException('ODP penuh atau tidak ditemukan'));
+
+      await expect(service.onboard({ ...input, odpId: 'odp-full' })).rejects.toThrow(
+        ConflictException,
+      );
+      expect(customers.onboard).not.toHaveBeenCalled();
+      expect(users.create).not.toHaveBeenCalled();
+      expect(contracts.create).not.toHaveBeenCalled();
+    });
+  });
+
   describe('onboardFromLead (P3.A.2)', () => {
     it('creates an unlinked instalasi customer and an unassigned install WO', async () => {
       const customer = await service.onboardFromLead({
@@ -187,6 +264,30 @@ describe('OnboardingService', () => {
       });
       expect(workOrders.scheduleInstallForCustomer).not.toHaveBeenCalled();
       expect(customer.id).toBe(CUSTOMER_ID);
+      // Same serviceability gate + auto-created draft PKS as the wizard path.
+      expect(coverage.checkServiceability).toHaveBeenCalledWith('Bangsri');
+      expect(contracts.create).toHaveBeenCalledWith(CUSTOMER_ID);
+      // Leads carry no odpId — port assignment is never attempted.
+      expect(odp.assignPort).not.toHaveBeenCalled();
+    });
+
+    it('blocks the lead conversion with 422 when the area is not serviceable', async () => {
+      coverage.checkServiceability.mockResolvedValue({
+        serviceable: false,
+        reason: 'Area sedang gangguan, belum bisa dilayani',
+      });
+
+      await expect(
+        service.onboardFromLead({
+          fullName: 'Budi Santoso',
+          phone: '081200000000',
+          address: 'Jl. Mawar 1',
+          areaName: 'Bangsri',
+          planId: '00000000-0000-0000-0000-0000000000p1',
+        }),
+      ).rejects.toThrow(UnprocessableEntityException);
+      expect(customers.onboard).not.toHaveBeenCalled();
+      expect(contracts.create).not.toHaveBeenCalled();
     });
   });
 });

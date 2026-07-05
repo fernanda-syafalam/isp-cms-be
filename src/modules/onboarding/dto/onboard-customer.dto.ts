@@ -8,7 +8,9 @@ import { z } from 'zod';
  * `instalasi`) and a linked install work order.
  *
  * `lat`/`lng` are the map pin captured at onboarding (persisted for coverage +
- * the topology map, P3.A.1). `ktp`/`npwp`/`consent` are the KYC + UU-PDP consent
+ * the topology map, P3.A.1). `odpId` is the FTTH distribution point chosen for
+ * this drop — when present, onboarding reserves a port on it atomically before
+ * creating the customer. `ktp`/`npwp`/`consent` are the KYC + UU-PDP consent
  * captured in the wizard. `note` is an install hint with no column (not
  * persisted). `email` accepts '' as "no email" (normalised to null in the
  * service).
@@ -27,6 +29,7 @@ export const OnboardCustomerSchema = z
     note: z.string().trim().max(300).optional(),
     lat: z.number().min(-90).max(90).optional(),
     lng: z.number().min(-180).max(180).optional(),
+    odpId: z.string().max(60).optional(),
     // KYC (UU PDP): identity numbers + explicit data-processing consent.
     ktp: z.string().trim().max(32).optional(),
     npwp: z.string().trim().max(40).optional(),

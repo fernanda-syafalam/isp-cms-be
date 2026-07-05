@@ -48,6 +48,20 @@ export class CoverageRepository {
     await this.db.insert(coverageAreas).values(defaults).onConflictDoNothing();
   }
 
+  /**
+   * Case-insensitive exact match on `name` (onboarding sends the area label
+   * chosen from the coverage picker, not a search query). `ilike` with no
+   * wildcard characters is an exact, case-insensitive equality check.
+   */
+  async findByName(name: string): Promise<CoverageArea | null> {
+    const [row] = await this.db
+      .select()
+      .from(coverageAreas)
+      .where(ilike(coverageAreas.name, name))
+      .limit(1);
+    return row ?? null;
+  }
+
   async list(filter: CoverageListFilter): Promise<{ items: CoverageArea[]; total: number }> {
     const where = and(
       filter.status ? eq(coverageAreas.status, filter.status) : undefined,

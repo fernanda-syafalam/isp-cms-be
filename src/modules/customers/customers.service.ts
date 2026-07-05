@@ -90,6 +90,7 @@ export class CustomersService {
       userId?: string | null;
       lat?: number | null;
       lng?: number | null;
+      odpId?: string | null;
       ktp?: string | null;
       npwp?: string | null;
       consentAt?: Date | null;
@@ -104,9 +105,12 @@ export class CustomersService {
       areaName: input.areaName,
       planId: input.planId,
       status: 'instalasi',
-      // Geo pin + KYC captured at onboarding (P3.A.1). All nullable.
+      // Geo pin + ODP assignment + KYC captured at onboarding (P3.A.1). All
+      // nullable. The ODP port itself is reserved by the caller (Onboarding
+      // Service) BEFORE this runs — this only stamps the FK on the row.
       lat: input.lat ?? null,
       lng: input.lng ?? null,
+      odpId: input.odpId ?? null,
       ktp: input.ktp ?? null,
       npwp: input.npwp ?? null,
       consentAt: input.consentAt ?? null,
