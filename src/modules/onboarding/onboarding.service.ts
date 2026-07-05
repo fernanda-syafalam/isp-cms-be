@@ -57,14 +57,50 @@ export class OnboardingService {
   }
 
   /**
+   * Convert a won lead into a subscriber through the SAME path as the wizard
+   * (P3.A.2): provision the portal login (skipped for leads, which carry no
+   * email), create the customer in `instalasi`, and schedule the install work
+   * order — unassigned, since a lead convert has no chosen technician/date
+   * (the field team fills those in later). One acquisition path, so the two
+   * never drift.
+   */
+  async onboardFromLead(input: {
+    fullName: string;
+    phone: string;
+    address: string;
+    areaName: string;
+    planId: string;
+  }): Promise<CustomerResponse> {
+    const login = await this.provisionLogin({ email: '', fullName: input.fullName });
+
+    const customer = await this.customers.onboard({
+      fullName: input.fullName,
+      phone: input.phone,
+      email: '',
+      address: input.address,
+      areaName: input.areaName,
+      planId: input.planId,
+      userId: login?.userId ?? null,
+    });
+    await this.workOrders.scheduleInstall({
+      customerId: customer.id,
+      customerName: customer.fullName,
+    });
+    this.logger.log({ customerId: customer.id }, 'lead converted via onboarding path');
+    return customer;
+  }
+
+  /**
    * Create the customer-role portal login for the new subscriber. Skipped
    * (with a warning) when the wizard has no email or the email already
    * belongs to a user — linking an existing principal to a new subscriber
    * is a manual staff decision, never an automatic side effect.
    */
-  private async provisionLogin(
-    input: OnboardCustomerInput,
-  ): Promise<{ userId: string; email: string; initialPassword: string } | null> {
+  private async provisionLogin(input: { email: string; fullName: string }): Promise<{
+    userId: string;
+    email: string;
+    initialPassword: string;
+  } | null> {
     if (!input.email) return null;
 
     const initialPassword = generateInitialPassword();

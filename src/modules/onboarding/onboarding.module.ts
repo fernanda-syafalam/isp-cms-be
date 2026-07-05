@@ -13,5 +13,8 @@ import { OnboardingService } from './onboarding.service';
   imports: [CustomersModule, WorkOrdersModule, UsersModule],
   controllers: [OnboardingController],
   providers: [OnboardingService],
+  // Exported so LeadsModule can route lead conversion through the single
+  // onboarding acquisition path (P3.A.2).
+  exports: [OnboardingService],
 })
 export class OnboardingModule {}

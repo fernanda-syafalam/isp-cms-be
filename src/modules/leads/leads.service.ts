@@ -1,8 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { Lead } from '../../infrastructure/database/schema/leads.schema';
-import { CustomersRepository } from '../customers/customers.repository';
+import { OnboardingService } from '../onboarding/onboarding.service';
 import { PlansRepository } from '../plans/plans.repository';
-import { WorkOrdersService } from '../work-orders/work-orders.service';
 import type { CreateLeadInput } from './dto/create-lead.dto';
 import type { LeadResponse } from './dto/lead-response.dto';
 import type { UpdateLeadStageInput } from './dto/update-lead-stage.dto';
@@ -14,10 +13,9 @@ export class LeadsService {
 
   constructor(
     private readonly repo: LeadsRepository,
-    // Conversion creates a subscriber (CustomersRepository), schedules an
-    // install (WorkOrdersService) and resolves the plan FK by name.
-    private readonly customers: CustomersRepository,
-    private readonly workOrders: WorkOrdersService,
+    // Conversion delegates to the single onboarding acquisition path
+    // (P3.A.2); it only resolves the plan FK by name itself.
+    private readonly onboarding: OnboardingService,
     private readonly plans: PlansRepository,
   ) {}
 
@@ -62,21 +60,17 @@ export class LeadsService {
       throw new BadRequestException('plan not found for lead');
     }
 
-    const customer = await this.customers.create({
+    // One acquisition path (P3.A.2): onboarding creates the `instalasi`
+    // subscriber (provisioning a portal login when there's an email) and
+    // schedules the linked install WO, so a converted lead and a wizard
+    // customer are identical downstream — the activation cascade runs on
+    // completion (ADR-0009).
+    await this.onboarding.onboardFromLead({
       fullName: lead.name,
       phone: lead.phone,
       address: lead.address,
       areaName: lead.areaName,
       planId: plan.id,
-      // New subscriber starts at installation, not active.
-      status: 'instalasi',
-    });
-    // Link the install order to the new subscriber so completing it activates,
-    // provisions, and bills them. Passing only the name left customerId null
-    // and the activation cascade was silently skipped (ADR-0009).
-    await this.workOrders.scheduleInstall({
-      customerId: customer.id,
-      customerName: customer.fullName,
     });
 
     const won = await this.repo.setStage(id, 'won');
