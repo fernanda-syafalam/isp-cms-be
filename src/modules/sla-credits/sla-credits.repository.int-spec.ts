@@ -1,4 +1,5 @@
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { eq } from 'drizzle-orm';
 import { type NodePgDatabase, drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -34,7 +35,7 @@ describe('SlaCreditsRepository (integration)', () => {
         reason varchar(200) NOT NULL,
         ticket_id uuid,
         ticket_code varchar(40),
-        status sla_credit_status NOT NULL DEFAULT 'pending',
+        status sla_credit_status NOT NULL DEFAULT 'pending', applied_invoice_id uuid,
         applied_at timestamptz(3),
         created_at timestamptz(3) NOT NULL DEFAULT now(),
         updated_at timestamptz(3) NOT NULL DEFAULT now()
@@ -174,5 +175,60 @@ describe('SlaCreditsRepository (integration)', () => {
     await repo.create(newCredit({ status: 'applied' }));
     await repo.create(newCredit({ status: 'void' }));
     expect(await repo.countPending()).toBe(2);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Billing absorption (P3.A.4): findPendingByCustomer + markAppliedWithInvoice
+  // ---------------------------------------------------------------------------
+
+  describe('findPendingByCustomer / markAppliedWithInvoice', () => {
+    const CUSTOMER_ID = '00000000-0000-0000-0000-0000000000c1';
+    const OTHER_CUSTOMER_ID = '00000000-0000-0000-0000-0000000000c2';
+    const INVOICE_ID = '00000000-0000-0000-0000-00000000e001';
+
+    it("returns only this customer's pending credits, oldest first", async () => {
+      const first = await repo.create(newCredit({ customerId: CUSTOMER_ID, amount: 20_000 }));
+      const second = await repo.create(newCredit({ customerId: CUSTOMER_ID, amount: 30_000 }));
+      // Excluded: another customer, and an already-applied credit for this one.
+      await repo.create(newCredit({ customerId: OTHER_CUSTOMER_ID, amount: 40_000 }));
+      const applied = await repo.create(newCredit({ customerId: CUSTOMER_ID, amount: 50_000 }));
+      await repo.apply(applied.id);
+
+      const pending = await repo.findPendingByCustomer(CUSTOMER_ID);
+      expect(pending.map((c) => c.id)).toEqual([first.id, second.id]);
+    });
+
+    it('returns an empty array for a customer with no pending credits', async () => {
+      expect(await repo.findPendingByCustomer(OTHER_CUSTOMER_ID)).toEqual([]);
+    });
+
+    it('marks a batch of credits applied and stamps the absorbing invoice id', async () => {
+      const a = await repo.create(newCredit({ customerId: CUSTOMER_ID, amount: 20_000 }));
+      const b = await repo.create(newCredit({ customerId: CUSTOMER_ID, amount: 30_000 }));
+
+      const count = await repo.markAppliedWithInvoice([a.id, b.id], INVOICE_ID);
+      expect(count).toBe(2);
+
+      const pending = await repo.findPendingByCustomer(CUSTOMER_ID);
+      expect(pending).toEqual([]);
+
+      const [aRow] = await db.select().from(slaCredits).where(eq(slaCredits.id, a.id));
+      expect(aRow?.status).toBe('applied');
+      expect(aRow?.appliedInvoiceId).toBe(INVOICE_ID);
+      expect(aRow?.appliedAt).toBeInstanceOf(Date);
+    });
+
+    it('is a no-op for an empty batch and never touches an already-applied credit', async () => {
+      const applied = await repo.create(newCredit({ customerId: CUSTOMER_ID }));
+      await repo.apply(applied.id);
+
+      expect(await repo.markAppliedWithInvoice([], INVOICE_ID)).toBe(0);
+      // Re-applying an already-applied credit with a different invoice id is a
+      // no-op (WHERE status = 'pending' excludes it) — appliedInvoiceId stays null.
+      const count = await repo.markAppliedWithInvoice([applied.id], INVOICE_ID);
+      expect(count).toBe(0);
+      const [row] = await db.select().from(slaCredits).where(eq(slaCredits.id, applied.id));
+      expect(row?.appliedInvoiceId).toBeNull();
+    });
   });
 });

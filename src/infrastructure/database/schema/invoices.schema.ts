@@ -13,9 +13,16 @@ import {
 } from 'drizzle-orm/pg-core';
 import { customers } from './customers.schema';
 
-// draft (not issued) -> pending (issued, not due) -> overdue (past due) ->
-// paid. Values are the API enum; the UI maps them to Indonesian labels.
-export const invoiceStatus = pgEnum('invoice_status', ['draft', 'pending', 'overdue', 'paid']);
+// draft (not issued) -> pending (issued, not due) -> partial (part-paid) ->
+// overdue (past due) -> paid. Values are the API enum; the UI maps them to
+// Indonesian labels. `partial` counts as unpaid everywhere (aging/dunning).
+export const invoiceStatus = pgEnum('invoice_status', [
+  'draft',
+  'pending',
+  'partial',
+  'overdue',
+  'paid',
+]);
 
 // How an offline / loket payment was received.
 export const paymentMethod = pgEnum('payment_method', [
@@ -52,6 +59,12 @@ export const invoices = pgTable(
     amount: integer('amount').notNull(),
     lateFee: integer('late_fee').notNull().default(0),
     taxAmount: integer('tax_amount').notNull().default(0),
+    // SLA-credit deduction line (P3.A.4). Invoice total =
+    // amount + lateFee + taxAmount - discountAmount.
+    discountAmount: integer('discount_amount').notNull().default(0),
+    // Cumulative amount received against this invoice (partial payments).
+    // balanceDue = total - paidAmount; status flips to 'paid' when it hits 0.
+    paidAmount: integer('paid_amount').notNull().default(0),
     // E-Faktur / Coretax number; null for drafts and non-PKP issuers.
     taxInvoiceNo: varchar('tax_invoice_no', { length: 40 }),
     status: invoiceStatus('status').notNull().default('pending'),
@@ -87,6 +100,10 @@ export const payments = pgTable(
     customerName: varchar('customer_name', { length: 120 }).notNull(),
     amount: integer('amount').notNull(),
     method: paymentMethod('method').notNull(),
+    // Loket cash drawer (P3.A.4): cash tendered by the customer and the change
+    // given back. Null for non-cash rails. changeAmount = tendered - amount.
+    tenderedAmount: integer('tendered_amount'),
+    changeAmount: integer('change_amount'),
     paidAt: timestamp('paid_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },

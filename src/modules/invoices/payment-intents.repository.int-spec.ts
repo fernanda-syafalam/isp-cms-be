@@ -43,7 +43,7 @@ describe('PaymentIntentsRepository (integration)', () => {
       CREATE SEQUENCE customer_no_seq START WITH 9001;
       CREATE TABLE customers (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        lat double precision, lng double precision, odp_id varchar(60),
+        lat double precision, lng double precision, odp_id varchar(60), billing_anchor_day smallint,
         customer_no varchar(32) NOT NULL UNIQUE DEFAULT ('CUST-' || nextval('customer_no_seq')),
         full_name varchar(120) NOT NULL, phone varchar(20) NOT NULL, email varchar(255), user_id uuid UNIQUE,
         address varchar(255) NOT NULL, area_id uuid, area_name varchar(120),
@@ -55,7 +55,7 @@ describe('PaymentIntentsRepository (integration)', () => {
         created_at timestamptz(3) NOT NULL DEFAULT now(),
         updated_at timestamptz(3) NOT NULL DEFAULT now()
       );
-      CREATE TYPE invoice_status AS ENUM ('draft', 'pending', 'overdue', 'paid');
+      CREATE TYPE invoice_status AS ENUM ('draft', 'pending', 'partial', 'overdue', 'paid');
       CREATE SEQUENCE invoice_no_seq START WITH 100;
       CREATE TABLE invoices (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -65,7 +65,7 @@ describe('PaymentIntentsRepository (integration)', () => {
         customer_name varchar(120) NOT NULL,
         period_start date NOT NULL, period_end date NOT NULL,
         amount integer NOT NULL, late_fee integer NOT NULL DEFAULT 0,
-        tax_amount integer NOT NULL DEFAULT 0, tax_invoice_no varchar(40),
+        tax_amount integer NOT NULL DEFAULT 0, discount_amount integer NOT NULL DEFAULT 0, paid_amount integer NOT NULL DEFAULT 0, tax_invoice_no varchar(40),
         status invoice_status NOT NULL DEFAULT 'pending', due_date date NOT NULL,
         paid_at timestamptz(3), last_reminded_at timestamptz(3),
         created_at timestamptz(3) NOT NULL DEFAULT now(),

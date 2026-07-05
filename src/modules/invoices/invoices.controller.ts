@@ -8,7 +8,7 @@ import { RecordPaymentDto } from './dto/record-payment.dto';
 import { InvoicesService } from './invoices.service';
 
 const ListQuerySchema = z.object({
-  status: z.enum(['draft', 'pending', 'overdue', 'paid']).optional(),
+  status: z.enum(['draft', 'pending', 'partial', 'overdue', 'paid']).optional(),
   q: z.string().trim().min(1).optional(),
   sort: z.string().optional(),
   order: z.enum(['asc', 'desc']).optional(),

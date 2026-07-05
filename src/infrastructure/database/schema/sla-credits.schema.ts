@@ -1,5 +1,6 @@
 import { index, integer, pgEnum, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
 import { customers } from './customers.schema';
+import { invoices } from './invoices.schema';
 import { tickets } from './tickets.schema';
 
 // pending -> applied (deducted from the next invoice) | void (cancelled).
@@ -18,6 +19,9 @@ export const slaCredits = pgTable(
     ticketId: uuid('ticket_id').references(() => tickets.id),
     ticketCode: varchar('ticket_code', { length: 40 }),
     status: slaCreditStatus('status').notNull().default('pending'),
+    // The invoice that absorbed this credit as a discount line (P3.A.4).
+    // Null until applied; set together with status='applied'.
+    appliedInvoiceId: uuid('applied_invoice_id').references(() => invoices.id),
     appliedAt: timestamp('applied_at', { withTimezone: true, precision: 3 }),
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),

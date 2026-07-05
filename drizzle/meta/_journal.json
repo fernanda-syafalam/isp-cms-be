@@ -253,6 +253,13 @@
       "when": 1783267034876,
       "tag": "0035_little_thunderbolt_ross",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1783269203917,
+      "tag": "0036_fancy_slyde",
+      "breakpoints": true
     }
   ]
 }

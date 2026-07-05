@@ -39,7 +39,7 @@ describe('InvoicesRepository (integration)', () => {
       CREATE SEQUENCE customer_no_seq START WITH 9001;
       CREATE TABLE customers (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        lat double precision, lng double precision, odp_id varchar(60),
+        lat double precision, lng double precision, odp_id varchar(60), billing_anchor_day smallint,
         customer_no varchar(32) NOT NULL UNIQUE DEFAULT ('CUST-' || nextval('customer_no_seq')),
         full_name varchar(120) NOT NULL, phone varchar(20) NOT NULL, email varchar(255), user_id uuid UNIQUE,
         address varchar(255) NOT NULL, area_id uuid, area_name varchar(120),
@@ -51,7 +51,7 @@ describe('InvoicesRepository (integration)', () => {
         created_at timestamptz(3) NOT NULL DEFAULT now(),
         updated_at timestamptz(3) NOT NULL DEFAULT now()
       );
-      CREATE TYPE invoice_status AS ENUM ('draft', 'pending', 'overdue', 'paid');
+      CREATE TYPE invoice_status AS ENUM ('draft', 'pending', 'partial', 'overdue', 'paid');
       CREATE TYPE payment_method AS ENUM ('qris', 'va', 'ewallet', 'transfer', 'cash');
       CREATE SEQUENCE invoice_no_seq START WITH 100;
       CREATE TABLE invoices (
@@ -62,7 +62,7 @@ describe('InvoicesRepository (integration)', () => {
         customer_name varchar(120) NOT NULL,
         period_start date NOT NULL, period_end date NOT NULL,
         amount integer NOT NULL, late_fee integer NOT NULL DEFAULT 0,
-        tax_amount integer NOT NULL DEFAULT 0, tax_invoice_no varchar(40),
+        tax_amount integer NOT NULL DEFAULT 0, discount_amount integer NOT NULL DEFAULT 0, paid_amount integer NOT NULL DEFAULT 0, tax_invoice_no varchar(40),
         status invoice_status NOT NULL DEFAULT 'pending', due_date date NOT NULL,
         paid_at timestamptz(3), last_reminded_at timestamptz(3),
         created_at timestamptz(3) NOT NULL DEFAULT now(),
@@ -74,7 +74,7 @@ describe('InvoicesRepository (integration)', () => {
         invoice_id uuid NOT NULL REFERENCES invoices(id),
         invoice_no varchar(32) NOT NULL, customer_id uuid NOT NULL,
         customer_name varchar(120) NOT NULL, amount integer NOT NULL,
-        method payment_method NOT NULL,
+        method payment_method NOT NULL, tendered_amount integer, change_amount integer,
         paid_at timestamptz(3) NOT NULL DEFAULT now(),
         created_at timestamptz(3) NOT NULL DEFAULT now()
       );
@@ -367,6 +367,50 @@ describe('InvoicesRepository (integration)', () => {
     expect(paid.paidAt).toBeInstanceOf(Date);
   });
 
+  // ---------------------------------------------------------------------------
+  // applyPayment — partial payments (P3.A.4)
+  // ---------------------------------------------------------------------------
+
+  describe('applyPayment', () => {
+    it('a partial payment increments paid_amount and flips to partial, leaving paid_at unset', async () => {
+      const created = await repo.create(newInvoice()); // total = 222_000
+      const updated = await repo.applyPayment(created.id, 100_000);
+
+      expect(updated.paidAmount).toBe(100_000);
+      expect(updated.status).toBe('partial');
+      expect(updated.paidAt).toBeNull();
+    });
+
+    it('a follow-up payment that reaches the total flips partial -> paid and stamps paid_at', async () => {
+      const created = await repo.create(newInvoice()); // total = 222_000
+      await repo.applyPayment(created.id, 100_000);
+      const settled = await repo.applyPayment(created.id, 122_000);
+
+      expect(settled.paidAmount).toBe(222_000);
+      expect(settled.status).toBe('paid');
+      expect(settled.paidAt).toBeInstanceOf(Date);
+    });
+
+    it('a single payment covering the full total goes straight to paid', async () => {
+      const created = await repo.create(newInvoice());
+      const settled = await repo.applyPayment(created.id, 222_000);
+      expect(settled.status).toBe('paid');
+      expect(settled.paidAt).toBeInstanceOf(Date);
+    });
+
+    it('nets discountAmount out of the total the payment must reach', async () => {
+      // amount 200_000 + tax 22_000 - discount 50_000 = total 172_000.
+      const created = await repo.create(newInvoice({ discountAmount: 50_000 }));
+      const settled = await repo.applyPayment(created.id, 172_000);
+      expect(settled.status).toBe('paid');
+    });
+
+    it('throws for an unknown invoice', async () => {
+      const missing = '00000000-0000-0000-0000-0000000000ff';
+      await expect(repo.applyPayment(missing, 1)).rejects.toThrow();
+    });
+  });
+
   it('sums unpaid totals and counts overdue per customer', async () => {
     await repo.create(newInvoice({ periodStart: '2026-06-01', status: 'pending' })); // 222000
     await repo.create(
@@ -380,6 +424,57 @@ describe('InvoicesRepository (integration)', () => {
 
     expect(await repo.sumUnpaidByCustomer(customerId)).toBe(222_000 + 247_000);
     expect(await repo.countOverdueByCustomer(customerId)).toBe(1);
+  });
+
+  // ---------------------------------------------------------------------------
+  // 'partial' status counts as unpaid everywhere (P3.A.4)
+  // ---------------------------------------------------------------------------
+
+  describe("'partial' status is treated as unpaid", () => {
+    it('sumUnpaidByCustomer nets paid_amount and discount_amount out of a partial invoice', async () => {
+      // total = 222_000; 100_000 already paid -> 122_000 still owed.
+      await repo.create(
+        newInvoice({ periodStart: '2026-06-01', status: 'partial', paidAmount: 100_000 }),
+      );
+      expect(await repo.sumUnpaidByCustomer(customerId)).toBe(122_000);
+    });
+
+    it('listUnpaid includes partial invoices', async () => {
+      await repo.create(
+        newInvoice({ periodStart: '2026-06-01', status: 'partial', dueDate: '2026-06-10' }),
+      );
+      const unpaid = await repo.listUnpaid();
+      expect(unpaid.map((i) => i.status)).toEqual(['partial']);
+    });
+
+    it('list summary.outstanding and unpaidCount include partial invoices, net of paid_amount', async () => {
+      // partial: total 222_000 - paid 100_000 = 122_000 still outstanding.
+      await repo.create(
+        newInvoice({ periodStart: '2026-06-01', status: 'partial', paidAmount: 100_000 }),
+      );
+      const result = await repo.list({ limit: 50, offset: 0 });
+      expect(result.summary.unpaidCount).toBe(1);
+      expect(result.summary.outstanding).toBe(122_000);
+    });
+
+    it('markOverduePastDue flips a past-due partial invoice to overdue, keeping paid_amount', async () => {
+      const created = await repo.create(
+        newInvoice({ status: 'partial', paidAmount: 100_000, dueDate: '2020-01-01' }),
+      );
+      const flipped = await repo.markOverduePastDue(25_000);
+      expect(flipped).toBe(1);
+      const row = await repo.findById(created.id);
+      expect(row?.status).toBe('overdue');
+      expect(row?.paidAmount).toBe(100_000);
+    });
+
+    it('customerIdsWithPendingDueSoon and countPendingDueSoon include a not-yet-due partial invoice', async () => {
+      await repo.create(
+        newInvoice({ status: 'partial', paidAmount: 100_000, dueDate: '2026-06-10' }),
+      );
+      expect(await repo.countPendingDueSoon(3650)).toBe(1);
+      expect(await repo.customerIdsWithPendingDueSoon(3650)).toEqual([customerId]);
+    });
   });
 
   it('records payments into the ledger', async () => {
@@ -688,6 +783,51 @@ describe('InvoicesRepository (integration)', () => {
       { month: '2026-04', revenue: 150_000 },
       { month: '2026-06', revenue: 200_000 },
     ]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // reconciliation — the loket/cash-drawer closing report (P3.A.4)
+  // ---------------------------------------------------------------------------
+
+  describe('reconciliation', () => {
+    it('groups by method with count/amount totals, plus the cash tendered/change roll-up', async () => {
+      const inv = await repo.create(newInvoice());
+      await db.insert(payments).values([
+        mkPayment(inv, 100_000, 'transfer', '2026-06-15T08:00:00.000Z'),
+        mkPayment(inv, 50_000, 'transfer', '2026-06-15T09:00:00.000Z'),
+        {
+          ...mkPayment(inv, 22_000, 'cash', '2026-06-15T10:00:00.000Z'),
+          tenderedAmount: 25_000,
+          changeAmount: 3_000,
+        },
+        // A different day — excluded.
+        mkPayment(inv, 999_000, 'qris', '2026-06-16T00:00:00.000Z'),
+      ]);
+
+      const result = await repo.reconciliation('2026-06-15');
+
+      expect(result.date).toBe('2026-06-15');
+      expect(result.totalCount).toBe(3);
+      expect(result.totalAmount).toBe(172_000);
+      expect(result.byMethod).toEqual(
+        expect.arrayContaining([
+          { method: 'transfer', count: 2, totalAmount: 150_000 },
+          { method: 'cash', count: 1, totalAmount: 22_000 },
+        ]),
+      );
+      expect(result.cash).toEqual({ totalTendered: 25_000, totalChange: 3_000 });
+    });
+
+    it('is all-zero for a day with no payments', async () => {
+      const result = await repo.reconciliation('2026-01-01');
+      expect(result).toEqual({
+        date: '2026-01-01',
+        byMethod: [],
+        totalCount: 0,
+        totalAmount: 0,
+        cash: { totalTendered: 0, totalChange: 0 },
+      });
+    });
   });
 
   // Payment-ledger insert helper with an explicit paid_at (month grouping).

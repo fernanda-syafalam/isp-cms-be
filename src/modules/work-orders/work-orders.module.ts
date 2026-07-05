@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { CustomersModule } from '../customers/customers.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { InvoicesModule } from '../invoices/invoices.module';
@@ -12,8 +12,17 @@ import { WorkOrdersService } from './work-orders.service';
   // The install cascade activates the customer (CustomersModule), consumes an
   // ONU (InventoryModule), provisions a PPPoE secret on the default router
   // (RoutersModule + RouterResourcesModule) and issues the first invoice
-  // (InvoicesModule). None of these import work-orders, so there is no cycle.
-  imports: [CustomersModule, InvoicesModule, InventoryModule, RoutersModule, RouterResourcesModule],
+  // (InvoicesModule). InvoicesModule now imports SlaCreditsModule (P3.A.4),
+  // which imports TicketsModule, which imports this module — closing a real
+  // cycle, so this edge needs forwardRef() (else `InvoicesModule` is
+  // undefined here at decoration time, see Nest's circular-dependency docs).
+  imports: [
+    CustomersModule,
+    forwardRef(() => InvoicesModule),
+    InventoryModule,
+    RoutersModule,
+    RouterResourcesModule,
+  ],
   controllers: [WorkOrdersController],
   providers: [WorkOrdersService, WorkOrdersRepository],
   // Exported so TicketsModule can dispatch a repair work order.

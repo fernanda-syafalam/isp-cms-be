@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, count, desc, eq, gte, ilike, inArray, or, sql } from 'drizzle-orm';
 import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
@@ -11,6 +11,7 @@ import {
   payments,
 } from '../../infrastructure/database/schema/invoices.schema';
 import type { InvoiceListResponse, InvoiceSummary } from './dto/invoice-response.dto';
+import type { PaymentReconciliation } from './dto/payment-reconciliation.dto';
 
 export interface InvoiceListFilter {
   status?: Invoice['status'];
@@ -50,8 +51,15 @@ const PAYMENT_SORT_WHITELIST = {
   customerName: payments.customerName,
 } satisfies Record<string, (typeof payments)[keyof typeof payments]>;
 
-// Statuses that still owe money — used for the outstanding total.
-const UNPAID_STATUSES = ['pending', 'overdue'] as const;
+// Statuses that still owe money — used for the outstanding/aging total.
+// 'partial' (P3.A.4) is unpaid too: a part-paid invoice still counts as
+// outstanding and still gets dunned until it reaches 'paid'.
+const UNPAID_STATUSES = ['pending', 'partial', 'overdue'] as const;
+
+// Statuses eligible to flip to 'overdue' once past due date, and eligible
+// for the "due soon" (not-yet-overdue) dunning cohort. Excludes 'overdue'
+// itself — those invoices already went through the transition.
+const NOT_YET_OVERDUE_STATUSES = ['pending', 'partial'] as const;
 
 /**
  * The only place that talks to the `invoices` and `payments` tables.
@@ -97,13 +105,16 @@ export class InvoicesRepository {
     const [filteredCount] = await this.db.select({ value: count() }).from(invoices).where(where);
 
     // Full-set summary — computed over ALL invoices, ignoring status/q/paging.
-    // grand total per invoice = amount + late_fee + tax_amount.
+    // balance due per invoice = amount + late_fee + tax_amount - discount_amount
+    // - paid_amount (P3.A.4) — a 'partial' invoice only contributes what's
+    // actually still owed, never its full gross total (no double-count with
+    // what was already paid or discounted via an SLA credit).
     const [summaryRow] = await this.db
       .select({
         total: count(),
-        unpaidCount: sql<number>`count(*) filter (where ${invoices.status} in ('pending', 'overdue'))`,
-        outstanding: sql<string>`coalesce(sum(case when ${invoices.status} in ('pending', 'overdue') then ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} else 0 end), 0)`,
-        overdue: sql<string>`coalesce(sum(case when ${invoices.status} = 'overdue' then ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} else 0 end), 0)`,
+        unpaidCount: sql<number>`count(*) filter (where ${invoices.status} in ('pending', 'partial', 'overdue'))`,
+        outstanding: sql<string>`coalesce(sum(case when ${invoices.status} in ('pending', 'partial', 'overdue') then ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount} else 0 end), 0)`,
+        overdue: sql<string>`coalesce(sum(case when ${invoices.status} = 'overdue' then ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount} else 0 end), 0)`,
       })
       .from(invoices);
 
@@ -150,6 +161,11 @@ export class InvoicesRepository {
     return Boolean(row);
   }
 
+  /**
+   * All-or-nothing settlement: flips straight to 'paid' regardless of what
+   * was already paid. Superseded by `applyPayment` for the loket/partial-pay
+   * flow (P3.A.4) — kept for callers that only ever settle in full.
+   */
   async markPaid(id: string): Promise<Invoice> {
     const [row] = await this.db
       .update(invoices)
@@ -162,11 +178,64 @@ export class InvoicesRepository {
     return row;
   }
 
-  /** Sum of unpaid invoice totals (amount + lateFee + taxAmount). */
+  /**
+   * Record a (partial or full) payment against an invoice: increments
+   * `paid_amount` by `amount` and derives the new status from a single
+   * atomic UPDATE — the CASE expressions read the pre-update row (standard
+   * Postgres SET semantics), so a concurrent payment can never under- or
+   * over-count. Flips to 'paid' (and stamps `paid_at`) only once the new
+   * paid_amount reaches the invoice total (amount + late_fee + tax_amount -
+   * discount_amount); otherwise the invoice is 'partial'.
+   */
+  async applyPayment(id: string, amount: number): Promise<Invoice> {
+    const [row] = await this.db
+      .update(invoices)
+      .set({
+        paidAmount: sql`${invoices.paidAmount} + ${amount}`,
+        status: sql`(case
+          when ${invoices.paidAmount} + ${amount}
+            >= ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount}
+          then 'paid' else 'partial'
+        end)::invoice_status`,
+        paidAt: sql`(case
+          when ${invoices.paidAmount} + ${amount}
+            >= ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount}
+          then now() else ${invoices.paidAt}
+        end)`,
+        updatedAt: sql`now()`,
+      })
+      // Overpay guard lives in the WHERE (not just the service snapshot) so two
+      // concurrent payments cannot both pass a stale balance check and overshoot
+      // paid_amount. The predicate re-reads the CURRENT row under the row lock.
+      .where(
+        and(
+          eq(invoices.id, id),
+          sql`${invoices.paidAmount} + ${amount} <= ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount}`,
+        ),
+      )
+      .returning();
+    if (!row) {
+      // The invoice exists (service checked) but the balance no longer admits
+      // this amount — a concurrent payment moved it. Surface as a conflict so
+      // the caller re-reads rather than silently over-crediting.
+      const current = await this.findById(id);
+      if (!current) throw new NotFoundException('invoice not found');
+      throw new ConflictException('Saldo tagihan sudah berubah — muat ulang lalu coba lagi');
+    }
+    return row;
+  }
+
+  /**
+   * Sum of what's still owed across every unpaid invoice: balance due =
+   * amount + lateFee + taxAmount - discountAmount - paidAmount (P3.A.4). A
+   * 'partial' invoice only contributes its remaining slice, never its full
+   * gross total, so this never double-counts a payment already recorded or
+   * an SLA credit already applied as a discount line.
+   */
   async sumUnpaidByCustomer(customerId: string): Promise<number> {
     const [row] = await this.db
       .select({
-        total: sql<string>`coalesce(sum(${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount}), 0)`,
+        total: sql<string>`coalesce(sum(${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount}), 0)`,
       })
       .from(invoices)
       .where(
@@ -185,12 +254,21 @@ export class InvoicesRepository {
 
   // --- Billing automation ---------------------------------------------
 
-  /** Flip pending invoices past their due date to overdue + apply the late fee. */
+  /**
+   * Flip pending/partial invoices past their due date to overdue + apply
+   * the late fee. A 'partial' invoice past due is still unpaid, so it
+   * transitions too (paid_amount is untouched — only status/lateFee change).
+   */
   async markOverduePastDue(lateFee: number): Promise<number> {
     const result = await this.db
       .update(invoices)
       .set({ status: 'overdue', lateFee, updatedAt: sql`now()` })
-      .where(and(eq(invoices.status, 'pending'), sql`${invoices.dueDate} < current_date`));
+      .where(
+        and(
+          inArray(invoices.status, [...NOT_YET_OVERDUE_STATUSES]),
+          sql`${invoices.dueDate} < current_date`,
+        ),
+      );
     return result.rowCount ?? 0;
   }
 
@@ -202,13 +280,16 @@ export class InvoicesRepository {
     return row?.value ?? 0;
   }
 
-  /** Pending invoices due within `days` (upcoming dunning candidates). */
+  /** Pending/partial invoices due within `days` (upcoming dunning candidates). */
   async countPendingDueSoon(days: number): Promise<number> {
     const [row] = await this.db
       .select({ value: count() })
       .from(invoices)
       .where(
-        and(eq(invoices.status, 'pending'), sql`${invoices.dueDate} <= current_date + ${days}`),
+        and(
+          inArray(invoices.status, [...NOT_YET_OVERDUE_STATUSES]),
+          sql`${invoices.dueDate} <= current_date + ${days}`,
+        ),
       );
     return row?.value ?? 0;
   }
@@ -226,7 +307,10 @@ export class InvoicesRepository {
       .update(invoices)
       .set({ lastRemindedAt: sql`now()`, updatedAt: sql`now()` })
       .where(
-        and(eq(invoices.status, 'pending'), sql`${invoices.dueDate} <= current_date + ${days}`),
+        and(
+          inArray(invoices.status, [...NOT_YET_OVERDUE_STATUSES]),
+          sql`${invoices.dueDate} <= current_date + ${days}`,
+        ),
       );
     return result.rowCount ?? 0;
   }
@@ -236,7 +320,7 @@ export class InvoicesRepository {
     const result = await this.db
       .update(invoices)
       .set({ lastRemindedAt: sql`now()`, updatedAt: sql`now()` })
-      .where(and(inArray(invoices.id, ids), inArray(invoices.status, ['pending', 'overdue'])));
+      .where(and(inArray(invoices.id, ids), inArray(invoices.status, [...UNPAID_STATUSES])));
     return result.rowCount ?? 0;
   }
 
@@ -249,13 +333,16 @@ export class InvoicesRepository {
     return rows.map((r) => r.customerId);
   }
 
-  /** Distinct customers with a pending invoice due within `days` (dunning H-N). */
+  /** Distinct customers with a pending/partial invoice due within `days` (dunning H-N). */
   async customerIdsWithPendingDueSoon(days: number): Promise<string[]> {
     const rows = await this.db
       .selectDistinct({ customerId: invoices.customerId })
       .from(invoices)
       .where(
-        and(eq(invoices.status, 'pending'), sql`${invoices.dueDate} <= current_date + ${days}`),
+        and(
+          inArray(invoices.status, [...NOT_YET_OVERDUE_STATUSES]),
+          sql`${invoices.dueDate} <= current_date + ${days}`,
+        ),
       );
     return rows.map((r) => r.customerId);
   }
@@ -298,6 +385,44 @@ export class InvoicesRepository {
       .where(gte(payments.paidAt, since))
       .groupBy(sql`to_char(${payments.paidAt} at time zone 'UTC', 'YYYY-MM')`);
     return rows.map((row) => ({ month: row.month, revenue: Number(row.revenue) }));
+  }
+
+  /**
+   * The loket/cash-drawer closing report for one calendar day (UTC,
+   * P3.A.4): per-method count + amount totals, plus the cash-only
+   * tendered/change roll-up. A method with no payments that day is simply
+   * absent from `byMethod` (never a zero row).
+   */
+  async reconciliation(date: string): Promise<PaymentReconciliation> {
+    const rows = await this.db
+      .select({
+        method: payments.method,
+        count: count(),
+        totalAmount: sql<string>`coalesce(sum(${payments.amount}), 0)`,
+        totalTendered: sql<string>`coalesce(sum(${payments.tenderedAmount}), 0)`,
+        totalChange: sql<string>`coalesce(sum(${payments.changeAmount}), 0)`,
+      })
+      .from(payments)
+      .where(sql`to_char(${payments.paidAt} at time zone 'UTC', 'YYYY-MM-DD') = ${date}`)
+      .groupBy(payments.method);
+
+    const byMethod = rows.map((row) => ({
+      method: row.method,
+      count: row.count,
+      totalAmount: Number(row.totalAmount),
+    }));
+    const cashRow = rows.find((row) => row.method === 'cash');
+
+    return {
+      date,
+      byMethod,
+      totalCount: byMethod.reduce((sum, row) => sum + row.count, 0),
+      totalAmount: byMethod.reduce((sum, row) => sum + row.totalAmount, 0),
+      cash: {
+        totalTendered: cashRow ? Number(cashRow.totalTendered) : 0,
+        totalChange: cashRow ? Number(cashRow.totalChange) : 0,
+      },
+    };
   }
 
   // --- Payments ledger ------------------------------------------------
