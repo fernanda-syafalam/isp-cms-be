@@ -38,6 +38,7 @@ describe('CustomersRepository (integration)', () => {
         updated_at timestamptz(3) NOT NULL DEFAULT now()
       );
       CREATE TYPE customer_status AS ENUM ('prospek', 'instalasi', 'aktif', 'isolir', 'berhenti');
+      CREATE TYPE customer_hold_reason AS ENUM ('overdue', 'voluntary');
       CREATE SEQUENCE customer_no_seq START WITH 9001;
       CREATE TABLE customers (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -50,7 +51,7 @@ describe('CustomersRepository (integration)', () => {
         area_id uuid,
         area_name varchar(120),
         plan_id uuid NOT NULL REFERENCES plans(id),
-        status customer_status NOT NULL DEFAULT 'prospek',
+        status customer_status NOT NULL DEFAULT 'prospek', hold_reason customer_hold_reason,
         outstanding integer NOT NULL DEFAULT 0,
         npwp varchar(40),
         ktp varchar(32),
@@ -173,12 +174,27 @@ describe('CustomersRepository (integration)', () => {
     const isolated = await repo.setStatus(created.id, 'isolir', {});
     expect(isolated.status).toBe('isolir');
     expect(isolated.outstanding).toBe(150_000);
+    // Default isolir reason is punitive (P3.A.3).
+    expect(isolated.holdReason).toBe('overdue');
 
     const activated = await repo.setStatus(created.id, 'aktif', {
       clearOutstanding: true,
     });
     expect(activated.status).toBe('aktif');
     expect(activated.outstanding).toBe(0);
+    // Reactivation clears the hold reason.
+    expect(activated.holdReason).toBeNull();
+  });
+
+  it('records the hold reason: voluntary (cuti) vs overdue (P3.A.3)', async () => {
+    const created = await repo.create({ fullName: 'Ana', phone: '08', address: 'Jl', planId });
+
+    const cuti = await repo.setStatus(created.id, 'isolir', { holdReason: 'voluntary' });
+    expect(cuti.status).toBe('isolir');
+    expect(cuti.holdReason).toBe('voluntary');
+
+    const overdue = await repo.setStatus(created.id, 'isolir', { holdReason: 'overdue' });
+    expect(overdue.holdReason).toBe('overdue');
   });
 
   it('records consent and KYC', async () => {

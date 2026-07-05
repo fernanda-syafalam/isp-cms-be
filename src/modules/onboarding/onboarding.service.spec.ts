@@ -24,6 +24,7 @@ function customer(over: Partial<CustomerResponse> = {}): CustomerResponse {
     planId: '00000000-0000-0000-0000-0000000000p1',
     planName: 'Home 50',
     status: 'instalasi',
+    holdReason: null,
     outstanding: 0,
     npwp: null,
     ktp: null,

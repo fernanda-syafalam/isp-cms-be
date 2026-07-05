@@ -77,9 +77,11 @@ describe('BillingAutomationService', () => {
       expect(repo.markOverduePastDue).toHaveBeenCalledWith(25_000);
       // c1 (aktif) gets isolated; c2 (already isolir) is skipped
       expect(customers.setBilling).toHaveBeenCalledTimes(1);
+      // Auto-isolir is punitive (P3.A.3): records the overdue hold reason.
       expect(customers.setBilling).toHaveBeenCalledWith('c1', {
         status: 'isolir',
         outstanding: 247_000,
+        holdReason: 'overdue',
       });
       // ADR-0008: isolating a debtor disables their PPPoE secret on the router.
       expect(secrets.applyDisabledForCustomer).toHaveBeenCalledTimes(1);

@@ -124,7 +124,8 @@ export class CustomersService {
   // balance (payment received); resume keeps it.
 
   async suspend(id: string): Promise<CustomerResponse> {
-    return this.transition(id, 'isolir', {}, 'suspended');
+    // Voluntary hold (cuti) — a customer request, not a debt (P3.A.3).
+    return this.transition(id, 'isolir', { holdReason: 'voluntary' }, 'suspended');
   }
 
   async resume(id: string): Promise<CustomerResponse> {
@@ -132,7 +133,8 @@ export class CustomersService {
   }
 
   async isolate(id: string): Promise<CustomerResponse> {
-    return this.transition(id, 'isolir', {}, 'isolated');
+    // Punitive isolation for non-payment.
+    return this.transition(id, 'isolir', { holdReason: 'overdue' }, 'isolated');
   }
 
   async activate(id: string): Promise<CustomerResponse> {
@@ -230,7 +232,7 @@ export class CustomersService {
   private async transition(
     id: string,
     status: CustomerRow['status'],
-    opts: { clearOutstanding?: boolean },
+    opts: { clearOutstanding?: boolean; holdReason?: CustomerRow['holdReason'] },
     verb: string,
   ): Promise<CustomerResponse> {
     const row = await this.repo.setStatus(id, status, opts);
@@ -301,6 +303,7 @@ function toCustomerResponse(row: CustomerRow): CustomerResponse {
     planId: row.planId,
     planName: row.planName,
     status: row.status,
+    holdReason: row.holdReason,
     outstanding: row.outstanding,
     npwp: row.npwp,
     ktp: row.ktp,

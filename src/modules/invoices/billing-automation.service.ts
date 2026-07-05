@@ -122,7 +122,11 @@ export class BillingAutomationService {
       const customer = await this.customers.findById(id);
       if (customer?.status === 'aktif') {
         const outstanding = await this.repo.sumUnpaidByCustomer(id);
-        await this.customers.setBilling(id, { status: 'isolir', outstanding });
+        await this.customers.setBilling(id, {
+          status: 'isolir',
+          outstanding,
+          holdReason: 'overdue',
+        });
         // Enforce on the router: disable the customer's PPPoE secret (ADR-0008).
         await this.secrets.applyDisabledForCustomer(id, true);
         isolated += 1;

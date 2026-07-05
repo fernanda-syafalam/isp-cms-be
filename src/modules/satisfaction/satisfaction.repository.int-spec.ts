@@ -34,13 +34,14 @@ describe('Satisfaction seams — CustomersRepository (integration)', () => {
         created_at timestamptz(3) NOT NULL DEFAULT now(), updated_at timestamptz(3) NOT NULL DEFAULT now()
       );
       CREATE TYPE customer_status AS ENUM ('prospek', 'instalasi', 'aktif', 'isolir', 'berhenti');
+      CREATE TYPE customer_hold_reason AS ENUM ('overdue', 'voluntary');
       CREATE SEQUENCE customer_no_seq START WITH 9001;
       CREATE TABLE customers (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         customer_no varchar(32) NOT NULL UNIQUE DEFAULT ('CUST-' || nextval('customer_no_seq')),
         full_name varchar(120) NOT NULL, phone varchar(20) NOT NULL, email varchar(255), user_id uuid UNIQUE,
         address varchar(255) NOT NULL, area_id uuid, area_name varchar(120),
-        plan_id uuid NOT NULL REFERENCES plans(id), status customer_status NOT NULL DEFAULT 'prospek',
+        plan_id uuid NOT NULL REFERENCES plans(id), status customer_status NOT NULL DEFAULT 'prospek', hold_reason customer_hold_reason,
         outstanding integer NOT NULL DEFAULT 0, npwp varchar(40), ktp varchar(32),
         consent_at timestamptz(3), data_deletion_requested_at timestamptz(3),
         reseller_name varchar(120), reseller_id uuid, connection jsonb,

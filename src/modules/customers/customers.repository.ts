@@ -202,10 +202,13 @@ export class CustomersRepository {
   async setStatus(
     id: string,
     status: Customer['status'],
-    opts: { clearOutstanding?: boolean } = {},
+    opts: { clearOutstanding?: boolean; holdReason?: Customer['holdReason'] } = {},
   ): Promise<CustomerRow> {
     return this.applyUpdate(id, {
       status,
+      // `isolir` carries the reason (overdue vs voluntary/cuti); any other
+      // status clears it (P3.A.3).
+      holdReason: status === 'isolir' ? (opts.holdReason ?? 'overdue') : null,
       ...(opts.clearOutstanding ? { outstanding: 0 } : {}),
     });
   }
@@ -270,7 +273,11 @@ export class CustomersRepository {
    */
   async setBilling(
     id: string,
-    patch: { outstanding?: number; status?: Customer['status'] },
+    patch: {
+      outstanding?: number;
+      status?: Customer['status'];
+      holdReason?: Customer['holdReason'];
+    },
   ): Promise<void> {
     const result = await this.db
       .update(customers)
