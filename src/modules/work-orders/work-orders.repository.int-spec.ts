@@ -183,6 +183,21 @@ describe('WorkOrdersRepository (integration)', () => {
     }
   });
 
+  // ---- technician filter ("Tugas saya", P3.B.1) ----------------------------
+
+  it('technician filter: returns only that technician orders, exact match', async () => {
+    await repo.create(newWo({ technician: 'Teknisi Andi' }));
+    await repo.create(newWo({ technician: 'Teknisi Andi' }));
+    await repo.create(newWo({ technician: 'Teknisi Budi' }));
+
+    const result = await repo.list({ technician: 'Teknisi Andi', limit: 50, offset: 0 });
+
+    expect(result.total).toBe(2);
+    for (const item of result.items) {
+      expect(item.technician).toBe('Teknisi Andi');
+    }
+  });
+
   it('type filter combined with status filter: ANDs the conditions', async () => {
     await repo.create(newWo({ type: 'install', status: 'scheduled' }));
     await repo.create(newWo({ type: 'install', status: 'done' }));
