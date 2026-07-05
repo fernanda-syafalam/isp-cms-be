@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { asc, eq } from 'drizzle-orm';
+import { asc, count, eq } from 'drizzle-orm';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type IpPool,
@@ -28,6 +28,17 @@ export class PoolsRepository {
   async findById(id: string): Promise<IpPool | null> {
     const [row] = await this.db.select().from(ipPools).where(eq(ipPools.id, id)).limit(1);
     return row ?? null;
+  }
+
+  /**
+   * Count every pool across ALL routers. Used by the setup-status rollup
+   * (P3.E.2) to tell "at least one router exists" apart from "IP pools are
+   * actually provisioned" — `listByRouter` alone cannot answer that without
+   * a router id.
+   */
+  async countAll(): Promise<number> {
+    const [row] = await this.db.select({ value: count() }).from(ipPools);
+    return row?.value ?? 0;
   }
 
   async create(input: NewIpPool): Promise<IpPool> {

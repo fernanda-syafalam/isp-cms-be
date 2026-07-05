@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { and, count, desc, eq, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import { type NewUser, type User, users } from '../../infrastructure/database/schema/users.schema';
 
@@ -65,6 +65,21 @@ export class UsersRepository {
    */
   async countAll(): Promise<number> {
     const [row] = await this.db.select({ value: count() }).from(users);
+    return row?.value ?? 0;
+  }
+
+  /**
+   * Count non-deleted users whose role is one of `roles`. Onboarding also
+   * inserts `role: 'customer'` rows into this table (portal login), so
+   * `countAll()` alone cannot answer "how many staff/admin accounts exist" —
+   * used by the setup-status rollup (P3.E.2) to tell the bootstrap admin
+   * apart from a real staff team.
+   */
+  async countByRoles(roles: User['role'][]): Promise<number> {
+    const [row] = await this.db
+      .select({ value: count() })
+      .from(users)
+      .where(and(inArray(users.role, roles), isNull(users.deletedAt)));
     return row?.value ?? 0;
   }
 

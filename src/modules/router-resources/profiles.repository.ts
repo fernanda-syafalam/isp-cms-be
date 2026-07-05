@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { asc, eq, sql } from 'drizzle-orm';
+import { asc, count, eq, sql } from 'drizzle-orm';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type NewPppProfile,
@@ -33,6 +33,17 @@ export class ProfilesRepository {
   async findById(id: string): Promise<PppProfile | null> {
     const [row] = await this.db.select().from(pppProfiles).where(eq(pppProfiles.id, id)).limit(1);
     return row ?? null;
+  }
+
+  /**
+   * Count every profile across ALL routers. Used by the setup-status rollup
+   * (P3.E.2) to tell "at least one router exists" apart from "profiles are
+   * actually provisioned" — `listByRouter` alone cannot answer that without
+   * a router id.
+   */
+  async countAll(): Promise<number> {
+    const [row] = await this.db.select({ value: count() }).from(pppProfiles);
+    return row?.value ?? 0;
   }
 
   async create(input: NewPppProfile): Promise<PppProfile> {
