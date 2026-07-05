@@ -18,8 +18,13 @@ import { RoutersRepository } from '../routers/routers.repository';
 // imports WorkOrdersModule (to dispatch a repair WO), so this edge needs
 // forwardRef() on both sides — see work-orders.module.ts.
 import { TicketsService } from '../tickets/tickets.service';
+import type { CompleteWorkOrderInput } from './dto/complete-work-order.dto';
 import type { WorkOrderResponse } from './dto/work-order-response.dto';
-import { type WorkOrderListFilter, WorkOrdersRepository } from './work-orders.repository';
+import {
+  type WorkOrderCompletion,
+  type WorkOrderListFilter,
+  WorkOrdersRepository,
+} from './work-orders.repository';
 
 // A repair dispatched from a ticket is scheduled for the next day.
 const REPAIR_LEAD_MS = 24 * 3_600_000;
@@ -65,7 +70,11 @@ export class WorkOrdersService {
    * past its SLA deadline). Because this whole method no-ops on an
    * already-done order, that ticket close fires exactly once.
    */
-  async complete(id: string, author: string): Promise<WorkOrderResponse> {
+  async complete(
+    id: string,
+    author: string,
+    data?: CompleteWorkOrderInput,
+  ): Promise<WorkOrderResponse> {
     const wo = await this.repo.findById(id);
     if (!wo) throw new NotFoundException('work order not found');
     if (wo.status === 'done') {
@@ -81,14 +90,17 @@ export class WorkOrdersService {
       }
       const customer = await this.customers.findById(wo.customerId);
       if (customer) {
-        const onuSerial = await this.assignOnu(customer.fullName, wo.id);
-        await this.customers.markInstalled(wo.customerId, buildConnection(customer, onuSerial));
+        const onuSerial = await this.assignOnu(customer.fullName, wo.id, data?.onuSerial);
+        await this.customers.markInstalled(
+          wo.customerId,
+          buildConnection(customer, onuSerial, data?.rxPower),
+        );
         await this.provisionSecret(customer);
         await this.invoices.generateFirstInvoice(wo.customerId);
       }
     }
 
-    const done = await this.repo.markDone(id);
+    const done = await this.repo.markDone(id, buildCompletion(author, data));
     this.logger.log({ workOrderId: id, type: wo.type }, 'work order completed');
 
     if (wo.type === 'repair' && wo.ticketId) {
@@ -152,11 +164,34 @@ export class WorkOrdersService {
     return wo;
   }
 
-  // Hand the oldest warehouse ONU to the subscriber and return its serial,
-  // or null when stock is dry (the connection then uses a synthetic serial).
-  // The work order id is recorded on the movement so stock consumption
-  // reconciles with the order (ADR-0003/0009).
-  private async assignOnu(customerName: string, workOrderId: string): Promise<string | null> {
+  // Hand an ONU to the subscriber and return its serial, or null when stock
+  // is dry (the connection then uses a synthetic serial). The work order id
+  // is recorded on the movement so stock consumption reconciles with the
+  // order (ADR-0003/0009).
+  //
+  // When the technician scanned a real serial in the field (P3.B.3), that
+  // exact unit is consumed instead of the FIFO pick: if it's in warehouse
+  // stock, it's assigned like any other pick; if it's not (unknown asset, or
+  // already consumed elsewhere), the scanned serial is still used as-is —
+  // real field evidence beats a fabricated fallback.
+  private async assignOnu(
+    customerName: string,
+    workOrderId: string,
+    scannedSerial?: string,
+  ): Promise<string | null> {
+    if (scannedSerial) {
+      const scanned = await this.inventory.findBySerial(scannedSerial);
+      if (scanned && scanned.status === 'warehouse') {
+        await this.inventory.move(scanned.id, { type: 'assign', note: customerName, workOrderId });
+        return scanned.serial;
+      }
+      this.logger.warn(
+        { customerName, scannedSerial },
+        'scanned ONU serial not in warehouse stock — using it as-is',
+      );
+      return scannedSerial;
+    }
+
     const onu = await this.inventory.findAvailableOnu();
     if (!onu) {
       this.logger.warn({ customerName }, 'no ONU in stock — using synthetic serial');
@@ -273,10 +308,13 @@ function pppoeUsername(customerNo: string): string {
 // Provisioned GPON connection derived deterministically from the
 // subscriber's account number, so a retry yields the same values. The ONU
 // serial comes from the assigned inventory item; it falls back to a
-// synthetic serial when warehouse stock is empty.
+// synthetic serial when warehouse stock is empty. rxPower uses the RX
+// measured in the field (P3.B.3) when the technician supplied one; otherwise
+// it falls back to the same deterministic placeholder as before.
 function buildConnection(
   customer: { customerNo: string; planName: string },
   onuSerial: string | null,
+  measuredRxPower?: number,
 ): CustomerConnection {
   const n = Number(customer.customerNo.replace(/\D/g, '')) || 0;
   return {
@@ -287,7 +325,26 @@ function buildConnection(
     onuSerial: onuSerial ?? `ZTEG${20_000_000 + (n % 100_000)}`,
     olt: 'OLT-1',
     ponPort: `0/${n % 8}/${n % 16}`,
-    rxPower: -20 - (n % 6),
+    rxPower: measuredRxPower ?? -20 - (n % 6),
+  };
+}
+
+// Field-completion evidence written on the same UPDATE as the done
+// transition (P3.B.3). completedAt/completedBy are always set (every
+// completion has an author and a timestamp); the rest stay null when the
+// technician submitted no field kit. `technician`/`notes` on the input are
+// accepted for forward-compat with the field-completion form but are not
+// persisted yet — no column exists for free-text completion notes.
+function buildCompletion(author: string, data?: CompleteWorkOrderInput): WorkOrderCompletion {
+  return {
+    scannedOnuSerial: data?.onuSerial ?? null,
+    measuredRxPower: data?.rxPower ?? null,
+    photos: data?.photos ?? null,
+    signatureUrl: data?.signatureUrl ?? null,
+    gpsLat: data?.gps?.lat ?? null,
+    gpsLng: data?.gps?.lng ?? null,
+    completedAt: new Date(),
+    completedBy: author,
   };
 }
 
@@ -303,5 +360,13 @@ function toWorkOrderResponse(row: WorkOrder): WorkOrderResponse {
     status: row.status,
     ticketId: row.ticketId,
     createdAt: row.createdAt.toISOString(),
+    scannedOnuSerial: row.scannedOnuSerial,
+    measuredRxPower: row.measuredRxPower,
+    photos: row.photos ?? null,
+    signatureUrl: row.signatureUrl,
+    gpsLat: row.gpsLat,
+    gpsLng: row.gpsLng,
+    completedAt: row.completedAt ? row.completedAt.toISOString() : null,
+    completedBy: row.completedBy,
   };
 }

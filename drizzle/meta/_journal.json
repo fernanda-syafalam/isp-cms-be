@@ -267,6 +267,13 @@
       "when": 1783276808558,
       "tag": "0037_fine_secret_warriors",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1783284294106,
+      "tag": "0038_gray_blade",
+      "breakpoints": true
     }
   ]
 }

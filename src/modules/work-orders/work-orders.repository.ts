@@ -25,6 +25,24 @@ export interface WorkOrderListFilter {
 // transitions before calling patch(); this is only the shape.
 export type WorkOrderPatch = Partial<Pick<NewWorkOrder, 'status' | 'technician' | 'scheduledAt'>>;
 
+// Field-completion evidence written alongside the done transition (P3.B.3):
+// the scanned ONU serial, measured RX power, photos, signature, GPS, and who
+// completed it and when. All optional — a WO completed with no field kit
+// still gets completedAt/completedBy, the rest stay null.
+export type WorkOrderCompletion = Partial<
+  Pick<
+    NewWorkOrder,
+    | 'scannedOnuSerial'
+    | 'measuredRxPower'
+    | 'photos'
+    | 'signatureUrl'
+    | 'gpsLat'
+    | 'gpsLng'
+    | 'completedAt'
+    | 'completedBy'
+  >
+>;
+
 // Columns the frontend is allowed to sort on (camelCase key → Drizzle column).
 // Extend this map as new sortable columns are added; never pass arbitrary
 // column references — the whitelist is the security boundary.
@@ -92,10 +110,15 @@ export class WorkOrdersRepository {
     return row;
   }
 
-  async markDone(id: string): Promise<WorkOrder> {
+  /**
+   * Flip a work order to done, optionally writing field-completion evidence
+   * (P3.B.3) in the SAME UPDATE so the status flip and the evidence capture
+   * are atomic.
+   */
+  async markDone(id: string, completion?: WorkOrderCompletion): Promise<WorkOrder> {
     const [row] = await this.db
       .update(workOrders)
-      .set({ status: 'done', updatedAt: sql`now()` })
+      .set({ ...completion, status: 'done', updatedAt: sql`now()` })
       .where(eq(workOrders.id, id))
       .returning();
     if (!row) {

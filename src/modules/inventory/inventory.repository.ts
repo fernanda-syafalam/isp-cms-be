@@ -102,6 +102,18 @@ export class InventoryRepository {
     return row ?? null;
   }
 
+  // Look up a specific item by its physical serial — used to consume the
+  // exact ONU a technician scanned in the field (P3.B.3) rather than
+  // whatever the FIFO pick would have returned.
+  async findBySerial(serial: string): Promise<InventoryItem | null> {
+    const [row] = await this.db
+      .select()
+      .from(inventoryItems)
+      .where(eq(inventoryItems.serial, serial))
+      .limit(1);
+    return row ?? null;
+  }
+
   // The next ONU available to hand out: oldest warehouse stock first
   // (FIFO), so the install cascade consumes physical inventory deterministically.
   async findAvailableOnu(): Promise<InventoryItem | null> {

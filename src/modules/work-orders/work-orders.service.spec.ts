@@ -26,6 +26,14 @@ const installWo: WorkOrder = {
   scheduledAt: new Date('2026-06-16T00:00:00.000Z'),
   status: 'scheduled',
   ticketId: null,
+  scannedOnuSerial: null,
+  measuredRxPower: null,
+  photos: null,
+  signatureUrl: null,
+  gpsLat: null,
+  gpsLng: null,
+  completedAt: null,
+  completedBy: null,
   createdAt: new Date('2026-06-15T00:00:00.000Z'),
   updatedAt: new Date('2026-06-15T00:00:00.000Z'),
 };
@@ -44,6 +52,18 @@ const customerRow = {
   customerNo: 'CUST-9001',
   fullName: 'Budi Santoso',
   planName: 'Home 20',
+};
+
+// Completion evidence columns when no field-completion body was submitted
+// (P3.B.3) — completedAt/completedBy are always set, the rest stay null.
+const noFieldEvidence = {
+  scannedOnuSerial: null,
+  measuredRxPower: null,
+  photos: null,
+  signatureUrl: null,
+  gpsLat: null,
+  gpsLng: null,
+  completedBy: AUTHOR,
 };
 
 describe('WorkOrdersService', () => {
@@ -76,6 +96,7 @@ describe('WorkOrdersService', () => {
         kind: 'onu',
         status: 'warehouse',
       }),
+      findBySerial: vi.fn(),
       move: vi.fn(),
     };
     routers = {
@@ -144,7 +165,12 @@ describe('WorkOrdersService', () => {
       );
       expect(routers.adjustSecretCount).toHaveBeenCalledWith('rtr-1', 1);
       expect(invoices.generateFirstInvoice).toHaveBeenCalledWith(CUSTOMER_ID);
-      expect(repo.markDone).toHaveBeenCalledWith(installWo.id);
+      // No field-completion body was submitted — evidence columns are null,
+      // but completedAt/completedBy are always recorded.
+      expect(repo.markDone).toHaveBeenCalledWith(
+        installWo.id,
+        expect.objectContaining({ ...noFieldEvidence, completedAt: expect.any(Date) }),
+      );
       expect(result.status).toBe('done');
     });
 
@@ -259,6 +285,86 @@ describe('WorkOrdersService', () => {
       await service.complete(repairWo.id, AUTHOR);
 
       expect(tickets.resolveFromWorkOrder).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('complete — field-completion evidence (P3.B.3)', () => {
+    it('feeds the scanned serial + measured RX into the connection and persists the evidence', async () => {
+      repo.findById.mockResolvedValue(installWo);
+      customers.findById.mockResolvedValue(customerRow);
+      inventory.findBySerial.mockResolvedValue({
+        id: 'onu-scanned',
+        serial: 'ONU-SCAN-777',
+        kind: 'onu',
+        status: 'warehouse',
+      });
+      repo.markDone.mockResolvedValue({ ...installWo, status: 'done' });
+
+      const body = {
+        onuSerial: 'ONU-SCAN-777',
+        rxPower: -18.5,
+        photos: ['https://cdn.example.com/a.jpg'],
+        signatureUrl: 'https://cdn.example.com/sig.png',
+        gps: { lat: -6.2, lng: 106.8 },
+      };
+      await service.complete(installWo.id, AUTHOR, body);
+
+      // The scanned serial (not the FIFO pick) is consumed from stock.
+      expect(inventory.findAvailableOnu).not.toHaveBeenCalled();
+      expect(inventory.move).toHaveBeenCalledWith('onu-scanned', {
+        type: 'assign',
+        note: 'Budi Santoso',
+        workOrderId: installWo.id,
+      });
+      const [, connection] = customers.markInstalled.mock.calls[0] ?? [];
+      expect(connection).toMatchObject({ onuSerial: 'ONU-SCAN-777', rxPower: -18.5 });
+
+      // Evidence lands on the same markDone update.
+      expect(repo.markDone).toHaveBeenCalledWith(
+        installWo.id,
+        expect.objectContaining({
+          scannedOnuSerial: 'ONU-SCAN-777',
+          measuredRxPower: -18.5,
+          photos: body.photos,
+          signatureUrl: body.signatureUrl,
+          gpsLat: body.gps.lat,
+          gpsLng: body.gps.lng,
+          completedBy: AUTHOR,
+          completedAt: expect.any(Date),
+        }),
+      );
+    });
+
+    it('uses the scanned serial as-is when it is not in warehouse stock (no fabricated fallback)', async () => {
+      repo.findById.mockResolvedValue(installWo);
+      customers.findById.mockResolvedValue(customerRow);
+      inventory.findBySerial.mockResolvedValue(null);
+      repo.markDone.mockResolvedValue({ ...installWo, status: 'done' });
+
+      await service.complete(installWo.id, AUTHOR, { onuSerial: 'ONU-UNKNOWN-9' });
+
+      expect(inventory.move).not.toHaveBeenCalled();
+      const [, connection] = customers.markInstalled.mock.calls[0] ?? [];
+      expect(connection.onuSerial).toBe('ONU-UNKNOWN-9');
+      expect(repo.markDone).toHaveBeenCalledWith(
+        installWo.id,
+        expect.objectContaining({ scannedOnuSerial: 'ONU-UNKNOWN-9' }),
+      );
+    });
+
+    it('preserves the deterministic fallback when no completion body is given', async () => {
+      repo.findById.mockResolvedValue(installWo);
+      customers.findById.mockResolvedValue(customerRow);
+      repo.markDone.mockResolvedValue({ ...installWo, status: 'done' });
+
+      await service.complete(installWo.id, AUTHOR);
+
+      const [, connection] = customers.markInstalled.mock.calls[0] ?? [];
+      expect(connection).toMatchObject({ onuSerial: 'ZTEGREAL001', rxPower: -20 - (9001 % 6) });
+      expect(repo.markDone).toHaveBeenCalledWith(
+        installWo.id,
+        expect.objectContaining({ ...noFieldEvidence, completedAt: expect.any(Date) }),
+      );
     });
   });
 

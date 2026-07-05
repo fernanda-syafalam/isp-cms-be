@@ -47,6 +47,15 @@ export class InventoryService {
     return this.repo.findAvailableOnu();
   }
 
+  /**
+   * Look up a specific ONU by its physical serial — used by the work-order
+   * install cascade to consume the exact unit a technician scanned in the
+   * field (P3.B.3), instead of the FIFO pick from `findAvailableOnu`.
+   */
+  async findBySerial(serial: string): Promise<InventoryItem | null> {
+    return this.repo.findBySerial(serial);
+  }
+
   /** Register a new item into the warehouse and log an `in` movement. */
   async stockIn(input: StockInInput): Promise<InventoryItemResponse> {
     const item = await this.repo.create({ kind: input.kind, serial: input.serial });
