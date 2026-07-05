@@ -49,6 +49,7 @@ describe('WorkOrdersService', () => {
       findById: vi.fn(),
       create: vi.fn(),
       markDone: vi.fn(),
+      patch: vi.fn(),
     };
     customers = { findById: vi.fn(), markInstalled: vi.fn() };
     invoices = { generateFirstInvoice: vi.fn() };
@@ -312,6 +313,66 @@ describe('WorkOrdersService', () => {
         scheduledAt,
       });
       expect(result.type).toBe('install');
+    });
+  });
+
+  describe('state machine (P3.B.2)', () => {
+    const scheduled = {
+      id: 'wo-1',
+      code: 'WO-9001',
+      type: 'repair',
+      customerId: 'cust-1',
+      customerName: 'Budi',
+      technician: null,
+      scheduledAt: new Date('2026-06-20T00:00:00.000Z'),
+      status: 'scheduled',
+      createdAt: new Date('2026-06-15T00:00:00.000Z'),
+    };
+
+    it('start: scheduled → in_progress', async () => {
+      repo.findById.mockResolvedValue(scheduled);
+      repo.patch.mockResolvedValue({ ...scheduled, status: 'in_progress' });
+      const result = await service.start('wo-1');
+      expect(repo.patch).toHaveBeenCalledWith('wo-1', { status: 'in_progress' });
+      expect(result.status).toBe('in_progress');
+    });
+
+    it('start: rejects a done order', async () => {
+      repo.findById.mockResolvedValue({ ...scheduled, status: 'done' });
+      await expect(service.start('wo-1')).rejects.toBeInstanceOf(BadRequestException);
+      expect(repo.patch).not.toHaveBeenCalled();
+    });
+
+    it('cancel: in_progress → cancelled', async () => {
+      repo.findById.mockResolvedValue({ ...scheduled, status: 'in_progress' });
+      repo.patch.mockResolvedValue({ ...scheduled, status: 'cancelled' });
+      const result = await service.cancel('wo-1');
+      expect(repo.patch).toHaveBeenCalledWith('wo-1', { status: 'cancelled' });
+      expect(result.status).toBe('cancelled');
+    });
+
+    it('cancel: rejects a completed order', async () => {
+      repo.findById.mockResolvedValue({ ...scheduled, status: 'done' });
+      await expect(service.cancel('wo-1')).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('assign: sets the technician on an open order', async () => {
+      repo.findById.mockResolvedValue(scheduled);
+      repo.patch.mockResolvedValue({ ...scheduled, technician: 'Teknisi Andi' });
+      await service.assign('wo-1', 'Teknisi Andi');
+      expect(repo.patch).toHaveBeenCalledWith('wo-1', { technician: 'Teknisi Andi' });
+    });
+
+    it('reschedule: rejects a cancelled order', async () => {
+      repo.findById.mockResolvedValue({ ...scheduled, status: 'cancelled' });
+      await expect(service.reschedule('wo-1', new Date())).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    it('404 for a missing order', async () => {
+      repo.findById.mockResolvedValue(null);
+      await expect(service.start('missing')).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 });

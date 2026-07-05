@@ -18,6 +18,10 @@ export interface WorkOrderListFilter {
   offset: number;
 }
 
+// State-machine mutable fields (P3.B.2). The service enforces legal
+// transitions before calling patch(); this is only the shape.
+export type WorkOrderPatch = Partial<Pick<NewWorkOrder, 'status' | 'technician' | 'scheduledAt'>>;
+
 // Columns the frontend is allowed to sort on (camelCase key → Drizzle column).
 // Extend this map as new sortable columns are added; never pass arbitrary
 // column references — the whitelist is the security boundary.
@@ -88,6 +92,22 @@ export class WorkOrdersRepository {
     const [row] = await this.db
       .update(workOrders)
       .set({ status: 'done', updatedAt: sql`now()` })
+      .where(eq(workOrders.id, id))
+      .returning();
+    if (!row) {
+      throw new NotFoundException('work order not found');
+    }
+    return row;
+  }
+
+  /**
+   * Patch the mutable state-machine fields (status / technician / scheduledAt).
+   * The service enforces the legal transitions; this is the DB gate (P3.B.2).
+   */
+  async patch(id: string, patch: WorkOrderPatch): Promise<WorkOrder> {
+    const [row] = await this.db
+      .update(workOrders)
+      .set({ ...patch, updatedAt: sql`now()` })
       .where(eq(workOrders.id, id))
       .returning();
     if (!row) {
