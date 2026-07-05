@@ -67,6 +67,12 @@ export class UsersService {
     fullName: string;
     password: string;
   }): Promise<User | null> {
+    // Cheap advisory short-circuit: once bootstrapped, reject BEFORE the
+    // ~300ms argon2 hash so spamming this @Public endpoint post-bootstrap
+    // can't amplify CPU. The authoritative gate is still createIfEmpty's
+    // in-transaction count under the advisory lock.
+    if ((await this.repo.countAll()) > 0) return null;
+
     const passwordHash = await argon2.hash(input.password, ARGON2_OPTIONS);
     const user = await this.repo.createIfEmpty({
       email: input.email,
