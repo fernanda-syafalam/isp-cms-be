@@ -15,6 +15,7 @@ import { type AuthUser, CurrentUser } from '../../common/decorators/current-user
 import { Public } from '../../common/decorators/public.decorator';
 import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
+import { BootstrapDto } from './dto/bootstrap.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { LoginDto } from './dto/login.dto';
 
@@ -84,6 +85,36 @@ export class AuthController {
     }
     // Clear regardless — idempotent for the browser.
     reply.clearCookie(REFRESH_COOKIE, { path: COOKIE_PATH });
+  }
+
+  /**
+   * First-run probe — reports whether the instance still has zero users and
+   * therefore needs the one-time bootstrap admin flow. Public so the login/
+   * bootstrap screens can route on it before any credential exists.
+   */
+  @Public()
+  @Get('bootstrap')
+  async bootstrapStatus(): Promise<{ required: boolean }> {
+    return { required: await this.auth.bootstrapRequired() };
+  }
+
+  /**
+   * One-time first-run create-admin. Only succeeds while the users table is
+   * empty (409 afterwards) and forces role='admin' server-side. On success the
+   * new admin is logged in immediately (refresh cookie + access token), exactly
+   * like login — so a fresh install goes straight to an authenticated session.
+   */
+  @Public()
+  @Audit('auth.bootstrap')
+  @Post('bootstrap')
+  @HttpCode(HttpStatus.CREATED)
+  async bootstrap(
+    @Body() body: BootstrapDto,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ): Promise<{ accessToken: string; user: AuthUser }> {
+    const result = await this.auth.bootstrapAdmin(body);
+    this.setRefreshCookie(reply, result.refreshToken, result.refreshExpiresInSeconds);
+    return { accessToken: result.accessToken, user: result.user };
   }
 
   /**

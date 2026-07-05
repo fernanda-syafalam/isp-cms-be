@@ -72,6 +72,34 @@ describe('UsersRepository (integration)', () => {
     expect(byEmail?.id).toBe(created.id);
   });
 
+  it('countAll counts rows including soft-deleted ones', async () => {
+    expect(await repo.countAll()).toBe(0);
+    const a = await repo.create({ email: 'c1@b.test', fullName: 'C1', passwordHash: 'h' });
+    await repo.create({ email: 'c2@b.test', fullName: 'C2', passwordHash: 'h' });
+    expect(await repo.countAll()).toBe(2);
+    // Soft-deleting the last admin must NOT re-open bootstrap: still counted.
+    await repo.softDelete(a.id);
+    expect(await repo.countAll()).toBe(2);
+  });
+
+  it('createIfEmpty inserts only while the table is empty', async () => {
+    const first = await repo.createIfEmpty({
+      email: 'root@b.test',
+      fullName: 'Root',
+      passwordHash: 'h',
+      role: 'admin',
+    });
+    expect(first?.role).toBe('admin');
+    const second = await repo.createIfEmpty({
+      email: 'other@b.test',
+      fullName: 'Other',
+      passwordHash: 'h',
+      role: 'admin',
+    });
+    expect(second).toBeNull();
+    expect(await repo.countAll()).toBe(1);
+  });
+
   it('updates mutable fields and bumps updated_at', async () => {
     const created = await repo.create({
       email: 'up@b.test',
