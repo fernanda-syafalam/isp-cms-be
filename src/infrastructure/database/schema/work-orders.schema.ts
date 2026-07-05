@@ -1,5 +1,15 @@
 import { sql } from 'drizzle-orm';
-import { index, pgEnum, pgSequence, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import {
+  index,
+  jsonb,
+  pgEnum,
+  pgSequence,
+  pgTable,
+  real,
+  timestamp,
+  uuid,
+  varchar,
+} from 'drizzle-orm/pg-core';
 import { customers } from './customers.schema';
 import { tickets } from './tickets.schema';
 
@@ -39,6 +49,20 @@ export const workOrders = pgTable(
     // Nullable: only a repair WO dispatched from a ticket carries this link
     // (P3.B.4). Completing such a WO auto-resolves the linked ticket.
     ticketId: uuid('ticket_id').references(() => tickets.id),
+    // Field-completion evidence captured when a technician finishes an
+    // install/repair (P3.B.3). All nullable — a WO completed with no field
+    // kit (or before this feature existed) simply carries nulls here, and
+    // the deterministic fallback in the service still applies.
+    scannedOnuSerial: varchar('scanned_onu_serial', { length: 64 }),
+    measuredRxPower: real('measured_rx_power'),
+    // Evidence photo URLs/refs — no upload endpoint in scope yet, so this
+    // stores whatever string refs the client already has.
+    photos: jsonb('photos').$type<string[]>(),
+    signatureUrl: varchar('signature_url', { length: 512 }),
+    gpsLat: real('gps_lat'),
+    gpsLng: real('gps_lng'),
+    completedAt: timestamp('completed_at', { withTimezone: true, precision: 3 }),
+    completedBy: varchar('completed_by', { length: 120 }),
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },

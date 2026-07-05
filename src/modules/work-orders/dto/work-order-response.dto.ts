@@ -18,6 +18,16 @@ export const WorkOrderResponseSchema = z.object({
   // such a WO auto-resolves the linked ticket.
   ticketId: z.uuid().nullable(),
   createdAt: z.iso.datetime(),
+  // Field-completion evidence captured on complete() (P3.B.3). All null
+  // until the order is completed with a field kit.
+  scannedOnuSerial: z.string().nullable(),
+  measuredRxPower: z.number().nullable(),
+  photos: z.array(z.string()).nullable(),
+  signatureUrl: z.string().nullable(),
+  gpsLat: z.number().nullable(),
+  gpsLng: z.number().nullable(),
+  completedAt: z.iso.datetime().nullable(),
+  completedBy: z.string().nullable(),
 });
 
 export type WorkOrderResponse = z.infer<typeof WorkOrderResponseSchema>;

@@ -5,6 +5,7 @@ import { Audit } from '../../common/decorators/audit.decorator';
 import { type AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { AssignWorkOrderDto } from './dto/assign-work-order.dto';
+import { CompleteWorkOrderDto } from './dto/complete-work-order.dto';
 import { RescheduleWorkOrderDto } from './dto/reschedule-work-order.dto';
 import { WorkOrderResponseDto } from './dto/work-order-response.dto';
 import { WorkOrdersService } from './work-orders.service';
@@ -32,13 +33,20 @@ export class WorkOrdersController {
   }
 
   // Complete an order. For installs this runs the activation cascade
-  // (customer + connection + first invoice). Idempotent.
+  // (customer + connection + first invoice). Optional field-completion
+  // evidence (scanned ONU serial, measured RX power, photos, signature, GPS
+  // — P3.B.3) feeds real data into the cascade instead of the deterministic
+  // fallback. Idempotent.
   @Roles('admin', 'staff', 'teknisi')
   @Audit('work_order.complete')
   @Post(':id/complete')
   @ZodSerializerDto(WorkOrderResponseDto)
-  complete(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.workOrders.complete(id, user.fullName);
+  complete(
+    @Param('id') id: string,
+    @Body() body: CompleteWorkOrderDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.workOrders.complete(id, user.fullName, body);
   }
 
   // --- State machine (P3.B.2) — in_progress/cancelled were unreachable ---

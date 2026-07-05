@@ -64,6 +64,9 @@ describe('WorkOrdersRepository (integration)', () => {
         scheduled_at timestamptz(3) NOT NULL,
         status work_order_status NOT NULL DEFAULT 'scheduled',
         ticket_id uuid,
+        scanned_onu_serial varchar(64), measured_rx_power real, photos jsonb,
+        signature_url varchar(512), gps_lat real, gps_lng real,
+        completed_at timestamptz(3), completed_by varchar(120),
         created_at timestamptz(3) NOT NULL DEFAULT now(),
         updated_at timestamptz(3) NOT NULL DEFAULT now()
       );
@@ -145,6 +148,47 @@ describe('WorkOrdersRepository (integration)', () => {
     const done = await repo.markDone(created.id);
     expect(done.status).toBe('done');
     await expect(repo.markDone('00000000-0000-0000-0000-0000000000ff')).rejects.toThrow();
+  });
+
+  // ---- field-completion evidence (P3.B.3) -----------------------------------
+
+  it('markDone writes and returns the field-completion evidence columns', async () => {
+    const created = await repo.create(newWo());
+    const completedAt = new Date('2026-07-06T08:00:00.000Z');
+
+    const done = await repo.markDone(created.id, {
+      scannedOnuSerial: 'ONU-SCAN-777',
+      measuredRxPower: -18.5,
+      photos: ['https://cdn.example.com/a.jpg', 'https://cdn.example.com/b.jpg'],
+      signatureUrl: 'https://cdn.example.com/sig.png',
+      gpsLat: -6.2,
+      gpsLng: 106.8,
+      completedAt,
+      completedBy: 'Teknisi Budi',
+    });
+
+    expect(done.status).toBe('done');
+    expect(done.scannedOnuSerial).toBe('ONU-SCAN-777');
+    expect(done.measuredRxPower).toBe(-18.5);
+    expect(done.photos).toEqual(['https://cdn.example.com/a.jpg', 'https://cdn.example.com/b.jpg']);
+    expect(done.signatureUrl).toBe('https://cdn.example.com/sig.png');
+    expect(done.gpsLat).toBe(-6.2);
+    expect(done.gpsLng).toBe(106.8);
+    expect(done.completedAt?.toISOString()).toBe(completedAt.toISOString());
+    expect(done.completedBy).toBe('Teknisi Budi');
+
+    const found = await repo.findById(created.id);
+    expect(found?.scannedOnuSerial).toBe('ONU-SCAN-777');
+  });
+
+  it('markDone with no completion evidence leaves the evidence columns null', async () => {
+    const created = await repo.create(newWo());
+    const done = await repo.markDone(created.id);
+    expect(done.scannedOnuSerial).toBeNull();
+    expect(done.measuredRxPower).toBeNull();
+    expect(done.photos).toBeNull();
+    expect(done.completedAt).toBeNull();
+    expect(done.completedBy).toBeNull();
   });
 
   // ---- search (q) ----------------------------------------------------------
