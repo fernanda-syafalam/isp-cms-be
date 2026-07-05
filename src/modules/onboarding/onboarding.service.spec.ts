@@ -55,7 +55,10 @@ describe('OnboardingService', () => {
 
   beforeEach(async () => {
     customers = { onboard: vi.fn().mockResolvedValue(customer()) };
-    workOrders = { scheduleInstallForCustomer: vi.fn().mockResolvedValue({ id: 'wo-1' }) };
+    workOrders = {
+      scheduleInstallForCustomer: vi.fn().mockResolvedValue({ id: 'wo-1' }),
+      scheduleInstall: vi.fn().mockResolvedValue({ id: 'wo-2' }),
+    };
     users = {
       create: vi.fn().mockResolvedValue({ id: USER_ID, email: 'budi@example.com' }),
     };
@@ -124,5 +127,30 @@ describe('OnboardingService', () => {
     expect(customers.onboard).toHaveBeenCalledWith(expect.objectContaining({ userId: null }));
     expect(workOrders.scheduleInstallForCustomer).toHaveBeenCalledTimes(1);
     expect(result.portalLogin).toBeNull();
+  });
+
+  describe('onboardFromLead (P3.A.2)', () => {
+    it('creates an unlinked instalasi customer and an unassigned install WO', async () => {
+      const customer = await service.onboardFromLead({
+        fullName: 'Budi Santoso',
+        phone: '081200000000',
+        address: 'Jl. Mawar 1',
+        areaName: 'Bangsri',
+        planId: '00000000-0000-0000-0000-0000000000p1',
+      });
+
+      // Leads carry no email, so no login is provisioned.
+      expect(users.create).not.toHaveBeenCalled();
+      expect(customers.onboard).toHaveBeenCalledWith(
+        expect.objectContaining({ email: '', userId: null, areaName: 'Bangsri' }),
+      );
+      // Lead convert schedules the install unassigned (no technician/date).
+      expect(workOrders.scheduleInstall).toHaveBeenCalledWith({
+        customerId: CUSTOMER_ID,
+        customerName: 'Budi Santoso',
+      });
+      expect(workOrders.scheduleInstallForCustomer).not.toHaveBeenCalled();
+      expect(customer.id).toBe(CUSTOMER_ID);
+    });
   });
 });

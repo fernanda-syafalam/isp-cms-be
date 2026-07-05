@@ -2,9 +2,8 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Lead } from '../../infrastructure/database/schema/leads.schema';
-import { CustomersRepository } from '../customers/customers.repository';
+import { OnboardingService } from '../onboarding/onboarding.service';
 import { PlansRepository } from '../plans/plans.repository';
-import { WorkOrdersService } from '../work-orders/work-orders.service';
 import { LeadsRepository } from './leads.repository';
 import { LeadsService } from './leads.service';
 
@@ -26,8 +25,7 @@ const baseLead: Lead = {
 describe('LeadsService', () => {
   let service: LeadsService;
   let repo: Record<string, ReturnType<typeof vi.fn>>;
-  let customers: { create: ReturnType<typeof vi.fn> };
-  let workOrders: { scheduleInstall: ReturnType<typeof vi.fn> };
+  let onboarding: { onboardFromLead: ReturnType<typeof vi.fn> };
   let plans: { findByName: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
@@ -37,15 +35,13 @@ describe('LeadsService', () => {
       create: vi.fn(),
       setStage: vi.fn(),
     };
-    customers = { create: vi.fn() };
-    workOrders = { scheduleInstall: vi.fn() };
+    onboarding = { onboardFromLead: vi.fn() };
     plans = { findByName: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         LeadsService,
         { provide: LeadsRepository, useValue: repo },
-        { provide: CustomersRepository, useValue: customers },
-        { provide: WorkOrdersService, useValue: workOrders },
+        { provide: OnboardingService, useValue: onboarding },
         { provide: PlansRepository, useValue: plans },
       ],
     }).compile();
@@ -74,28 +70,23 @@ describe('LeadsService', () => {
   });
 
   describe('convert', () => {
-    it('creates a subscriber + install and marks the lead won', async () => {
+    it('routes conversion through the onboarding path and marks the lead won', async () => {
       repo.findById.mockResolvedValue(baseLead);
       plans.findByName.mockResolvedValue({ id: 'plan-1', name: 'Home 20' });
-      customers.create.mockResolvedValue({ id: 'cust-1', fullName: 'Citra Lestari' });
-      workOrders.scheduleInstall.mockResolvedValue({ code: 'WO-9001' });
+      onboarding.onboardFromLead.mockResolvedValue({ id: 'cust-1', fullName: 'Citra Lestari' });
       repo.setStage.mockResolvedValue({ ...baseLead, stage: 'won' });
 
       const result = await service.convert(baseLead.id);
 
       expect(plans.findByName).toHaveBeenCalledWith('Home 20');
-      expect(customers.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          fullName: 'Citra Lestari',
-          planId: 'plan-1',
-          status: 'instalasi',
-        }),
-      );
-      // ADR-0009: the install order must be LINKED to the new subscriber so
-      // completing it activates + provisions + bills them.
-      expect(workOrders.scheduleInstall).toHaveBeenCalledWith({
-        customerId: 'cust-1',
-        customerName: 'Citra Lestari',
+      // Single acquisition path (P3.A.2): onboarding creates the subscriber +
+      // login + linked install WO (ADR-0009), not a bespoke leads path.
+      expect(onboarding.onboardFromLead).toHaveBeenCalledWith({
+        fullName: 'Citra Lestari',
+        phone: baseLead.phone,
+        address: baseLead.address,
+        areaName: baseLead.areaName,
+        planId: 'plan-1',
       });
       expect(repo.setStage).toHaveBeenCalledWith(baseLead.id, 'won');
       expect(result.stage).toBe('won');
@@ -104,8 +95,7 @@ describe('LeadsService', () => {
     it('is a no-op for an already-won lead', async () => {
       repo.findById.mockResolvedValue({ ...baseLead, stage: 'won' });
       const result = await service.convert(baseLead.id);
-      expect(customers.create).not.toHaveBeenCalled();
-      expect(workOrders.scheduleInstall).not.toHaveBeenCalled();
+      expect(onboarding.onboardFromLead).not.toHaveBeenCalled();
       expect(repo.setStage).not.toHaveBeenCalled();
       expect(result.stage).toBe('won');
     });
@@ -114,7 +104,7 @@ describe('LeadsService', () => {
       repo.findById.mockResolvedValue(baseLead);
       plans.findByName.mockResolvedValue(null);
       await expect(service.convert(baseLead.id)).rejects.toBeInstanceOf(BadRequestException);
-      expect(customers.create).not.toHaveBeenCalled();
+      expect(onboarding.onboardFromLead).not.toHaveBeenCalled();
     });
 
     it('throws 404 for a missing lead', async () => {
