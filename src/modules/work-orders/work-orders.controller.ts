@@ -12,6 +12,8 @@ const ListQuerySchema = z.object({
   q: z.string().trim().min(1).optional(),
   status: z.enum(['scheduled', 'in_progress', 'done', 'cancelled']).optional(),
   type: z.enum(['install', 'repair', 'dismantle']).optional(),
+  // "Tugas saya" (P3.B.1): exact technician name.
+  technician: z.string().trim().min(1).optional(),
   sort: z.string().optional(),
   order: z.enum(['asc', 'desc']).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),

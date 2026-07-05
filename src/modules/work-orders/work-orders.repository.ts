@@ -12,6 +12,9 @@ export interface WorkOrderListFilter {
   q?: string;
   status?: WorkOrder['status'];
   type?: WorkOrder['type'];
+  // Exact-match technician filter — powers the teknisi "Tugas saya" view
+  // (P3.B.1). Assignee is still free text (a real user FK is a later item).
+  technician?: string;
   sort?: string;
   order?: 'asc' | 'desc';
   limit: number;
@@ -48,6 +51,7 @@ export class WorkOrdersRepository {
     const where = and(
       filter.status ? eq(workOrders.status, filter.status) : undefined,
       filter.type ? eq(workOrders.type, filter.type) : undefined,
+      filter.technician ? eq(workOrders.technician, filter.technician) : undefined,
       filter.q
         ? or(
             ilike(workOrders.code, `%${filter.q}%`),
