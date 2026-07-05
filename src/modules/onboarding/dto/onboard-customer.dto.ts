@@ -7,10 +7,11 @@ import { z } from 'zod';
  * install schedule. On success the backend creates the customer (status
  * `instalasi`) and a linked install work order.
  *
- * `note`, `lat` and `lng` are accepted for contract parity but not persisted
- * in this iteration: `note` is an install hint with no column, and lat/lng
- * place the customer's node on the topology map (a Phase C concern). `email`
- * accepts '' as "no email" (normalised to null in the service).
+ * `lat`/`lng` are the map pin captured at onboarding (persisted for coverage +
+ * the topology map, P3.A.1). `ktp`/`npwp`/`consent` are the KYC + UU-PDP consent
+ * captured in the wizard. `note` is an install hint with no column (not
+ * persisted). `email` accepts '' as "no email" (normalised to null in the
+ * service).
  */
 export const OnboardCustomerSchema = z
   .object({
@@ -24,8 +25,12 @@ export const OnboardCustomerSchema = z
     // The FE schedules the install with a date picker (YYYY-MM-DD).
     scheduledAt: z.iso.date(),
     note: z.string().trim().max(300).optional(),
-    lat: z.number().optional(),
-    lng: z.number().optional(),
+    lat: z.number().min(-90).max(90).optional(),
+    lng: z.number().min(-180).max(180).optional(),
+    // KYC (UU PDP): identity numbers + explicit data-processing consent.
+    ktp: z.string().trim().max(32).optional(),
+    npwp: z.string().trim().max(40).optional(),
+    consent: z.boolean().optional(),
   })
   .strict();
 

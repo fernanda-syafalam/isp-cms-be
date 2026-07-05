@@ -18,8 +18,9 @@ import type { OnboardCustomerInput } from './dto/onboard-customer.dto';
  * generated initial password is returned once in the response for staff
  * to communicate to the subscriber.
  *
- * `note`/`lat`/`lng` from the wizard are FE-side concerns (install hint +
- * topology placement) with no column yet, so they are not persisted here.
+ * `lat`/`lng` (map pin) and `ktp`/`npwp`/`consent` (KYC + UU-PDP) from the
+ * wizard are persisted on the customer (P3.A.1). `note` is an install hint
+ * with no column, so it is still not persisted.
  */
 @Injectable()
 export class OnboardingService {
@@ -42,6 +43,13 @@ export class OnboardingService {
       areaName: input.areaName,
       planId: input.planId,
       userId: login?.userId ?? null,
+      // Persist the map pin + KYC captured in the wizard (P3.A.1). Consent is
+      // a checkbox → stamp the acceptance time when ticked.
+      lat: input.lat ?? null,
+      lng: input.lng ?? null,
+      ktp: input.ktp ?? null,
+      npwp: input.npwp ?? null,
+      consentAt: input.consent ? new Date() : null,
     });
     await this.workOrders.scheduleInstallForCustomer({
       customerId: customer.id,

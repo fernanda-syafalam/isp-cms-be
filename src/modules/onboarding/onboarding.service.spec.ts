@@ -94,6 +94,12 @@ describe('OnboardingService', () => {
       areaName: 'Bangsri',
       planId: '00000000-0000-0000-0000-0000000000p1',
       userId: USER_ID,
+      // No geo/KYC on the base fixture — all default to null.
+      lat: null,
+      lng: null,
+      ktp: null,
+      npwp: null,
+      consentAt: null,
     });
     // The install work order is linked to the new customer with the chosen
     // technician and date (a real Date, not the raw string).
@@ -110,6 +116,35 @@ describe('OnboardingService', () => {
       email: 'budi@example.com',
       initialPassword: expect.stringMatching(/^[\w-]{18}$/),
     });
+  });
+
+  it('persists the map pin and KYC, stamping consentAt when consent is ticked', async () => {
+    await service.onboard({
+      ...input,
+      lat: -6.5900123,
+      lng: 110.6700456,
+      ktp: '3320123456780001',
+      npwp: '09.254.294.3-407.000',
+      consent: true,
+    });
+
+    expect(customers.onboard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lat: -6.5900123,
+        lng: 110.6700456,
+        ktp: '3320123456780001',
+        npwp: '09.254.294.3-407.000',
+        consentAt: expect.any(Date),
+      }),
+    );
+  });
+
+  it('leaves consentAt null when consent is not given', async () => {
+    await service.onboard({ ...input, ktp: '3320123456780001', consent: false });
+
+    expect(customers.onboard).toHaveBeenCalledWith(
+      expect.objectContaining({ ktp: '3320123456780001', consentAt: null }),
+    );
   });
 
   it('skips login provisioning when the wizard has no email', async () => {

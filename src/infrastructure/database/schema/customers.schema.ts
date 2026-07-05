@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  doublePrecision,
   index,
   integer,
   jsonb,
@@ -73,6 +74,11 @@ export const customers = pgTable(
     // module owns it. areaName is the label shown in the UI.
     areaId: uuid('area_id'),
     areaName: varchar('area_name', { length: 120 }),
+    // Geographic pin captured at onboarding (map click). Nullable — legacy
+    // rows and prospects have none. Used for coverage/serviceability and the
+    // topology map. WGS84 decimal degrees.
+    lat: doublePrecision('lat'),
+    lng: doublePrecision('lng'),
     // Every subscriber signs up for a plan. FK to plans; a plan row
     // survives archival (status transition, not delete) so this never
     // dangles. planName is NOT stored — it is joined from plans (single
