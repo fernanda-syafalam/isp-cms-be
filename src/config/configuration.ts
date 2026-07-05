@@ -38,6 +38,10 @@ export const appConfig = registerAs('app', () => {
       domain: env.COOKIE_DOMAIN,
       sameSite: env.COOKIE_SAMESITE,
     },
+    routeros: {
+      mode: env.ROUTEROS_MODE,
+      apiPassword: env.ROUTEROS_API_PASSWORD,
+    },
   } as const;
 });
 

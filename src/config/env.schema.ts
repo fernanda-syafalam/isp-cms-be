@@ -60,6 +60,13 @@ export const envSchema = z.object({
   OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
   OTEL_SERVICE_NAME: z.string().min(1).default('isp-cms-be'),
   SERVICE_VERSION: z.string().default('0.0.0'),
+
+  // Network enforcement (P2.5, ADR-0008). 'simulation' keeps the DB flag as
+  // the only effect (dev/test/default); 'live' also pushes enable/disable to
+  // the real RouterOS device over the API. The API password is shared across
+  // managed routers (single-operator model) and never stored in the DB.
+  ROUTEROS_MODE: z.enum(['simulation', 'live']).default('simulation'),
+  ROUTEROS_API_PASSWORD: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

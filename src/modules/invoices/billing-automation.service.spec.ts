@@ -2,7 +2,7 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CustomersRepository } from '../customers/customers.repository';
 import { NotificationsService } from '../notifications/notifications.service';
-import { SecretsRepository } from '../router-resources/secrets.repository';
+import { SecretEnforcementService } from '../router-resources/secret-enforcement.service';
 import { SettingsService } from '../settings/settings.service';
 import { BillingAutomationService } from './billing-automation.service';
 import { InvoicesRepository } from './invoices.repository';
@@ -17,7 +17,7 @@ describe('BillingAutomationService', () => {
     setBilling: ReturnType<typeof vi.fn>;
     findActiveBillable: ReturnType<typeof vi.fn>;
   };
-  let secrets: { setDisabledByCustomerId: ReturnType<typeof vi.fn> };
+  let secrets: { applyDisabledForCustomer: ReturnType<typeof vi.fn> };
   let notifications: { enqueue: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
@@ -35,7 +35,7 @@ describe('BillingAutomationService', () => {
       existsForPeriod: vi.fn(),
     };
     customers = { findById: vi.fn(), setBilling: vi.fn(), findActiveBillable: vi.fn() };
-    secrets = { setDisabledByCustomerId: vi.fn() };
+    secrets = { applyDisabledForCustomer: vi.fn() };
     notifications = { enqueue: vi.fn() };
     // Safe defaults so the dunning dispatch is a no-op unless a test opts in.
     repo.customerIdsWithOverdue.mockResolvedValue([]);
@@ -55,7 +55,7 @@ describe('BillingAutomationService', () => {
         { provide: InvoicesService, useValue: invoicesService },
         { provide: InvoicesRepository, useValue: repo },
         { provide: CustomersRepository, useValue: customers },
-        { provide: SecretsRepository, useValue: secrets },
+        { provide: SecretEnforcementService, useValue: secrets },
         { provide: NotificationsService, useValue: notifications },
         { provide: SettingsService, useValue: settings },
       ],
@@ -82,8 +82,8 @@ describe('BillingAutomationService', () => {
         outstanding: 247_000,
       });
       // ADR-0008: isolating a debtor disables their PPPoE secret on the router.
-      expect(secrets.setDisabledByCustomerId).toHaveBeenCalledTimes(1);
-      expect(secrets.setDisabledByCustomerId).toHaveBeenCalledWith('c1', true);
+      expect(secrets.applyDisabledForCustomer).toHaveBeenCalledTimes(1);
+      expect(secrets.applyDisabledForCustomer).toHaveBeenCalledWith('c1', true);
       expect(result).toEqual({ markedOverdue: 3, isolated: 1 });
     });
   });
