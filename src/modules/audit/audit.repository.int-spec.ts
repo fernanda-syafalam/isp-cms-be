@@ -77,6 +77,25 @@ describe('AuditRepository (integration)', () => {
     },
   ];
 
+  it('records a real action and reads it back via list', async () => {
+    await repo.record({
+      actor: 'a@x.io',
+      action: 'customer.suspend',
+      entity: 'customer',
+      summary: 'customer.suspend #cust-9',
+      entityId: 'cust-9',
+    });
+    const { items, total } = await repo.list({ limit: 50, offset: 0 });
+    expect(total).toBe(1);
+    expect(items[0]).toMatchObject({
+      actor: 'a@x.io',
+      action: 'customer.suspend',
+      entity: 'customer',
+      entityId: 'cust-9',
+    });
+    expect(items[0]?.id).toBeTruthy(); // server-generated
+  });
+
   it('seeds idempotently on the primary key', async () => {
     await repo.ensureSeeded(entries);
     await repo.ensureSeeded(entries);
