@@ -21,7 +21,7 @@ describe('CoverageService', () => {
   let repo: Record<string, ReturnType<typeof vi.fn>>;
 
   beforeEach(async () => {
-    repo = { ensureSeeded: vi.fn(), list: vi.fn() };
+    repo = { ensureSeeded: vi.fn(), list: vi.fn(), findByName: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [CoverageService, { provide: CoverageRepository, useValue: repo }],
     }).compile();
@@ -68,5 +68,42 @@ describe('CoverageService', () => {
     expect(repo.list).toHaveBeenCalledWith(
       expect.objectContaining({ status: 'operational', q: 'Jepara' }),
     );
+  });
+
+  describe('checkServiceability', () => {
+    it('is not serviceable when the area does not exist', async () => {
+      repo.findByName.mockResolvedValue(null);
+      const result = await service.checkServiceability('Nowhereville');
+      expect(repo.ensureSeeded).toHaveBeenCalledTimes(1);
+      expect(repo.findByName).toHaveBeenCalledWith('Nowhereville');
+      expect(result.serviceable).toBe(false);
+      expect(result.reason).toBeTruthy();
+    });
+
+    it('is not serviceable when the area status is down', async () => {
+      repo.findByName.mockResolvedValue({ ...area, status: 'down' });
+      const result = await service.checkServiceability('POP Jepara');
+      expect(result.serviceable).toBe(false);
+      expect(result.reason).toBeTruthy();
+    });
+
+    it('is serviceable (with a soft-warn reason) when the area is under maintenance', async () => {
+      repo.findByName.mockResolvedValue({ ...area, status: 'maintenance' });
+      const result = await service.checkServiceability('POP Jepara');
+      expect(result.serviceable).toBe(true);
+      expect(result.reason).toBeTruthy();
+    });
+
+    it('is serviceable with no reason when the area is operational', async () => {
+      repo.findByName.mockResolvedValue({ ...area, status: 'operational' });
+      const result = await service.checkServiceability('POP Jepara');
+      expect(result).toEqual({ serviceable: true });
+    });
+
+    it('never throws — it is a pure query, the caller decides what to do', async () => {
+      repo.findByName.mockResolvedValue(null);
+      const result = await service.checkServiceability('Nowhereville');
+      expect(result).toBeDefined();
+    });
   });
 });

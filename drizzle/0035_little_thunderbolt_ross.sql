@@ -1,0 +1,2 @@
+ALTER TABLE "customers" ADD COLUMN "odp_id" varchar(60);--> statement-breakpoint
+ALTER TABLE "customers" ADD CONSTRAINT "customers_odp_id_odp_records_id_fk" FOREIGN KEY ("odp_id") REFERENCES "public"."odp_records"("id") ON DELETE no action ON UPDATE no action;

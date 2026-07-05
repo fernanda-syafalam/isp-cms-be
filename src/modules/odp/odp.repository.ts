@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { SQL, and, asc, count, ilike, or, sql } from 'drizzle-orm';
+import { SQL, and, asc, count, eq, ilike, or, sql } from 'drizzle-orm';
 import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
@@ -44,6 +44,42 @@ export class OdpRepository {
   async ensureSeeded(defaults: NewOdpRecord[]): Promise<void> {
     if (defaults.length === 0) return;
     await this.db.insert(odpRecords).values(defaults).onConflictDoNothing();
+  }
+
+  async findById(id: string): Promise<OdpRecordRow | null> {
+    const [row] = await this.db.select().from(odpRecords).where(eq(odpRecords.id, id)).limit(1);
+    return row ?? null;
+  }
+
+  /**
+   * Atomically reserve one port on the ODP. A single guarded UPDATE — the
+   * WHERE clause re-checks capacity in the same statement Postgres uses to
+   * take the row lock, so two concurrent onboardings racing for the last
+   * free port cannot both succeed (no read-then-write gap). Returns null
+   * when the ODP is missing or already at capacity — the caller decides
+   * what that means (OdpService throws 409).
+   */
+  async assignPort(odpId: string): Promise<OdpRecordRow | null> {
+    const [row] = await this.db
+      .update(odpRecords)
+      .set({ usedPorts: sql`${odpRecords.usedPorts} + 1`, updatedAt: sql`now()` })
+      .where(and(eq(odpRecords.id, odpId), sql`${odpRecords.usedPorts} < ${odpRecords.totalPorts}`))
+      .returning();
+    return row ?? null;
+  }
+
+  /**
+   * Atomically release one port (e.g. a customer relocates/churns off this
+   * ODP). Guarded symmetrically by `used_ports > 0` so it can never go
+   * negative under concurrent releases.
+   */
+  async releasePort(odpId: string): Promise<OdpRecordRow | null> {
+    const [row] = await this.db
+      .update(odpRecords)
+      .set({ usedPorts: sql`${odpRecords.usedPorts} - 1`, updatedAt: sql`now()` })
+      .where(and(eq(odpRecords.id, odpId), sql`${odpRecords.usedPorts} > 0`))
+      .returning();
+    return row ?? null;
   }
 
   async list(

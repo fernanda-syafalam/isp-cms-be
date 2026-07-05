@@ -21,6 +21,7 @@ const sampleRow: CustomerRow = {
   areaName: null,
   lat: null,
   lng: null,
+  odpId: null,
   planId: PLAN_ID,
   status: 'prospek',
   holdReason: null,

@@ -11,6 +11,7 @@ import {
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
+import { odpRecords } from './odp.schema';
 import { plans } from './plans.schema';
 import { resellers } from './resellers.schema';
 import { users } from './users.schema';
@@ -79,6 +80,10 @@ export const customers = pgTable(
     // topology map. WGS84 decimal degrees.
     lat: doublePrecision('lat'),
     lng: doublePrecision('lng'),
+    // The ODP (FTTH distribution point) this subscriber's drop is assigned to,
+    // captured at onboarding (P3.A.1). Nullable — prospects and legacy rows
+    // have none. FK to odp_records; a port is reserved on assignment.
+    odpId: varchar('odp_id', { length: 60 }).references(() => odpRecords.id),
     // Every subscriber signs up for a plan. FK to plans; a plan row
     // survives archival (status transition, not delete) so this never
     // dangles. planName is NOT stored — it is joined from plans (single

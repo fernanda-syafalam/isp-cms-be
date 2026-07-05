@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OdpRecordRow } from '../../infrastructure/database/schema/odp.schema';
@@ -77,7 +78,13 @@ describe('OdpService', () => {
   let repo: Record<string, ReturnType<typeof vi.fn>>;
 
   beforeEach(async () => {
-    repo = { ensureSeeded: vi.fn(), list: vi.fn() };
+    repo = {
+      ensureSeeded: vi.fn(),
+      list: vi.fn(),
+      findById: vi.fn(),
+      assignPort: vi.fn(),
+      releasePort: vi.fn(),
+    };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [OdpService, { provide: OdpRepository, useValue: repo }],
     }).compile();
@@ -360,6 +367,47 @@ describe('OdpService', () => {
       const result = await service.list({ limit: 1, offset: 2 });
       expect(result.items).toHaveLength(1);
       expect(result.total).toBe(3);
+    });
+  });
+
+  // --- port reservation (P3.A.1) ---------------------------------------------
+
+  describe('assignPort', () => {
+    it('returns the updated row when the repo reserves a port', async () => {
+      const updated = { ...rowHealthy, usedPorts: 3 };
+      repo.assignPort.mockResolvedValue(updated);
+      const result = await service.assignPort(rowHealthy.id);
+      expect(repo.assignPort).toHaveBeenCalledWith(rowHealthy.id);
+      expect(result).toEqual(updated);
+    });
+
+    it('throws ConflictException when the repo returns null (full or missing)', async () => {
+      repo.assignPort.mockResolvedValue(null);
+      await expect(service.assignPort('does-not-exist')).rejects.toThrow(ConflictException);
+    });
+
+    it('throws ConflictException when the ODP is already at capacity', async () => {
+      // Simulate the guarded UPDATE matching zero rows because usedPorts = totalPorts.
+      repo.assignPort.mockResolvedValue(null);
+      await expect(service.assignPort(rowWarning.id)).rejects.toThrow(
+        'ODP penuh atau tidak ditemukan',
+      );
+    });
+  });
+
+  describe('releasePort', () => {
+    it('returns the updated row when the repo releases a port', async () => {
+      const updated = { ...rowHealthy, usedPorts: 1 };
+      repo.releasePort.mockResolvedValue(updated);
+      const result = await service.releasePort(rowHealthy.id);
+      expect(repo.releasePort).toHaveBeenCalledWith(rowHealthy.id);
+      expect(result).toEqual(updated);
+    });
+
+    it('returns null without throwing when the ODP has no port to release', async () => {
+      repo.releasePort.mockResolvedValue(null);
+      const result = await service.releasePort(rowHealthy.id);
+      expect(result).toBeNull();
     });
   });
 });

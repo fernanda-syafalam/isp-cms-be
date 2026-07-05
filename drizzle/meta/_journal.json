@@ -246,6 +246,13 @@
       "when": 1783266448015,
       "tag": "0034_dashing_captain_britain",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1783267034876,
+      "tag": "0035_little_thunderbolt_ross",
+      "breakpoints": true
     }
   ]
 }
