@@ -55,6 +55,8 @@ interface LedgerInput {
   type: ResellerLedgerEntry['type'];
   amount: number; // always positive; sign derived from type
   note: string;
+  // Idempotency source (P3.D.1) — e.g. the invoice id a commission is for.
+  ref?: string;
 }
 
 const CREDIT_TYPES = ['topup', 'commission'] as const;
@@ -171,6 +173,7 @@ export class ResellersRepository {
         amount: signed,
         note: input.note,
         balanceAfter: nextBalance,
+        ref: input.ref ?? null,
       });
       const [updated] = await tx
         .update(resellers)
@@ -182,5 +185,38 @@ export class ResellersRepository {
       }
       return updated;
     });
+  }
+
+  /**
+   * Post a commission entry for an invoice, idempotently (P3.D.1). Skips (and
+   * returns false) when a commission for this reseller+invoice already exists,
+   * so replaying a payment never double-credits. Returns true when posted.
+   */
+  async postCommissionForInvoice(input: {
+    resellerId: string;
+    amount: number;
+    invoiceId: string;
+    note: string;
+  }): Promise<boolean> {
+    const [existing] = await this.db
+      .select({ id: resellerLedger.id })
+      .from(resellerLedger)
+      .where(
+        and(
+          eq(resellerLedger.resellerId, input.resellerId),
+          eq(resellerLedger.type, 'commission'),
+          eq(resellerLedger.ref, input.invoiceId),
+        ),
+      )
+      .limit(1);
+    if (existing) return false;
+
+    await this.addLedgerEntry(input.resellerId, {
+      type: 'commission',
+      amount: input.amount,
+      note: input.note,
+      ref: input.invoiceId,
+    });
+    return true;
   }
 }

@@ -232,6 +232,13 @@
       "when": 1783239898438,
       "tag": "0032_far_tinkerer",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1783245170940,
+      "tag": "0033_parallel_slayback",
+      "breakpoints": true
     }
   ]
 }

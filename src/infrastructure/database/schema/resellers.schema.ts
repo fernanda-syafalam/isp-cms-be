@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   index,
   integer,
@@ -5,6 +6,7 @@ import {
   pgTable,
   real,
   timestamp,
+  uniqueIndex,
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
@@ -48,11 +50,18 @@ export const resellerLedger = pgTable(
     amount: integer('amount').notNull(),
     note: varchar('note', { length: 200 }).notNull().default(''),
     balanceAfter: integer('balance_after').notNull(),
+    // Idempotency source for auto-posted entries (P3.D.1): the invoice id a
+    // commission was earned on. Unique per (reseller, type, ref) so replaying
+    // a payment never double-credits. Null for manual topup/withdrawal.
+    ref: varchar('ref', { length: 64 }),
     at: timestamp('at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },
   (t) => [
     index('reseller_ledger_reseller_id_idx').on(t.resellerId),
     index('reseller_ledger_at_idx').on(t.at),
+    uniqueIndex('reseller_ledger_reseller_type_ref_idx')
+      .on(t.resellerId, t.type, t.ref)
+      .where(sql`${t.ref} is not null`),
   ],
 );
 

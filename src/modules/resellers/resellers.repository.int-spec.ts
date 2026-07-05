@@ -47,8 +47,11 @@ describe('ResellersRepository (integration)', () => {
         amount integer NOT NULL,
         note varchar(200) NOT NULL DEFAULT '',
         balance_after integer NOT NULL,
+        ref varchar(64),
         at timestamptz(3) NOT NULL DEFAULT now()
       );
+      CREATE UNIQUE INDEX reseller_ledger_reseller_type_ref_idx
+        ON reseller_ledger (reseller_id, type, ref) WHERE ref IS NOT NULL;
     `);
 
     repo = new ResellersRepository({ db } as unknown as DrizzleService);
@@ -225,6 +228,31 @@ describe('ResellersRepository (integration)', () => {
     // balance unchanged, no ledger row
     expect((await repo.findById(r.id))?.balance).toBe(100_000);
     expect((await repo.listLedger(r.id, { limit: 50, offset: 0 })).total).toBe(0);
+  });
+
+  it('posts a commission once per invoice — a replay is a no-op (P3.D.1)', async () => {
+    const r = await seed({ balance: 0 });
+    const invoiceId = '00000000-0000-0000-0000-0000000000e1';
+
+    const first = await repo.postCommissionForInvoice({
+      resellerId: r.id,
+      amount: 11_100,
+      invoiceId,
+      note: `Komisi tagihan ${invoiceId}`,
+    });
+    expect(first).toBe(true);
+    expect((await repo.findById(r.id))?.balance).toBe(11_100);
+
+    // Replaying the same invoice must not double-credit.
+    const second = await repo.postCommissionForInvoice({
+      resellerId: r.id,
+      amount: 11_100,
+      invoiceId,
+      note: `Komisi tagihan ${invoiceId}`,
+    });
+    expect(second).toBe(false);
+    expect((await repo.findById(r.id))?.balance).toBe(11_100);
+    expect((await repo.listLedger(r.id, { limit: 50, offset: 0 })).total).toBe(1);
   });
 
   describe('listLedger — pagination, search, sort', () => {
