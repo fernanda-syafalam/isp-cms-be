@@ -31,12 +31,13 @@ export class PortalService {
   /** The authenticated customer's self-service snapshot. */
   async getMe(user: AuthUser): Promise<PortalMeResponse> {
     const customer = await this.customers.resolveForPortal(user);
-    const [invoices, payments, tickets] = await Promise.all([
+    const [invoices, payments, tickets, pendingIntents] = await Promise.all([
       this.invoices.invoicesByCustomer(customer.id),
       this.invoices.paymentsByCustomer(customer.id),
       this.tickets.listByCustomer(customer.id),
+      this.intents.pendingForCustomer(customer.id),
     ]);
-    return { customer, invoices, payments, tickets };
+    return { customer, invoices, payments, tickets, pendingIntents };
   }
 
   /**

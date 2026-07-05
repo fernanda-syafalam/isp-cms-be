@@ -1,9 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { and, eq, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, gt, lt, sql } from 'drizzle-orm';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type NewPaymentIntent,
   type PaymentIntent,
+  invoices,
   paymentIntents,
 } from '../../infrastructure/database/schema/invoices.schema';
 
@@ -34,6 +35,27 @@ export class PaymentIntentsRepository {
       .where(eq(paymentIntents.id, id))
       .limit(1);
     return row ?? null;
+  }
+
+  /**
+   * Still-resumable intents for one customer (P3.C.3): pending and not yet
+   * expired. Ownership is enforced by joining through `invoices` — there is
+   * no `customer_id` column on `payment_intents` — so a caller can never see
+   * another customer's charge.
+   */
+  async listPendingByCustomer(customerId: string): Promise<PaymentIntent[]> {
+    return this.db
+      .select(getTableColumns(paymentIntents))
+      .from(paymentIntents)
+      .innerJoin(invoices, eq(invoices.id, paymentIntents.invoiceId))
+      .where(
+        and(
+          eq(invoices.customerId, customerId),
+          eq(paymentIntents.status, 'pending'),
+          gt(paymentIntents.expiresAt, sql`now()`),
+        ),
+      )
+      .orderBy(desc(paymentIntents.createdAt));
   }
 
   async markPaid(id: string): Promise<PaymentIntent> {
