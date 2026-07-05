@@ -25,6 +25,12 @@ export const customerStatus = pgEnum('customer_status', [
   'berhenti',
 ]);
 
+// Why a customer sits in `isolir` (P3.A.3): `overdue` is a punitive
+// non-payment isolation (auto or manual), `voluntary` is a customer-requested
+// hold (cuti). Null whenever the customer is not held. Distinguishes the two
+// so dunning/reactivation don't treat a cuti customer as a debtor.
+export const customerHoldReason = pgEnum('customer_hold_reason', ['overdue', 'voluntary']);
+
 // Human-friendly account number: CUST-9001, CUST-9002, ... Backed by a
 // sequence so concurrent inserts never collide (a count(*) + 1 would).
 export const customerNoSeq = pgSequence('customer_no_seq', { startWith: 9001 });
@@ -75,6 +81,9 @@ export const customers = pgTable(
       .notNull()
       .references(() => plans.id),
     status: customerStatus('status').notNull().default('prospek'),
+    // Why the customer is in `isolir` (P3.A.3): overdue (punitive) vs
+    // voluntary (cuti). Null when not held.
+    holdReason: customerHoldReason('hold_reason'),
     // Outstanding balance in whole IDR.
     outstanding: integer('outstanding').notNull().default(0),
     npwp: varchar('npwp', { length: 40 }),

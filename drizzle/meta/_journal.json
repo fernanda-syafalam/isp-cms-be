@@ -225,6 +225,13 @@
       "when": 1783194403067,
       "tag": "0031_faulty_mysterio",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1783239898438,
+      "tag": "0032_far_tinkerer",
+      "breakpoints": true
     }
   ]
 }

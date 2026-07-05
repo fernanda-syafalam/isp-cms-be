@@ -21,6 +21,7 @@ const sampleRow: CustomerRow = {
   areaName: null,
   planId: PLAN_ID,
   status: 'prospek',
+  holdReason: null,
   outstanding: 0,
   npwp: null,
   ktp: null,
@@ -255,12 +256,16 @@ describe('CustomersService', () => {
   });
 
   describe('lifecycle', () => {
-    it('suspend and isolate land on isolir without clearing the balance', async () => {
+    it('distinguishes voluntary suspend (cuti) from punitive isolate (P3.A.3)', async () => {
       repo.setStatus.mockResolvedValue({ ...sampleRow, status: 'isolir' });
       await service.suspend(sampleRow.id);
-      expect(repo.setStatus).toHaveBeenCalledWith(sampleRow.id, 'isolir', {});
+      expect(repo.setStatus).toHaveBeenCalledWith(sampleRow.id, 'isolir', {
+        holdReason: 'voluntary',
+      });
       await service.isolate(sampleRow.id);
-      expect(repo.setStatus).toHaveBeenLastCalledWith(sampleRow.id, 'isolir', {});
+      expect(repo.setStatus).toHaveBeenLastCalledWith(sampleRow.id, 'isolir', {
+        holdReason: 'overdue',
+      });
     });
 
     it('activate clears the outstanding balance', async () => {

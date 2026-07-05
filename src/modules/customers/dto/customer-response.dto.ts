@@ -33,6 +33,8 @@ export const CustomerResponseSchema = z.object({
   planId: z.uuid(),
   planName: z.string(),
   status: z.enum(['prospek', 'instalasi', 'aktif', 'isolir', 'berhenti']),
+  // Why the customer is held (P3.A.3): overdue vs voluntary (cuti); null when not held.
+  holdReason: z.enum(['overdue', 'voluntary']).nullable(),
   outstanding: z.number().int().nonnegative(),
   npwp: z.string().nullable(),
   ktp: z.string().nullable(),
