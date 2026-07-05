@@ -288,7 +288,9 @@ export class InvoicesRepository {
       .where(
         and(
           inArray(invoices.status, [...NOT_YET_OVERDUE_STATUSES]),
-          sql`${invoices.dueDate} <= current_date + ${days}`,
+          // Cast the bound param: `date + unknown` is ambiguous in Postgres, so
+          // an untyped $n fails with "operator is not unique". `date + int` adds days.
+          sql`${invoices.dueDate} <= current_date + ${days}::int`,
         ),
       );
     return row?.value ?? 0;
@@ -309,7 +311,9 @@ export class InvoicesRepository {
       .where(
         and(
           inArray(invoices.status, [...NOT_YET_OVERDUE_STATUSES]),
-          sql`${invoices.dueDate} <= current_date + ${days}`,
+          // Cast the bound param: `date + unknown` is ambiguous in Postgres, so
+          // an untyped $n fails with "operator is not unique". `date + int` adds days.
+          sql`${invoices.dueDate} <= current_date + ${days}::int`,
         ),
       );
     return result.rowCount ?? 0;
@@ -341,7 +345,9 @@ export class InvoicesRepository {
       .where(
         and(
           inArray(invoices.status, [...NOT_YET_OVERDUE_STATUSES]),
-          sql`${invoices.dueDate} <= current_date + ${days}`,
+          // Cast the bound param: `date + unknown` is ambiguous in Postgres, so
+          // an untyped $n fails with "operator is not unique". `date + int` adds days.
+          sql`${invoices.dueDate} <= current_date + ${days}::int`,
         ),
       );
     return rows.map((r) => r.customerId);
