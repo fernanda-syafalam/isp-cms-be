@@ -1,8 +1,10 @@
-import { Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { z } from 'zod';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { AssignWorkOrderDto } from './dto/assign-work-order.dto';
+import { RescheduleWorkOrderDto } from './dto/reschedule-work-order.dto';
 import { WorkOrderResponseDto } from './dto/work-order-response.dto';
 import { WorkOrdersService } from './work-orders.service';
 
@@ -34,5 +36,43 @@ export class WorkOrdersController {
   @ZodSerializerDto(WorkOrderResponseDto)
   complete(@Param('id') id: string) {
     return this.workOrders.complete(id);
+  }
+
+  // --- State machine (P3.B.2) — in_progress/cancelled were unreachable ---
+
+  // Start a scheduled order (→ in_progress).
+  @Roles('admin', 'staff', 'teknisi')
+  @Audit('work_order.start')
+  @Post(':id/start')
+  @ZodSerializerDto(WorkOrderResponseDto)
+  start(@Param('id') id: string) {
+    return this.workOrders.start(id);
+  }
+
+  // Cancel an open order (→ cancelled).
+  @Roles('admin', 'staff', 'teknisi')
+  @Audit('work_order.cancel')
+  @Post(':id/cancel')
+  @ZodSerializerDto(WorkOrderResponseDto)
+  cancel(@Param('id') id: string) {
+    return this.workOrders.cancel(id);
+  }
+
+  // (Re)assign the field technician.
+  @Roles('admin', 'staff', 'teknisi')
+  @Audit('work_order.assign')
+  @Post(':id/assign')
+  @ZodSerializerDto(WorkOrderResponseDto)
+  assign(@Param('id') id: string, @Body() body: AssignWorkOrderDto) {
+    return this.workOrders.assign(id, body.technician);
+  }
+
+  // Reschedule an open order to a new date/time.
+  @Roles('admin', 'staff', 'teknisi')
+  @Audit('work_order.reschedule')
+  @Post(':id/reschedule')
+  @ZodSerializerDto(WorkOrderResponseDto)
+  reschedule(@Param('id') id: string, @Body() body: RescheduleWorkOrderDto) {
+    return this.workOrders.reschedule(id, new Date(body.scheduledAt));
   }
 }

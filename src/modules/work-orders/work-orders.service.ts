@@ -75,6 +75,60 @@ export class WorkOrdersService {
     return toWorkOrderResponse(done);
   }
 
+  /**
+   * Start a scheduled order (→ in_progress). P3.B.2 — this transition was
+   * unreachable via the API before. Idempotent if already in progress.
+   */
+  async start(id: string): Promise<WorkOrderResponse> {
+    const wo = await this.requireOpen(id);
+    if (wo.status === 'in_progress') return toWorkOrderResponse(wo);
+    if (wo.status !== 'scheduled') {
+      throw new BadRequestException(`cannot start a ${wo.status} work order`);
+    }
+    const started = await this.repo.patch(id, { status: 'in_progress' });
+    this.logger.log({ workOrderId: id }, 'work order started');
+    return toWorkOrderResponse(started);
+  }
+
+  /** Cancel an open order (scheduled/in_progress → cancelled). */
+  async cancel(id: string): Promise<WorkOrderResponse> {
+    const wo = await this.repo.findById(id);
+    if (!wo) throw new NotFoundException('work order not found');
+    if (wo.status === 'cancelled') return toWorkOrderResponse(wo);
+    if (wo.status === 'done') {
+      throw new BadRequestException('cannot cancel a completed work order');
+    }
+    const cancelled = await this.repo.patch(id, { status: 'cancelled' });
+    this.logger.log({ workOrderId: id }, 'work order cancelled');
+    return toWorkOrderResponse(cancelled);
+  }
+
+  /** (Re)assign the field technician on an open order. */
+  async assign(id: string, technician: string): Promise<WorkOrderResponse> {
+    const wo = await this.requireOpen(id);
+    const assigned = await this.repo.patch(wo.id, { technician });
+    this.logger.log({ workOrderId: id, technician }, 'work order assigned');
+    return toWorkOrderResponse(assigned);
+  }
+
+  /** Reschedule an open order to a new date/time. */
+  async reschedule(id: string, scheduledAt: Date): Promise<WorkOrderResponse> {
+    const wo = await this.requireOpen(id);
+    const rescheduled = await this.repo.patch(wo.id, { scheduledAt });
+    this.logger.log({ workOrderId: id }, 'work order rescheduled');
+    return toWorkOrderResponse(rescheduled);
+  }
+
+  /** A work order that can still be acted on (not done/cancelled). */
+  private async requireOpen(id: string): Promise<WorkOrder> {
+    const wo = await this.repo.findById(id);
+    if (!wo) throw new NotFoundException('work order not found');
+    if (wo.status === 'done' || wo.status === 'cancelled') {
+      throw new BadRequestException(`work order is already ${wo.status}`);
+    }
+    return wo;
+  }
+
   // Hand the oldest warehouse ONU to the subscriber and return its serial,
   // or null when stock is dry (the connection then uses a synthetic serial).
   // The work order id is recorded on the movement so stock consumption
