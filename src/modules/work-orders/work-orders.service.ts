@@ -1,4 +1,11 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+  forwardRef,
+} from '@nestjs/common';
 import type { CustomerConnection } from '../../infrastructure/database/schema/customers.schema';
 import type { WorkOrder } from '../../infrastructure/database/schema/work-orders.schema';
 import { type CustomerRow, CustomersRepository } from '../customers/customers.repository';
@@ -7,6 +14,10 @@ import { InvoicesService } from '../invoices/invoices.service';
 import { ProfilesRepository } from '../router-resources/profiles.repository';
 import { SecretsRepository } from '../router-resources/secrets.repository';
 import { RoutersRepository } from '../routers/routers.repository';
+// Only used to close the repair loop on complete() (P3.B.4). TicketsModule
+// imports WorkOrdersModule (to dispatch a repair WO), so this edge needs
+// forwardRef() on both sides — see work-orders.module.ts.
+import { TicketsService } from '../tickets/tickets.service';
 import type { WorkOrderResponse } from './dto/work-order-response.dto';
 import { type WorkOrderListFilter, WorkOrdersRepository } from './work-orders.repository';
 
@@ -27,6 +38,8 @@ export class WorkOrdersService {
     private readonly routers: RoutersRepository,
     private readonly profiles: ProfilesRepository,
     private readonly secrets: SecretsRepository,
+    @Inject(forwardRef(() => TicketsService))
+    private readonly tickets: TicketsService,
   ) {}
 
   async list(filter: WorkOrderListFilter): Promise<{ items: WorkOrderResponse[]; total: number }> {
@@ -46,8 +59,13 @@ export class WorkOrdersService {
    * Each external step degrades gracefully: with no ONU in stock the
    * connection falls back to a synthetic serial; with no router/profile the
    * secret is skipped (logged). The customer is always activated and billed.
+   *
+   * For a repair WO linked to a ticket (P3.B.4), completion also closes the
+   * repair loop: the linked ticket is auto-resolved (or marked breached if
+   * past its SLA deadline). Because this whole method no-ops on an
+   * already-done order, that ticket close fires exactly once.
    */
-  async complete(id: string): Promise<WorkOrderResponse> {
+  async complete(id: string, author: string): Promise<WorkOrderResponse> {
     const wo = await this.repo.findById(id);
     if (!wo) throw new NotFoundException('work order not found');
     if (wo.status === 'done') {
@@ -72,6 +90,11 @@ export class WorkOrdersService {
 
     const done = await this.repo.markDone(id);
     this.logger.log({ workOrderId: id, type: wo.type }, 'work order completed');
+
+    if (wo.type === 'repair' && wo.ticketId) {
+      await this.tickets.resolveFromWorkOrder(wo.ticketId, done.code, author);
+    }
+
     return toWorkOrderResponse(done);
   }
 
@@ -168,19 +191,27 @@ export class WorkOrdersService {
     await this.routers.adjustSecretCount(router.id, 1);
   }
 
-  /** Dispatch a repair work order from a support ticket. */
+  /**
+   * Dispatch a repair work order from a support ticket, linked back to it
+   * (P3.B.4) so completing the order can auto-resolve the ticket.
+   */
   async createFromTicket(input: {
+    ticketId: string;
     customerId: string | null;
     customerName: string;
   }): Promise<WorkOrderResponse> {
     const wo = await this.repo.create({
       type: 'repair',
+      ticketId: input.ticketId,
       customerId: input.customerId,
       customerName: input.customerName,
       technician: null,
       scheduledAt: new Date(Date.now() + REPAIR_LEAD_MS),
     });
-    this.logger.log({ workOrderId: wo.id }, 'work order created from ticket');
+    this.logger.log(
+      { workOrderId: wo.id, ticketId: input.ticketId },
+      'work order created from ticket',
+    );
     return toWorkOrderResponse(wo);
   }
 
@@ -270,6 +301,7 @@ function toWorkOrderResponse(row: WorkOrder): WorkOrderResponse {
     technician: row.technician,
     scheduledAt: row.scheduledAt.toISOString(),
     status: row.status,
+    ticketId: row.ticketId,
     createdAt: row.createdAt.toISOString(),
   };
 }

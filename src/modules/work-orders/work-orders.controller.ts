@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { z } from 'zod';
 import { Audit } from '../../common/decorators/audit.decorator';
+import { type AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { AssignWorkOrderDto } from './dto/assign-work-order.dto';
 import { RescheduleWorkOrderDto } from './dto/reschedule-work-order.dto';
@@ -36,8 +37,8 @@ export class WorkOrdersController {
   @Audit('work_order.complete')
   @Post(':id/complete')
   @ZodSerializerDto(WorkOrderResponseDto)
-  complete(@Param('id') id: string) {
-    return this.workOrders.complete(id);
+  complete(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.workOrders.complete(id, user.fullName);
   }
 
   // --- State machine (P3.B.2) — in_progress/cancelled were unreachable ---

@@ -4,6 +4,7 @@ import { InventoryModule } from '../inventory/inventory.module';
 import { InvoicesModule } from '../invoices/invoices.module';
 import { RouterResourcesModule } from '../router-resources/router-resources.module';
 import { RoutersModule } from '../routers/routers.module';
+import { TicketsModule } from '../tickets/tickets.module';
 import { WorkOrdersController } from './work-orders.controller';
 import { WorkOrdersRepository } from './work-orders.repository';
 import { WorkOrdersService } from './work-orders.service';
@@ -16,12 +17,18 @@ import { WorkOrdersService } from './work-orders.service';
   // which imports TicketsModule, which imports this module — closing a real
   // cycle, so this edge needs forwardRef() (else `InvoicesModule` is
   // undefined here at decoration time, see Nest's circular-dependency docs).
+  //
+  // TicketsModule also imports this module directly (to dispatch a repair
+  // WO), and this module now needs TicketsService back (P3.B.4, to close the
+  // repair loop on complete()) — another real cycle, forwardRef() on both
+  // sides (see tickets.module.ts).
   imports: [
     CustomersModule,
     forwardRef(() => InvoicesModule),
     InventoryModule,
     RoutersModule,
     RouterResourcesModule,
+    forwardRef(() => TicketsModule),
   ],
   controllers: [WorkOrdersController],
   providers: [WorkOrdersService, WorkOrdersRepository],

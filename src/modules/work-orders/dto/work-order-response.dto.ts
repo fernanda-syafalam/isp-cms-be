@@ -14,6 +14,9 @@ export const WorkOrderResponseSchema = z.object({
   technician: z.string().nullable(),
   scheduledAt: z.iso.datetime(),
   status: z.enum(['scheduled', 'in_progress', 'done', 'cancelled']),
+  // Set only for a repair WO dispatched from a ticket (P3.B.4). Completing
+  // such a WO auto-resolves the linked ticket.
+  ticketId: z.uuid().nullable(),
   createdAt: z.iso.datetime(),
 });
 

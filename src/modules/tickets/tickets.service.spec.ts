@@ -201,6 +201,49 @@ describe('TicketsService', () => {
     });
   });
 
+  describe('resolveFromWorkOrder (P3.B.4)', () => {
+    it('resolves an open ticket and appends a workorder + status event', async () => {
+      repo.findById.mockResolvedValue(baseTicket);
+      repo.update.mockResolvedValue({ ...baseTicket, status: 'resolved' });
+
+      await service.resolveFromWorkOrder(baseTicket.id, 'WO-9002', AUTHOR);
+
+      expect(repo.addEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'workorder', body: 'Perbaikan selesai — WO WO-9002' }),
+      );
+      expect(repo.update.mock.calls[0]?.[1].status).toBe('resolved');
+      expect(repo.addEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'status', body: 'Status → resolved' }),
+      );
+    });
+
+    it('records breached when the SLA deadline has already passed', async () => {
+      const overdue = { ...baseTicket, slaDueAt: new Date('2020-01-01T00:00:00.000Z') };
+      repo.findById.mockResolvedValue(overdue);
+      repo.update.mockResolvedValue({ ...overdue, status: 'breached' });
+
+      await service.resolveFromWorkOrder(overdue.id, 'WO-9002', AUTHOR);
+
+      expect(repo.update.mock.calls[0]?.[1].status).toBe('breached');
+    });
+
+    it('is a no-op on an already-closed ticket (idempotent)', async () => {
+      repo.findById.mockResolvedValue({ ...baseTicket, status: 'resolved' });
+
+      await service.resolveFromWorkOrder(baseTicket.id, 'WO-9002', AUTHOR);
+
+      expect(repo.update).not.toHaveBeenCalled();
+      expect(repo.addEvent).not.toHaveBeenCalled();
+    });
+
+    it('throws 404 for a missing ticket', async () => {
+      repo.findById.mockResolvedValue(null);
+      await expect(
+        service.resolveFromWorkOrder('missing', 'WO-9002', AUTHOR),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
   describe('addComment', () => {
     it('appends a comment event', async () => {
       repo.findById.mockResolvedValue(baseTicket);
@@ -230,6 +273,7 @@ describe('TicketsService', () => {
       const wo = await service.createWorkOrder(baseTicket.id, AUTHOR);
 
       expect(workOrders.createFromTicket).toHaveBeenCalledWith({
+        ticketId: baseTicket.id,
         customerId: baseTicket.customerId,
         customerName: baseTicket.customerName,
       });
