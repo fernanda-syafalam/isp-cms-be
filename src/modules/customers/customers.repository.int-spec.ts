@@ -42,6 +42,7 @@ describe('CustomersRepository (integration)', () => {
       CREATE SEQUENCE customer_no_seq START WITH 9001;
       CREATE TABLE customers (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        lat double precision, lng double precision,
         customer_no varchar(32) NOT NULL UNIQUE DEFAULT ('CUST-' || nextval('customer_no_seq')),
         full_name varchar(120) NOT NULL,
         phone varchar(20) NOT NULL,
@@ -213,6 +214,23 @@ describe('CustomersRepository (integration)', () => {
     });
     expect(kyc.ktp).toBe('3201abc');
     expect(kyc.npwp).toBeNull();
+  });
+
+  it('round-trips the onboarding map pin (lat/lng)', async () => {
+    const created = await repo.create({
+      fullName: 'Geo',
+      phone: '0812',
+      address: 'Jl. Peta',
+      planId,
+      lat: -6.5900123,
+      lng: 110.6700456,
+    });
+    expect(created.lat).toBeCloseTo(-6.5900123);
+    expect(created.lng).toBeCloseTo(110.6700456);
+
+    const read = await repo.findById(created.id);
+    expect(read?.lat).toBeCloseTo(-6.5900123);
+    expect(read?.lng).toBeCloseTo(110.6700456);
   });
 
   it('requestDataDeletion marks the row, and missing ids reject', async () => {

@@ -85,7 +85,15 @@ export class CustomersService {
    * is scheduled by the onboarding flow).
    */
   async onboard(
-    input: CreateCustomerInput & { areaName: string; userId?: string | null },
+    input: CreateCustomerInput & {
+      areaName: string;
+      userId?: string | null;
+      lat?: number | null;
+      lng?: number | null;
+      ktp?: string | null;
+      npwp?: string | null;
+      consentAt?: Date | null;
+    },
   ): Promise<CustomerResponse> {
     await this.requirePlan(input.planId);
     const row = await this.repo.create({
@@ -96,6 +104,12 @@ export class CustomersService {
       areaName: input.areaName,
       planId: input.planId,
       status: 'instalasi',
+      // Geo pin + KYC captured at onboarding (P3.A.1). All nullable.
+      lat: input.lat ?? null,
+      lng: input.lng ?? null,
+      ktp: input.ktp ?? null,
+      npwp: input.npwp ?? null,
+      consentAt: input.consentAt ?? null,
       // Portal login linkage — provisioned by OnboardingService (P1.3),
       // never accepted from the HTTP DTO (no mass-assignment).
       userId: input.userId ?? null,

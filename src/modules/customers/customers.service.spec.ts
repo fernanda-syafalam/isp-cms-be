@@ -19,6 +19,8 @@ const sampleRow: CustomerRow = {
   address: 'Jl. Mawar 1',
   areaId: null,
   areaName: null,
+  lat: null,
+  lng: null,
   planId: PLAN_ID,
   status: 'prospek',
   holdReason: null,
