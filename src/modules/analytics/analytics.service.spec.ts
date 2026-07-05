@@ -50,6 +50,8 @@ describe('AnalyticsService', () => {
           amount: 100_000,
           lateFee: 0,
           taxAmount: 11_000,
+          discountAmount: 0,
+          paidAmount: 0,
           dueDate: '2026-06-30',
         },
         // 15 days overdue -> 1–30 bucket
@@ -58,6 +60,8 @@ describe('AnalyticsService', () => {
           amount: 100_000,
           lateFee: 5_000,
           taxAmount: 11_000,
+          discountAmount: 0,
+          paidAmount: 0,
           dueDate: '2026-06-01',
         },
         // ~107 days overdue -> > 60 bucket
@@ -66,6 +70,8 @@ describe('AnalyticsService', () => {
           amount: 200_000,
           lateFee: 10_000,
           taxAmount: 22_000,
+          discountAmount: 0,
+          paidAmount: 0,
           dueDate: '2026-03-01',
         },
       ]),

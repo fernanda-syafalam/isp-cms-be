@@ -16,6 +16,7 @@ const credit: SlaCredit = {
   ticketId: null,
   ticketCode: null,
   status: 'pending',
+  appliedInvoiceId: null,
   appliedAt: null,
   createdAt: new Date('2026-06-15T00:00:00.000Z'),
   updatedAt: new Date('2026-06-15T00:00:00.000Z'),

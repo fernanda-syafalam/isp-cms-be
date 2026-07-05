@@ -1,11 +1,19 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import type { Invoice, Payment } from '../../infrastructure/database/schema/invoices.schema';
 import { CustomersRepository } from '../customers/customers.repository';
 import { ResellersRepository } from '../resellers/resellers.repository';
 import { SecretsRepository } from '../router-resources/secrets.repository';
 import { SettingsService } from '../settings/settings.service';
+import { SlaCreditsRepository } from '../sla-credits/sla-credits.repository';
 import type { BillingRunResult } from './dto/billing-run-result.dto';
 import type { InvoiceListResponse, InvoiceResponse } from './dto/invoice-response.dto';
+import type { PaymentReconciliation } from './dto/payment-reconciliation.dto';
 import type { PaymentResponse } from './dto/payment-response.dto';
 import type { RecordPaymentInput } from './dto/record-payment.dto';
 import {
@@ -33,6 +41,9 @@ export class InvoicesService {
     private readonly settings: SettingsService,
     // Reseller commission on payment (P3.D.1, ADR-0010).
     private readonly resellers: ResellersRepository,
+    // A billing run absorbs a customer's pending SLA credits into the new
+    // invoice's discount line (P3.A.4).
+    private readonly slaCredits: SlaCreditsRepository,
   ) {}
 
   async list(filter: InvoiceListFilter): Promise<InvoiceListResponse> {
@@ -65,11 +76,21 @@ export class InvoicesService {
     return rows.map(toPaymentResponse);
   }
 
+  /** The loket/cash-drawer closing report for one calendar day (P3.A.4). */
+  async reconciliation(date: string): Promise<PaymentReconciliation> {
+    return this.repo.reconciliation(date);
+  }
+
   /**
-   * Settle an invoice: mark it paid, write a ledger entry, then refresh
-   * the customer's outstanding balance and reactivate them from isolir if
-   * they have no overdue invoices left. Paying an already-paid invoice is
-   * a no-op (no duplicate ledger entry).
+   * Record a payment against an invoice — full settlement or a partial /
+   * instalment slice (P3.A.4). `amount` defaults to the full balance due;
+   * it can never exceed it. For `method: 'cash'`, `tenderedAmount` must
+   * cover `amount` and the change is computed and stored. Writes the ledger
+   * entry, applies it to the invoice (flips to 'partial' or 'paid'), then
+   * refreshes the customer's outstanding balance. Reactivation from isolir
+   * and the reseller commission only fire once the invoice is fully paid —
+   * a partial payment leaves the customer in debt and the secret disabled.
+   * Paying an already-paid invoice is a no-op (no duplicate ledger entry).
    */
   async pay(id: string, input: RecordPaymentInput): Promise<InvoiceResponse> {
     const invoice = await this.repo.findById(id);
@@ -78,20 +99,49 @@ export class InvoicesService {
       return toInvoiceResponse(invoice);
     }
 
-    const total = invoice.amount + invoice.lateFee + invoice.taxAmount;
-    const paid = await this.repo.markPaid(id);
+    const total = invoiceTotal(invoice);
+    const balanceDue = total - invoice.paidAmount;
+    const amount = input.amount ?? balanceDue;
+
+    if (amount <= 0) {
+      throw new BadRequestException('Jumlah pembayaran harus lebih dari nol');
+    }
+    if (amount > balanceDue) {
+      throw new UnprocessableEntityException('Jumlah pembayaran melebihi sisa tagihan');
+    }
+
+    let tenderedAmount: number | null = null;
+    let changeAmount: number | null = null;
+    if (input.method === 'cash') {
+      tenderedAmount = input.tenderedAmount ?? amount;
+      if (tenderedAmount < amount) {
+        throw new BadRequestException('Uang yang diterima kurang dari jumlah pembayaran');
+      }
+      changeAmount = tenderedAmount - amount;
+    }
+
+    const updated = await this.repo.applyPayment(id, amount);
     await this.repo.createPayment({
       invoiceId: invoice.id,
       invoiceNo: invoice.invoiceNo,
       customerId: invoice.customerId,
       customerName: invoice.customerName,
-      amount: total,
+      amount,
       method: input.method,
+      tenderedAmount,
+      changeAmount,
     });
     await this.refreshCustomerBilling(invoice.customerId);
-    await this.postResellerCommission(invoice.customerId, invoice.id, total);
-    this.logger.log({ invoiceId: id, method: input.method }, 'invoice paid');
-    return toInvoiceResponse(paid);
+    // Reactivation + commission are keyed off the invoice actually reaching
+    // 'paid' — a partial payment must never trigger either.
+    if (updated.status === 'paid') {
+      await this.postResellerCommission(invoice.customerId, invoice.id, total);
+    }
+    this.logger.log(
+      { invoiceId: id, method: input.method, amount, status: updated.status },
+      'invoice payment recorded',
+    );
+    return toInvoiceResponse(updated);
   }
 
   /**
@@ -129,29 +179,38 @@ export class InvoicesService {
 
   /**
    * Generate this month's invoices for every active customer that does
-   * not already have one. Idempotent: a re-run creates nothing.
+   * not already have one. Idempotent: a re-run creates nothing. Due date
+   * honors the customer's `billingAnchorDay` (P3.A.4) when set, else falls
+   * back to the settings `dueDays` policy. Any of the customer's pending
+   * SLA credits are absorbed as a discount line on the new invoice.
    */
   async run(): Promise<BillingRunResult> {
     const now = new Date();
     const { periodStart, periodEnd, periodLabel } = currentPeriod(now);
     const policy = await this.settings.getBillingPolicy();
-    const dueDate = isoDate(addDays(now, policy.dueDays));
 
     const billables = await this.customers.findActiveBillable();
     let created = 0;
     for (const customer of billables) {
       if (await this.repo.existsForPeriod(customer.id, periodStart)) continue;
       const amount = customer.planPriceMonthly;
-      await this.repo.create({
+      const taxAmount = policy.pkp ? ppnOf(amount, policy.ppnRate) : 0;
+      const { discountAmount, creditIds } = await this.resolveSlaDiscount(
+        customer.id,
+        amount + taxAmount,
+      );
+      const invoice = await this.repo.create({
         customerId: customer.id,
         customerName: customer.fullName,
         periodStart,
         periodEnd,
-        dueDate,
+        dueDate: dueDateFor(customer.billingAnchorDay, periodStart, now, policy.dueDays),
         amount,
-        taxAmount: policy.pkp ? ppnOf(amount, policy.ppnRate) : 0,
+        taxAmount,
+        discountAmount,
         status: 'pending',
       });
+      await this.absorbSlaCredits(creditIds, invoice.id);
       created += 1;
     }
 
@@ -162,7 +221,8 @@ export class InvoicesService {
   /**
    * Issue a customer's first invoice at installation time. Idempotent:
    * skips if one already exists for the current period (the work-order
-   * `complete` flow may be retried). No-op if the customer is unknown.
+   * `complete` flow may be retried). No-op if the customer is unknown. Same
+   * due-date and SLA-credit-absorption rules as `run()` (P3.A.4).
    */
   async generateFirstInvoice(customerId: string): Promise<void> {
     const info = await this.customers.findBillingInfo(customerId);
@@ -174,24 +234,59 @@ export class InvoicesService {
 
     const policy = await this.settings.getBillingPolicy();
     const amount = info.planPriceMonthly;
-    await this.repo.create({
+    const taxAmount = policy.pkp ? ppnOf(amount, policy.ppnRate) : 0;
+    const { discountAmount, creditIds } = await this.resolveSlaDiscount(
+      customerId,
+      amount + taxAmount,
+    );
+    const invoice = await this.repo.create({
       customerId,
       customerName: info.fullName,
       periodStart,
       periodEnd,
-      dueDate: isoDate(addDays(now, policy.dueDays)),
+      dueDate: dueDateFor(info.billingAnchorDay, periodStart, now, policy.dueDays),
       amount,
-      taxAmount: policy.pkp ? ppnOf(amount, policy.ppnRate) : 0,
+      taxAmount,
+      discountAmount,
       status: 'pending',
     });
+    await this.absorbSlaCredits(creditIds, invoice.id);
     this.logger.log({ customerId }, 'first invoice generated');
+  }
+
+  /**
+   * How much of a customer's pending SLA credits (P3.A.4) to absorb as this
+   * invoice's discount line, capped at the invoice's gross total (amount +
+   * taxAmount) so a discount can never make the invoice negative. Returns
+   * every matched credit id — ALL of them get marked 'applied' once the
+   * invoice exists, even if their combined amount exceeds what was actually
+   * deducted (a documented simplification: no carry-over to the next bill).
+   */
+  private async resolveSlaDiscount(
+    customerId: string,
+    grossTotal: number,
+  ): Promise<{ discountAmount: number; creditIds: string[] }> {
+    const pending = await this.slaCredits.findPendingByCustomer(customerId);
+    if (pending.length === 0) return { discountAmount: 0, creditIds: [] };
+    const creditSum = pending.reduce((sum, credit) => sum + credit.amount, 0);
+    return {
+      discountAmount: Math.min(creditSum, grossTotal),
+      creditIds: pending.map((credit) => credit.id),
+    };
+  }
+
+  private async absorbSlaCredits(creditIds: string[], invoiceId: string): Promise<void> {
+    if (creditIds.length === 0) return;
+    await this.slaCredits.markAppliedWithInvoice(creditIds, invoiceId);
   }
 
   private async refreshCustomerBilling(customerId: string): Promise<void> {
     const outstanding = await this.repo.sumUnpaidByCustomer(customerId);
     const customer = await this.customers.findById(customerId);
-    const reactivate =
-      customer?.status === 'isolir' && (await this.repo.countOverdueByCustomer(customerId)) === 0;
+    // Gate strictly on the actual balance, not "no more overdue invoices":
+    // a 'partial' invoice has no 'overdue' status but can still leave a
+    // balance > 0, and must never trigger reactivation (P3.A.4).
+    const reactivate = customer?.status === 'isolir' && outstanding === 0;
     await this.customers.setBilling(customerId, {
       outstanding,
       ...(reactivate ? { status: 'aktif' as const } : {}),
@@ -237,7 +332,33 @@ function isoDate(date: Date): string {
   return `${date.getUTCFullYear()}-${mm}-${dd}`;
 }
 
+/**
+ * Invoice due date (P3.A.4): when the customer has a `billingAnchorDay`,
+ * the due date is that day-of-month (clamped 1..28, since not every month
+ * has a 29th-31st) within the billing period being invoiced. Otherwise it
+ * falls back to the settings `dueDays` policy, `dueDays` after `now`.
+ */
+function dueDateFor(
+  billingAnchorDay: number | null,
+  periodStart: string,
+  now: Date,
+  fallbackDueDays: number,
+): string {
+  if (billingAnchorDay == null) {
+    return isoDate(addDays(now, fallbackDueDays));
+  }
+  const day = Math.min(28, Math.max(1, billingAnchorDay));
+  const [year, month] = periodStart.split('-'); // 'YYYY-MM-01' -> ['YYYY', 'MM', '01']
+  return `${year}-${month}-${String(day).padStart(2, '0')}`;
+}
+
+/** Invoice total: amount + lateFee + taxAmount - discountAmount (P3.A.4). */
+function invoiceTotal(invoice: Invoice): number {
+  return invoice.amount + invoice.lateFee + invoice.taxAmount - invoice.discountAmount;
+}
+
 function toInvoiceResponse(row: Invoice): InvoiceResponse {
+  const balanceDue = Math.max(0, invoiceTotal(row) - row.paidAmount);
   return {
     id: row.id,
     invoiceNo: row.invoiceNo,
@@ -248,6 +369,9 @@ function toInvoiceResponse(row: Invoice): InvoiceResponse {
     amount: row.amount,
     lateFee: row.lateFee,
     taxAmount: row.taxAmount,
+    discountAmount: row.discountAmount,
+    paidAmount: row.paidAmount,
+    balanceDue,
     taxInvoiceNo: row.taxInvoiceNo,
     status: row.status,
     dueDate: row.dueDate,
@@ -265,6 +389,8 @@ function toPaymentResponse(row: Payment): PaymentResponse {
     customerName: row.customerName,
     amount: row.amount,
     method: row.method,
+    tenderedAmount: row.tenderedAmount,
+    changeAmount: row.changeAmount,
     paidAt: row.paidAt.toISOString(),
   };
 }

@@ -26,6 +26,7 @@ const sampleRow: CustomerRow = {
   status: 'prospek',
   holdReason: null,
   outstanding: 0,
+  billingAnchorDay: null,
   npwp: null,
   ktp: null,
   consentAt: null,

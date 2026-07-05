@@ -252,15 +252,23 @@ export class CustomersRepository {
   /**
    * Active customers with their plan's monthly price — the input to a
    * billing run. Joins plans for the price (never stored on the customer).
+   * `billingAnchorDay` (P3.A.4) drives the invoice due date when set; null
+   * falls back to the global SettingsService dueDays policy.
    */
   async findActiveBillable(): Promise<
-    Array<{ id: string; fullName: string; planPriceMonthly: number }>
+    Array<{
+      id: string;
+      fullName: string;
+      planPriceMonthly: number;
+      billingAnchorDay: number | null;
+    }>
   > {
     return this.db
       .select({
         id: customers.id,
         fullName: customers.fullName,
         planPriceMonthly: plans.priceMonthly,
+        billingAnchorDay: customers.billingAnchorDay,
       })
       .from(customers)
       .innerJoin(plans, eq(customers.planId, plans.id))
@@ -336,13 +344,16 @@ export class CustomersRepository {
   // --- Provisioning support (work orders) -----------------------------
 
   /** Plan price + name for a single customer, for first-invoice billing. */
-  async findBillingInfo(
-    id: string,
-  ): Promise<{ fullName: string; planPriceMonthly: number } | null> {
+  async findBillingInfo(id: string): Promise<{
+    fullName: string;
+    planPriceMonthly: number;
+    billingAnchorDay: number | null;
+  } | null> {
     const [row] = await this.db
       .select({
         fullName: customers.fullName,
         planPriceMonthly: plans.priceMonthly,
+        billingAnchorDay: customers.billingAnchorDay,
       })
       .from(customers)
       .innerJoin(plans, eq(customers.planId, plans.id))

@@ -15,6 +15,8 @@ function paidInvoice(over: Partial<Invoice>): Invoice {
     amount: 200_000,
     lateFee: 0,
     taxAmount: 0,
+    discountAmount: 0,
+    paidAmount: 0,
     taxInvoiceNo: null,
     status: 'paid',
     dueDate: '2026-05-10',

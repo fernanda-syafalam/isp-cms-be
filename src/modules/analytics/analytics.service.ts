@@ -87,9 +87,9 @@ export class AnalyticsService {
     const totalCustomers = sumValues(statusCounts);
     const mrr = activeBillable.reduce((sum, c) => sum + c.planPriceMonthly, 0);
 
-    const arOutstanding = unpaid.reduce((sum, inv) => sum + invoiceTotal(inv), 0);
+    const arOutstanding = unpaid.reduce((sum, inv) => sum + invoiceBalanceDue(inv), 0);
     const overdue = unpaid.filter((inv) => inv.status === 'overdue');
-    const overdueAmount = overdue.reduce((sum, inv) => sum + invoiceTotal(inv), 0);
+    const overdueAmount = overdue.reduce((sum, inv) => sum + invoiceBalanceDue(inv), 0);
 
     return {
       activeSubscribers: statusCounts.aktif,
@@ -204,7 +204,7 @@ function fillRevenue(
 function buildAging(unpaid: Invoice[], now: Date): Array<{ bucket: string; amount: number }> {
   const aging = { future: 0, b30: 0, b60: 0, b60plus: 0 };
   for (const inv of unpaid) {
-    const total = invoiceTotal(inv);
+    const total = invoiceBalanceDue(inv);
     const days = Math.floor((now.getTime() - new Date(inv.dueDate).getTime()) / DAY_MS);
     if (days <= 0) aging.future += total;
     else if (days <= 30) aging.b30 += total;
@@ -220,8 +220,12 @@ function buildAging(unpaid: Invoice[], now: Date): Array<{ bucket: string; amoun
 }
 
 // Invoice total = plan price + late fee + tax (all whole IDR).
-function invoiceTotal(inv: Invoice): number {
-  return inv.amount + inv.lateFee + inv.taxAmount;
+// Outstanding balance on an invoice: the gross total less any SLA-credit
+// discount line and any partial payment already received (P3.A.4). AR
+// outstanding + aging must count the balance still owed, not the gross —
+// otherwise a part-paid invoice overstates receivables.
+function invoiceBalanceDue(inv: Invoice): number {
+  return inv.amount + inv.lateFee + inv.taxAmount - inv.discountAmount - inv.paidAmount;
 }
 
 function sumValues(counts: Record<string, number>): number {

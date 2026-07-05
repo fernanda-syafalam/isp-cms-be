@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { count, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
@@ -117,6 +117,38 @@ export class SlaCreditsRepository {
       throw new NotFoundException('sla credit not found');
     }
     return row;
+  }
+
+  /**
+   * A customer's pending credits, oldest first — the billing run absorbs
+   * these into the next invoice as a discount line (P3.A.4).
+   */
+  async findPendingByCustomer(customerId: string): Promise<SlaCredit[]> {
+    return this.db
+      .select()
+      .from(slaCredits)
+      .where(and(eq(slaCredits.customerId, customerId), eq(slaCredits.status, 'pending')))
+      .orderBy(asc(slaCredits.createdAt));
+  }
+
+  /**
+   * Absorb a batch of pending credits into an invoice's discount line
+   * (P3.A.4): transitions them straight to 'applied' and stamps the invoice
+   * that absorbed them, in one statement so a billing-run retry cannot
+   * double-apply. No-op for an empty batch.
+   */
+  async markAppliedWithInvoice(ids: string[], invoiceId: string): Promise<number> {
+    if (ids.length === 0) return 0;
+    const result = await this.db
+      .update(slaCredits)
+      .set({
+        status: 'applied',
+        appliedInvoiceId: invoiceId,
+        appliedAt: sql`now()`,
+        updatedAt: sql`now()`,
+      })
+      .where(and(inArray(slaCredits.id, ids), eq(slaCredits.status, 'pending')));
+    return result.rowCount ?? 0;
   }
 
   async void(id: string): Promise<SlaCredit> {

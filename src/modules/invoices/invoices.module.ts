@@ -1,9 +1,10 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { CustomersModule } from '../customers/customers.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ResellersModule } from '../resellers/resellers.module';
 import { RouterResourcesModule } from '../router-resources/router-resources.module';
 import { SettingsModule } from '../settings/settings.module';
+import { SlaCreditsModule } from '../sla-credits/sla-credits.module';
 import { BillingAutomationService } from './billing-automation.service';
 import { BillingController } from './billing.controller';
 import { InvoicesController } from './invoices.controller';
@@ -23,13 +24,20 @@ import { PaymentsController } from './payments.controller';
   // NotificationsModule exports NotificationsService so dunning is actually
   // dispatched via the queue (ADR-0012). SettingsModule exports SettingsService
   // so tax/due-days/late-fee come from admin-editable settings (P2.3); it does
-  // not import invoices, so no cycle.
+  // not import invoices, so no cycle. SlaCreditsModule exports
+  // SlaCreditsRepository so a billing run can absorb a customer's pending
+  // SLA credits into the new invoice's discount line (P3.A.4) — but it
+  // imports TicketsModule -> WorkOrdersModule -> InvoicesModule, closing a
+  // real cycle, so this one edge needs forwardRef() (Nest docs: circular
+  // module imports leave one side's class undefined at decoration time
+  // otherwise).
   imports: [
     CustomersModule,
     RouterResourcesModule,
     NotificationsModule,
     SettingsModule,
     ResellersModule,
+    forwardRef(() => SlaCreditsModule),
   ],
   controllers: [
     InvoicesController,

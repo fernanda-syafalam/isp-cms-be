@@ -7,6 +7,7 @@ import {
   pgEnum,
   pgSequence,
   pgTable,
+  smallint,
   timestamp,
   uuid,
   varchar,
@@ -97,6 +98,9 @@ export const customers = pgTable(
     holdReason: customerHoldReason('hold_reason'),
     // Outstanding balance in whole IDR.
     outstanding: integer('outstanding').notNull().default(0),
+    // Per-customer billing/due-date anchor day-of-month (1..28, P3.A.4).
+    // Null falls back to the global SettingsService dueDays policy.
+    billingAnchorDay: smallint('billing_anchor_day'),
     npwp: varchar('npwp', { length: 40 }),
     ktp: varchar('ktp', { length: 32 }),
     // UU PDP (Indonesian data-protection law) consent timestamp.

@@ -2,10 +2,12 @@ import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
 /**
- * Output shape for an invoice. Money fields are whole IDR; the total a
- * customer owes for this line is amount + lateFee + taxAmount. Period and
- * due dates are calendar dates ('YYYY-MM-DD'); paidAt / lastRemindedAt are
- * full ISO timestamps. `@ZodSerializerDto` strips anything not declared.
+ * Output shape for an invoice. Money fields are whole IDR; the invoice
+ * total is amount + lateFee + taxAmount - discountAmount (the SLA-credit
+ * deduction, P3.A.4); balanceDue = total - paidAmount, the actual amount
+ * still owed (0 once fully settled). Period and due dates are calendar
+ * dates ('YYYY-MM-DD'); paidAt / lastRemindedAt are full ISO timestamps.
+ * `@ZodSerializerDto` strips anything not declared.
  */
 export const InvoiceResponseSchema = z.object({
   id: z.uuid(),
@@ -17,8 +19,11 @@ export const InvoiceResponseSchema = z.object({
   amount: z.number().int().nonnegative(),
   lateFee: z.number().int().nonnegative(),
   taxAmount: z.number().int().nonnegative(),
+  discountAmount: z.number().int().nonnegative(),
+  paidAmount: z.number().int().nonnegative(),
+  balanceDue: z.number().int().nonnegative(),
   taxInvoiceNo: z.string().nullable(),
-  status: z.enum(['draft', 'pending', 'overdue', 'paid']),
+  status: z.enum(['draft', 'pending', 'partial', 'overdue', 'paid']),
   dueDate: z.string(),
   paidAt: z.iso.datetime().nullable(),
   lastRemindedAt: z.iso.datetime().nullable(),
