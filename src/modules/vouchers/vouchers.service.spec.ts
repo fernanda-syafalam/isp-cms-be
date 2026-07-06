@@ -2,6 +2,8 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Voucher } from '../../infrastructure/database/schema/vouchers.schema';
 import { CustomersRepository } from '../customers/customers.repository';
+import { ResellersRepository } from '../resellers/resellers.repository';
+import type { VoucherRow } from './vouchers.repository';
 import { VouchersRepository } from './vouchers.repository';
 import { VouchersService } from './vouchers.service';
 
@@ -16,8 +18,16 @@ const makeVoucher = (overrides: Partial<Voucher> = {}): Voucher => ({
   usedAt: null,
   usedBy: null,
   redeemedCustomerId: null,
+  resellerId: null,
   createdAt: new Date('2026-06-15T00:00:00.000Z'),
   updatedAt: new Date('2026-06-15T00:00:00.000Z'),
+  ...overrides,
+});
+
+// The joined-view row VouchersRepository.list/findById actually return.
+const makeVoucherRow = (overrides: Partial<VoucherRow> = {}): VoucherRow => ({
+  ...makeVoucher(overrides),
+  resellerName: null,
   ...overrides,
 });
 
@@ -34,15 +44,18 @@ describe('VouchersService', () => {
     findById: ReturnType<typeof vi.fn>;
     setBilling: ReturnType<typeof vi.fn>;
   };
+  let resellers: { findById: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
-    repo = { list: vi.fn(), findById: vi.fn(), createBatch: vi.fn(), redeem: vi.fn() };
+    repo = { list: vi.fn(), findById: vi.fn(), createBatch: vi.fn(), settle: vi.fn() };
     customers = { findIdByFullName: vi.fn(), findById: vi.fn(), setBilling: vi.fn() };
+    resellers = { findById: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         VouchersService,
         { provide: VouchersRepository, useValue: repo },
         { provide: CustomersRepository, useValue: customers },
+        { provide: ResellersRepository, useValue: resellers },
       ],
     }).compile();
     service = moduleRef.get(VouchersService);
@@ -69,56 +82,112 @@ describe('VouchersService', () => {
         expect(r.code).toMatch(/^ASH-[A-Z2-9]{4}-[A-Z2-9]{4}$/);
       }
     });
+
+    // P3.D.3: an optional resellerId attributes the batch to a mitra.
+    it('attributes the batch to a reseller when resellerId is provided and valid', async () => {
+      resellers.findById.mockResolvedValue({ id: 'res-1', commissionPct: 0.05 });
+      repo.createBatch.mockResolvedValue(2);
+
+      await service.generateBatch({
+        count: 2,
+        profile: 'Hotspot 1 Hari',
+        priceIdr: 5_000,
+        durationDays: 1,
+        resellerId: 'res-1',
+      });
+
+      expect(resellers.findById).toHaveBeenCalledWith('res-1');
+      const rows = repo.createBatch.mock.calls[0]?.[0] as Array<{ resellerId: string | null }>;
+      expect(rows.every((r) => r.resellerId === 'res-1')).toBe(true);
+    });
+
+    it('rejects an unknown resellerId with 400 instead of a DB FK violation', async () => {
+      resellers.findById.mockResolvedValue(null);
+
+      await expect(
+        service.generateBatch({
+          count: 1,
+          profile: 'Hotspot 1 Hari',
+          priceIdr: 5_000,
+          durationDays: 1,
+          resellerId: 'bogus',
+        }),
+      ).rejects.toThrow('reseller not found');
+      expect(repo.createBatch).not.toHaveBeenCalled();
+    });
   });
 
-  it('redeems a voucher anonymously (no customer) — status only', async () => {
-    repo.redeem.mockResolvedValue({
-      ...voucher,
-      status: 'used',
-      usedAt: new Date('2026-06-15T10:00:00.000Z'),
-      usedBy: 'Admin (manual)',
+  describe('redeem', () => {
+    it('redeems a voucher anonymously (no customer, no reseller) — status only', async () => {
+      repo.settle.mockResolvedValue({ ...voucher, status: 'used' });
+      repo.findById.mockResolvedValue(
+        makeVoucherRow({
+          status: 'used',
+          usedAt: new Date('2026-06-15T10:00:00.000Z'),
+          usedBy: 'Admin (manual)',
+        }),
+      );
+
+      const result = await service.redeem(voucher.id);
+
+      expect(repo.settle).toHaveBeenCalledWith(voucher.id, {
+        redeemedCustomerId: null,
+        usedBy: null,
+        resellerId: null,
+      });
+      expect(customers.setBilling).not.toHaveBeenCalled();
+      expect(result.status).toBe('used');
+      expect(result.usedAt).toBe('2026-06-15T10:00:00.000Z');
+      expect(result.usedBy).toBe('Admin (manual)');
     });
-    const result = await service.redeem(voucher.id);
-    expect(repo.redeem).toHaveBeenCalledWith(voucher.id, {
-      redeemedCustomerId: null,
-      usedBy: null,
+
+    // ADR-0010/0007: the whole loket settlement (payment + billing credit +
+    // commission) now happens inside VouchersRepository.settle — the service
+    // only resolves customerName -> customerId and delegates.
+    it('resolves customerName into a customerId and delegates the full settlement', async () => {
+      customers.findIdByFullName.mockResolvedValue('cust-1');
+      repo.settle.mockResolvedValue({
+        ...voucher,
+        status: 'used',
+        usedBy: 'Budi Santoso',
+        redeemedCustomerId: 'cust-1',
+      });
+      repo.findById.mockResolvedValue(
+        makeVoucherRow({ status: 'used', usedBy: 'Budi Santoso', redeemedCustomerId: 'cust-1' }),
+      );
+
+      await service.redeem(voucher.id, { customerName: 'Budi Santoso' });
+
+      expect(repo.settle).toHaveBeenCalledWith(voucher.id, {
+        redeemedCustomerId: 'cust-1',
+        usedBy: 'Budi Santoso',
+        resellerId: null,
+      });
     });
-    expect(customers.setBilling).not.toHaveBeenCalled();
-    expect(result.status).toBe('used');
-    expect(result.usedAt).toBe('2026-06-15T10:00:00.000Z');
-    expect(result.usedBy).toBe('Admin (manual)');
-  });
 
-  // ADR-0010/0007: a loket sale to a subscriber credits their bill by the
-  // voucher's face value (floored at zero) and links the redemption to them.
-  it('credits the buyer when redeemed with a customerName', async () => {
-    customers.findIdByFullName.mockResolvedValue('cust-1');
-    repo.redeem.mockResolvedValue({
-      ...voucher,
-      status: 'used',
-      usedBy: 'Budi Santoso',
-      redeemedCustomerId: 'cust-1',
+    it('forwards an explicit resellerId override to settle after validating it exists', async () => {
+      resellers.findById.mockResolvedValue({ id: 'res-1', commissionPct: 0.05 });
+      repo.settle.mockResolvedValue({ ...voucher, status: 'used' });
+      repo.findById.mockResolvedValue(makeVoucherRow({ status: 'used', resellerId: 'res-1' }));
+
+      await service.redeem(voucher.id, { resellerId: 'res-1' });
+
+      expect(resellers.findById).toHaveBeenCalledWith('res-1');
+      expect(repo.settle).toHaveBeenCalledWith(voucher.id, {
+        redeemedCustomerId: null,
+        usedBy: null,
+        resellerId: 'res-1',
+      });
     });
-    customers.findById.mockResolvedValue({ id: 'cust-1', outstanding: 12_000 });
 
-    await service.redeem(voucher.id, { customerName: 'Budi Santoso' });
+    it('rejects an unknown resellerId override with 400', async () => {
+      resellers.findById.mockResolvedValue(null);
 
-    expect(repo.redeem).toHaveBeenCalledWith(voucher.id, {
-      redeemedCustomerId: 'cust-1',
-      usedBy: 'Budi Santoso',
+      await expect(service.redeem(voucher.id, { resellerId: 'bogus' })).rejects.toThrow(
+        'reseller not found',
+      );
+      expect(repo.settle).not.toHaveBeenCalled();
     });
-    // priceIdr 5_000 off a 12_000 balance -> 7_000.
-    expect(customers.setBilling).toHaveBeenCalledWith('cust-1', { outstanding: 7_000 });
-  });
-
-  it('floors the outstanding at zero when the voucher exceeds the balance', async () => {
-    customers.findIdByFullName.mockResolvedValue('cust-1');
-    repo.redeem.mockResolvedValue({ ...voucher, status: 'used', redeemedCustomerId: 'cust-1' });
-    customers.findById.mockResolvedValue({ id: 'cust-1', outstanding: 2_000 });
-
-    await service.redeem(voucher.id, { customerName: 'Budi Santoso' });
-
-    expect(customers.setBilling).toHaveBeenCalledWith('cust-1', { outstanding: 0 });
   });
 
   // ---------------------------------------------------------------------------

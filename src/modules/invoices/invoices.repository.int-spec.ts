@@ -11,7 +11,7 @@ import { InvoicesRepository } from './invoices.repository';
 
 /**
  * Real Postgres integration test for InvoicesRepository. Requires Docker.
- * Schema is applied by hand (mirroring migrations 0002-0004).
+ * Schema is applied by hand (mirroring migrations 0002-0004, 0043).
  */
 describe('InvoicesRepository (integration)', () => {
   let container: StartedPostgreSqlContainer;
@@ -69,12 +69,21 @@ describe('InvoicesRepository (integration)', () => {
         updated_at timestamptz(3) NOT NULL DEFAULT now()
       );
       CREATE UNIQUE INDEX invoices_customer_period_idx ON invoices (customer_id, period_start);
+      -- Minimal stub — only the voucher_id FK target for the payments table
+      -- below (P3.D.3); vouchers.repository.int-spec.ts owns the full DDL.
+      CREATE TABLE vouchers (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid()
+      );
+      CREATE TYPE payment_source AS ENUM ('invoice', 'voucher');
       CREATE TABLE payments (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        invoice_id uuid NOT NULL REFERENCES invoices(id),
-        invoice_no varchar(32) NOT NULL, customer_id uuid NOT NULL,
-        customer_name varchar(120) NOT NULL, amount integer NOT NULL,
-        method payment_method NOT NULL, tendered_amount integer, change_amount integer,
+        invoice_id uuid REFERENCES invoices(id),
+        invoice_no varchar(32), customer_id uuid,
+        customer_name varchar(120), amount integer NOT NULL,
+        method payment_method NOT NULL,
+        source payment_source NOT NULL DEFAULT 'invoice',
+        voucher_id uuid REFERENCES vouchers(id),
+        tendered_amount integer, change_amount integer,
         paid_at timestamptz(3) NOT NULL DEFAULT now(),
         created_at timestamptz(3) NOT NULL DEFAULT now()
       );

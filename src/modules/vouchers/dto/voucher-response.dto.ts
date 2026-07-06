@@ -12,6 +12,9 @@ export const VoucherResponseSchema = z.object({
   status: z.enum(['unused', 'used', 'expired']),
   usedAt: z.iso.datetime().nullable(),
   usedBy: z.string().nullable(),
+  // Attributed mitra (P3.D.3) — null for house-minted / walk-in stock.
+  resellerId: z.uuid().nullable(),
+  resellerName: z.string().nullable(),
   createdAt: z.iso.datetime(),
 });
 
