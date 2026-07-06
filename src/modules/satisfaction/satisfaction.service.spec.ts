@@ -22,19 +22,25 @@ describe('SatisfactionService', () => {
     service = moduleRef.get(SatisfactionService);
   });
 
-  it('aggregates CSAT, NPS, churn and recent feedback', async () => {
+  it('aggregates CSAT (synthetic fallback), NPS, churn and recent feedback', async () => {
     tickets.list.mockResolvedValue({
       items: [
         {
           id: 't1',
           customerId: '00000000-0000-0000-0000-0000000000c1',
           customerName: 'Budi',
+          csatRating: null,
+          csatComment: null,
+          csatAt: null,
           createdAt: '2026-06-15T00:00:00.000Z',
         },
         {
           id: 't2',
           customerId: null,
           customerName: 'NOC Device',
+          csatRating: null,
+          csatComment: null,
+          csatAt: null,
           createdAt: '2026-06-14T00:00:00.000Z',
         },
       ],
@@ -48,8 +54,9 @@ describe('SatisfactionService', () => {
 
     const result = await service.get();
 
-    // CSAT: 4 resolved -> ratings 3,4,5,3 -> avg 3.75 -> 3.8
-    expect(result.csat).toEqual({ avg: 3.8, count: 4 });
+    // CSAT: neither fetched ticket was rated by the customer -> synthetic
+    // 3,4 by position -> avg 3.5; count is still the total resolved.
+    expect(result.csat).toEqual({ avg: 3.5, count: 4 });
 
     // NPS over 11 subscribers: scores (i*7)%11 -> promoters 2, passives 2, detractors 7
     expect(result.nps).toEqual({ score: -45, promoters: 2, passives: 2, detractors: 7, total: 11 });
@@ -72,6 +79,51 @@ describe('SatisfactionService', () => {
       at: '2026-06-15T00:00:00.000Z',
     });
     expect(result.recentFeedback[1]).not.toHaveProperty('customerId');
+  });
+
+  it('prefers real ticket.csatRating/csatComment over the synthetic fallback (P3.C.2)', async () => {
+    tickets.list.mockResolvedValue({
+      items: [
+        {
+          id: 't1',
+          customerId: '00000000-0000-0000-0000-0000000000c1',
+          customerName: 'Budi',
+          csatRating: 1,
+          csatComment: 'Lambat sekali responnya',
+          csatAt: '2026-07-01T00:00:00.000Z',
+          createdAt: '2026-06-15T00:00:00.000Z',
+        },
+        {
+          id: 't2',
+          customerId: '00000000-0000-0000-0000-0000000000c2',
+          customerName: 'Sari',
+          // Resolved but never rated by the customer — falls back to synthetic.
+          csatRating: null,
+          csatComment: null,
+          csatAt: null,
+          createdAt: '2026-06-14T00:00:00.000Z',
+        },
+      ],
+      total: 2,
+    });
+    customers.countAll.mockResolvedValue(0);
+    customers.findAtRisk.mockResolvedValue([]);
+
+    const result = await service.get();
+
+    // Real rating (1) + synthetic fallback for the un-rated ticket (4 by
+    // position) -> avg 2.5, not the all-synthetic 3.5.
+    expect(result.csat).toEqual({ avg: 2.5, count: 2 });
+    expect(result.recentFeedback[0]).toMatchObject({
+      rating: 1,
+      comment: 'Lambat sekali responnya',
+      at: '2026-07-01T00:00:00.000Z',
+    });
+    expect(result.recentFeedback[1]).toMatchObject({
+      rating: 4,
+      comment: 'Sinyal stabil, puas',
+      at: '2026-06-14T00:00:00.000Z',
+    });
   });
 
   it('returns zeroed aggregates when there is no data', async () => {

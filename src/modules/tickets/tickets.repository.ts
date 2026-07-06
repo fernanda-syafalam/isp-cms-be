@@ -84,6 +84,19 @@ export class TicketsRepository {
     return row ?? null;
   }
 
+  // Ownership-scoped lookup for the customer portal (P3.C.2) — returns null
+  // (not the row) when the ticket exists but belongs to someone else, so the
+  // caller can 404 without leaking existence. Never resolve a portal ticket
+  // by id alone.
+  async findByIdForCustomer(id: string, customerId: string): Promise<Ticket | null> {
+    const [row] = await this.db
+      .select()
+      .from(tickets)
+      .where(and(eq(tickets.id, id), eq(tickets.customerId, customerId)))
+      .limit(1);
+    return row ?? null;
+  }
+
   // A single customer's tickets, newest first — the portal "me" snapshot.
   async listByCustomer(customerId: string): Promise<Ticket[]> {
     return this.db
@@ -116,6 +129,25 @@ export class TicketsRepository {
     const [row] = await this.db
       .update(tickets)
       .set({ ...patch, updatedAt: sql`now()` })
+      .where(eq(tickets.id, id))
+      .returning();
+    if (!row) {
+      throw new NotFoundException('ticket not found');
+    }
+    return row;
+  }
+
+  // Persist the customer's post-resolution rating (P3.C.2). csatAt is
+  // stamped server-side — never trust a client-supplied timestamp.
+  async submitCsat(id: string, input: { rating: number; comment: string | null }): Promise<Ticket> {
+    const [row] = await this.db
+      .update(tickets)
+      .set({
+        csatRating: input.rating,
+        csatComment: input.comment,
+        csatAt: sql`now()`,
+        updatedAt: sql`now()`,
+      })
       .where(eq(tickets.id, id))
       .returning();
     if (!row) {

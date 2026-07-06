@@ -5,7 +5,7 @@ import { z } from 'zod';
 export const TicketEventResponseSchema = z.object({
   id: z.uuid(),
   ticketId: z.uuid(),
-  kind: z.enum(['created', 'comment', 'status', 'assign', 'workorder']),
+  kind: z.enum(['created', 'comment', 'status', 'assign', 'workorder', 'csat']),
   author: z.string(),
   body: z.string(),
   at: z.iso.datetime(),

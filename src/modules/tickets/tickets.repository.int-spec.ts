@@ -53,7 +53,8 @@ describe('TicketsRepository (integration)', () => {
       );
       CREATE TYPE ticket_status AS ENUM ('open', 'in_progress', 'resolved', 'breached');
       CREATE TYPE ticket_priority AS ENUM ('low', 'medium', 'high', 'urgent');
-      CREATE TYPE ticket_event_kind AS ENUM ('created', 'comment', 'status', 'assign', 'workorder');
+      CREATE TYPE ticket_event_kind AS ENUM ('created', 'comment', 'status', 'assign', 'workorder', 'csat');
+      CREATE TYPE ticket_category AS ENUM ('koneksi_putus', 'lambat', 'tagihan', 'perangkat', 'lainnya');
       CREATE SEQUENCE ticket_code_seq START WITH 2001;
       CREATE TABLE tickets (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -65,6 +66,11 @@ describe('TicketsRepository (integration)', () => {
         status ticket_status NOT NULL DEFAULT 'open',
         assignee varchar(120),
         sla_due_at timestamptz(3) NOT NULL,
+        category ticket_category,
+        photo_url varchar(500),
+        csat_rating integer,
+        csat_comment varchar(500),
+        csat_at timestamptz(3),
         created_at timestamptz(3) NOT NULL DEFAULT now(),
         updated_at timestamptz(3) NOT NULL DEFAULT now()
       );
@@ -218,6 +224,41 @@ describe('TicketsRepository (integration)', () => {
       resolved: 2,
       breached: 1,
     });
+  });
+
+  it('submitCsat writes rating/comment and stamps csatAt', async () => {
+    const ticket = await repo.create(newTicket({ status: 'resolved' }));
+    expect(ticket.csatRating).toBeNull();
+
+    const updated = await repo.submitCsat(ticket.id, { rating: 5, comment: 'Puas sekali' });
+
+    expect(updated.csatRating).toBe(5);
+    expect(updated.csatComment).toBe('Puas sekali');
+    expect(updated.csatAt).toBeInstanceOf(Date);
+  });
+
+  it('submitCsat accepts a null comment', async () => {
+    const ticket = await repo.create(newTicket({ status: 'resolved' }));
+    const updated = await repo.submitCsat(ticket.id, { rating: 3, comment: null });
+    expect(updated.csatRating).toBe(3);
+    expect(updated.csatComment).toBeNull();
+  });
+
+  it('submitCsat rejects a missing ticket', async () => {
+    await expect(
+      repo.submitCsat('00000000-0000-0000-0000-0000000000ff', { rating: 4, comment: null }),
+    ).rejects.toThrow();
+  });
+
+  it('findByIdForCustomer scopes to the owning customer, returning null otherwise', async () => {
+    const ticket = await repo.create(newTicket());
+    const other = '00000000-0000-0000-0000-0000000000ff';
+
+    expect((await repo.findByIdForCustomer(ticket.id, customerId))?.id).toBe(ticket.id);
+    expect(await repo.findByIdForCustomer(ticket.id, other)).toBeNull();
+    expect(
+      await repo.findByIdForCustomer('00000000-0000-0000-0000-000000000000', customerId),
+    ).toBeNull();
   });
 
   it('markBreachedPastSla breaches only overdue open/in-progress tickets', async () => {

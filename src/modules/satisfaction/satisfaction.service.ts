@@ -23,8 +23,10 @@ export class SatisfactionService {
   /**
    * Aggregate satisfaction summary. CSAT + recent feedback derive from
    * resolved tickets; NPS from the subscriber count; churn from at-risk
-   * subscribers (isolated or in debt). Ratings/NPS scores are synthesised
-   * deterministically (no survey table yet) — matches the FE contract.
+   * subscribers (isolated or in debt). A resolved ticket rated by the
+   * customer (P3.C.2, `ticket.csatRating`/`csatComment`) contributes its
+   * real value; only un-rated resolved tickets fall back to the synthetic
+   * 3/4/5 cycle used before real CSAT existed (no survey table yet).
    */
   async get(): Promise<SatisfactionResponse> {
     const resolved = await this.tickets.list({
@@ -33,7 +35,9 @@ export class SatisfactionService {
       offset: 0,
     });
     const csatCount = resolved.total;
-    const csatAvg = csatCount > 0 ? round1(sumSyntheticRatings(csatCount) / csatCount) : 0;
+    const ratings = resolved.items.map((t, i) => t.csatRating ?? syntheticRating(i));
+    const csatAvg =
+      ratings.length > 0 ? round1(ratings.reduce((sum, r) => sum + r, 0) / ratings.length) : 0;
 
     const total = await this.customers.countAll();
     const nps = computeNps(total);
@@ -51,9 +55,9 @@ export class SatisfactionService {
       id: `${t.id}-fb`,
       ...(t.customerId ? { customerId: t.customerId } : {}),
       customerName: t.customerName,
-      rating: 3 + (i % 3),
-      comment: COMMENTS[i % COMMENTS.length] ?? 'Terima kasih',
-      at: t.createdAt,
+      rating: t.csatRating ?? syntheticRating(i),
+      comment: t.csatComment ?? COMMENTS[i % COMMENTS.length] ?? 'Terima kasih',
+      at: t.csatAt ?? t.createdAt,
     }));
 
     return {
@@ -67,11 +71,10 @@ export class SatisfactionService {
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 
-// Resolved-ticket ratings cycle 3,4,5 — sum without materialising the array.
-function sumSyntheticRatings(count: number): number {
-  let sum = 0;
-  for (let i = 0; i < count; i += 1) sum += 3 + (i % 3);
-  return sum;
+// Deterministic fallback for a resolved ticket the customer never rated —
+// cycles 3,4,5 by position so the placeholder is stable across reloads.
+function syntheticRating(index: number): number {
+  return 3 + (index % 3);
 }
 
 // NPS scores cycle 0..10 per subscriber index; classify and score.

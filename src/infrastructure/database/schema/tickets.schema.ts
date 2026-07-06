@@ -1,5 +1,14 @@
 import { sql } from 'drizzle-orm';
-import { index, pgEnum, pgSequence, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import {
+  index,
+  integer,
+  pgEnum,
+  pgSequence,
+  pgTable,
+  timestamp,
+  uuid,
+  varchar,
+} from 'drizzle-orm/pg-core';
 import { customers } from './customers.schema';
 
 // open -> in_progress -> resolved; breached is set when a ticket is
@@ -18,6 +27,16 @@ export const ticketEventKind = pgEnum('ticket_event_kind', [
   'status',
   'assign',
   'workorder',
+  'csat',
+]);
+// Portal-facing report category (P3.C.2) — lets the customer classify the
+// issue on submit instead of staff guessing from free text.
+export const ticketCategory = pgEnum('ticket_category', [
+  'koneksi_putus',
+  'lambat',
+  'tagihan',
+  'perangkat',
+  'lainnya',
 ]);
 
 // TKT-2001, TKT-2002, ... from a sequence so codes never collide.
@@ -46,6 +65,14 @@ export const tickets = pgTable(
       withTimezone: true,
       precision: 3,
     }).notNull(),
+    // Portal report + CSAT (P3.C.2) — all nullable: category/photo are only
+    // set for portal-reported tickets, and CSAT is only set once the
+    // customer rates a resolved/breached ticket.
+    category: ticketCategory('category'),
+    photoUrl: varchar('photo_url', { length: 500 }),
+    csatRating: integer('csat_rating'),
+    csatComment: varchar('csat_comment', { length: 500 }),
+    csatAt: timestamp('csat_at', { withTimezone: true, precision: 3 }),
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },

@@ -1,4 +1,11 @@
-import { Inject, Injectable, Logger, NotFoundException, forwardRef } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+  UnprocessableEntityException,
+  forwardRef,
+} from '@nestjs/common';
 import type { Ticket, TicketEvent } from '../../infrastructure/database/schema/tickets.schema';
 import { CustomersRepository } from '../customers/customers.repository';
 import type { WorkOrderResponse } from '../work-orders/dto/work-order-response.dto';
@@ -20,6 +27,14 @@ const SLA_HOURS: Record<Ticket['priority'], number> = {
   medium: 24,
   low: 72,
 };
+
+// Owned here (not in portal's DTO) so this module never depends on the
+// portal module — the portal's zod-validated SubmitCsatDto is structurally
+// compatible and passed in without an import (Pilar: module boundary).
+export interface SubmitCsatInput {
+  rating: number;
+  comment: string | null;
+}
 
 @Injectable()
 export class TicketsService {
@@ -51,6 +66,16 @@ export class TicketsService {
     return rows.map(toTicketResponse);
   }
 
+  /**
+   * A single ticket scoped to its owning customer — for the portal detail
+   * view (P3.C.2). Returns null (never the row) on a mismatch so the
+   * caller 404s instead of leaking that the ticket id exists.
+   */
+  async findByIdForCustomer(id: string, customerId: string): Promise<TicketResponse | null> {
+    const row = await this.repo.findByIdForCustomer(id, customerId);
+    return row ? toTicketResponse(row) : null;
+  }
+
   async create(input: CreateTicketInput, author: string): Promise<TicketResponse> {
     const customerId = await this.customers.findIdByFullName(input.customerName);
     const createdAt = new Date();
@@ -63,6 +88,8 @@ export class TicketsService {
       customerId,
       slaDueAt,
       createdAt,
+      category: input.category ?? null,
+      photoUrl: input.photoUrl ?? null,
     });
     await this.repo.addEvent({
       ticketId: ticket.id,
@@ -199,6 +226,29 @@ export class TicketsService {
     });
   }
 
+  /**
+   * Record the customer's post-resolution rating (P3.C.2). Only allowed
+   * once the ticket has actually reached a terminal state — rating an
+   * open/in-progress ticket makes no sense and would let a customer
+   * pre-empt the outcome, so it 422s instead.
+   */
+  async submitCsat(id: string, input: SubmitCsatInput, author: string): Promise<TicketResponse> {
+    const ticket = await this.repo.findById(id);
+    if (!ticket) throw new NotFoundException('ticket not found');
+    if (ticket.status !== 'resolved' && ticket.status !== 'breached') {
+      throw new UnprocessableEntityException('tiket belum selesai, belum bisa diberi rating');
+    }
+
+    const updated = await this.repo.submitCsat(id, input);
+    await this.repo.addEvent({
+      ticketId: id,
+      kind: 'csat',
+      author,
+      body: `Rating pelanggan: ${input.rating}/5${input.comment ? ` — ${input.comment}` : ''}`,
+    });
+    return toTicketResponse(updated);
+  }
+
   async listEvents(id: string): Promise<{ items: TicketEventResponse[]; total: number }> {
     const { items, total } = await this.repo.listEvents(id);
     return { items: items.map(toTicketEventResponse), total };
@@ -229,6 +279,11 @@ function toTicketResponse(row: Ticket): TicketResponse {
     assignee: row.assignee,
     slaDueAt: row.slaDueAt.toISOString(),
     createdAt: row.createdAt.toISOString(),
+    category: row.category,
+    photoUrl: row.photoUrl,
+    csatRating: row.csatRating,
+    csatComment: row.csatComment,
+    csatAt: row.csatAt ? row.csatAt.toISOString() : null,
   };
 }
 

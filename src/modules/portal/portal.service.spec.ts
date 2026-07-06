@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthUser } from '../../common/decorators/current-user.decorator';
@@ -59,6 +60,10 @@ describe('PortalService', () => {
     tickets = {
       listByCustomer: vi.fn().mockResolvedValue([{ id: 'tkt-1' }]),
       create: vi.fn(),
+      findByIdForCustomer: vi.fn(),
+      addComment: vi.fn(),
+      listEvents: vi.fn(),
+      submitCsat: vi.fn(),
     };
     intents = {
       createForCustomer: vi.fn().mockResolvedValue({ id: 'int-1', status: 'pending' }),
@@ -135,17 +140,106 @@ describe('PortalService', () => {
   });
 
   describe('reportIssue', () => {
-    it('opens a medium-priority ticket on the resolved customer account', async () => {
-      await service.reportIssue(user, { subject: 'Internet mati sejak pagi' });
+    it('opens a medium-priority ticket on the resolved customer account, threading category/photoUrl', async () => {
+      await service.reportIssue(user, {
+        subject: 'Internet mati sejak pagi',
+        category: 'koneksi_putus',
+        photoUrl: 'https://cdn.example.com/photo.jpg',
+      });
 
       expect(tickets.create).toHaveBeenCalledWith(
         {
           subject: 'Internet mati sejak pagi',
           customerName: 'Budi Santoso',
           priority: 'medium',
+          category: 'koneksi_putus',
+          photoUrl: 'https://cdn.example.com/photo.jpg',
         },
         'Budi Santoso',
       );
+    });
+  });
+
+  describe('getTicketDetail (P3.C.2)', () => {
+    it('returns the ticket + its timeline when owned by the resolved customer', async () => {
+      tickets.findByIdForCustomer.mockResolvedValue({ id: 'tkt-1', status: 'resolved' });
+      tickets.listEvents.mockResolvedValue({
+        items: [{ id: 'evt-1', kind: 'created' }],
+        total: 1,
+      });
+
+      const detail = await service.getTicketDetail(user, 'tkt-1');
+
+      expect(tickets.findByIdForCustomer).toHaveBeenCalledWith('tkt-1', CUSTOMER_ID);
+      expect(tickets.listEvents).toHaveBeenCalledWith('tkt-1');
+      expect(detail.events).toEqual([{ id: 'evt-1', kind: 'created' }]);
+    });
+
+    it('404s when the ticket does not belong to the resolved customer (IDOR guard)', async () => {
+      tickets.findByIdForCustomer.mockResolvedValue(null);
+      await expect(service.getTicketDetail(user, 'not-mine')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(tickets.listEvents).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('addTicketComment (P3.C.2)', () => {
+    it('adds a comment once ownership is confirmed', async () => {
+      tickets.findByIdForCustomer.mockResolvedValue({ id: 'tkt-1' });
+
+      await service.addTicketComment(user, 'tkt-1', { body: 'Masih belum nyala' });
+
+      expect(tickets.addComment).toHaveBeenCalledWith(
+        'tkt-1',
+        { body: 'Masih belum nyala' },
+        'Budi Santoso',
+      );
+    });
+
+    it('404s instead of commenting on a ticket owned by another customer', async () => {
+      tickets.findByIdForCustomer.mockResolvedValue(null);
+      await expect(
+        service.addTicketComment(user, 'not-mine', { body: 'x' }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(tickets.addComment).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('submitTicketCsat (P3.C.2)', () => {
+    it('submits the rating once ownership is confirmed', async () => {
+      tickets.findByIdForCustomer.mockResolvedValue({ id: 'tkt-1', status: 'resolved' });
+      tickets.submitCsat.mockResolvedValue({ id: 'tkt-1', csatRating: 5 });
+
+      const result = await service.submitTicketCsat(user, 'tkt-1', { rating: 5, comment: 'Puas' });
+
+      expect(tickets.submitCsat).toHaveBeenCalledWith(
+        'tkt-1',
+        { rating: 5, comment: 'Puas' },
+        'Budi Santoso',
+      );
+      expect(result.csatRating).toBe(5);
+    });
+
+    it('defaults a missing comment to null', async () => {
+      tickets.findByIdForCustomer.mockResolvedValue({ id: 'tkt-1' });
+      tickets.submitCsat.mockResolvedValue({ id: 'tkt-1', csatRating: 4 });
+
+      await service.submitTicketCsat(user, 'tkt-1', { rating: 4 });
+
+      expect(tickets.submitCsat).toHaveBeenCalledWith(
+        'tkt-1',
+        { rating: 4, comment: null },
+        'Budi Santoso',
+      );
+    });
+
+    it('404s instead of rating a ticket owned by another customer (IDOR guard)', async () => {
+      tickets.findByIdForCustomer.mockResolvedValue(null);
+      await expect(
+        service.submitTicketCsat(user, 'not-mine', { rating: 5 }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(tickets.submitCsat).not.toHaveBeenCalled();
     });
   });
 });

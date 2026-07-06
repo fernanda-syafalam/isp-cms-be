@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Ticket } from '../../infrastructure/database/schema/tickets.schema';
@@ -20,6 +20,11 @@ const baseTicket: Ticket = {
   assignee: null,
   // Far future deadline by default so 'resolved' stays 'resolved'.
   slaDueAt: new Date('2999-01-01T00:00:00.000Z'),
+  category: null,
+  photoUrl: null,
+  csatRating: null,
+  csatComment: null,
+  csatAt: null,
   createdAt: new Date('2026-06-15T00:00:00.000Z'),
   updatedAt: new Date('2026-06-15T00:00:00.000Z'),
 };
@@ -34,8 +39,10 @@ describe('TicketsService', () => {
     repo = {
       list: vi.fn(),
       findById: vi.fn(),
+      findByIdForCustomer: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
+      submitCsat: vi.fn(),
       addEvent: vi.fn(),
       listEvents: vi.fn(),
       markBreachedPastSla: vi.fn(),
@@ -141,6 +148,46 @@ describe('TicketsService', () => {
         AUTHOR,
       );
       expect(result.customerId).toBeNull();
+    });
+
+    it('threads category and photoUrl through to the repo (portal report)', async () => {
+      customers.findIdByFullName.mockResolvedValue(baseTicket.customerId);
+      repo.create.mockResolvedValue({
+        ...baseTicket,
+        category: 'koneksi_putus',
+        photoUrl: 'https://cdn.example.com/photo.jpg',
+      });
+
+      const result = await service.create(
+        {
+          subject: 'Internet mati',
+          customerName: 'Budi Santoso',
+          priority: 'high',
+          category: 'koneksi_putus',
+          photoUrl: 'https://cdn.example.com/photo.jpg',
+        },
+        AUTHOR,
+      );
+
+      const created = repo.create.mock.calls[0]?.[0];
+      expect(created.category).toBe('koneksi_putus');
+      expect(created.photoUrl).toBe('https://cdn.example.com/photo.jpg');
+      expect(result.category).toBe('koneksi_putus');
+      expect(result.photoUrl).toBe('https://cdn.example.com/photo.jpg');
+    });
+
+    it('defaults category/photoUrl to null when the caller omits them', async () => {
+      customers.findIdByFullName.mockResolvedValue(baseTicket.customerId);
+      repo.create.mockResolvedValue(baseTicket);
+
+      await service.create(
+        { subject: 'Internet mati', customerName: 'Budi Santoso', priority: 'high' },
+        AUTHOR,
+      );
+
+      const created = repo.create.mock.calls[0]?.[0];
+      expect(created.category).toBeNull();
+      expect(created.photoUrl).toBeNull();
     });
   });
 
@@ -291,6 +338,74 @@ describe('TicketsService', () => {
       await expect(service.createWorkOrder('missing', AUTHOR)).rejects.toBeInstanceOf(
         NotFoundException,
       );
+    });
+  });
+
+  describe('submitCsat (P3.C.2)', () => {
+    it('422s when the ticket is not resolved/breached', async () => {
+      repo.findById.mockResolvedValue({ ...baseTicket, status: 'open' });
+      await expect(
+        service.submitCsat(baseTicket.id, { rating: 5, comment: null }, AUTHOR),
+      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+      expect(repo.submitCsat).not.toHaveBeenCalled();
+    });
+
+    it('persists the rating and records a csat timeline event on a resolved ticket', async () => {
+      const resolved = { ...baseTicket, status: 'resolved' as const };
+      repo.findById.mockResolvedValue(resolved);
+      repo.submitCsat.mockResolvedValue({
+        ...resolved,
+        csatRating: 5,
+        csatComment: 'Puas',
+        csatAt: new Date('2026-07-06T00:00:00.000Z'),
+      });
+
+      const result = await service.submitCsat(
+        baseTicket.id,
+        { rating: 5, comment: 'Puas' },
+        AUTHOR,
+      );
+
+      expect(repo.submitCsat).toHaveBeenCalledWith(baseTicket.id, { rating: 5, comment: 'Puas' });
+      expect(repo.addEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'csat', author: AUTHOR }),
+      );
+      expect(result.csatRating).toBe(5);
+      expect(result.csatComment).toBe('Puas');
+    });
+
+    it('allows rating a breached ticket too', async () => {
+      const breached = { ...baseTicket, status: 'breached' as const };
+      repo.findById.mockResolvedValue(breached);
+      repo.submitCsat.mockResolvedValue({ ...breached, csatRating: 2, csatComment: null });
+
+      const result = await service.submitCsat(baseTicket.id, { rating: 2, comment: null }, AUTHOR);
+      expect(result.csatRating).toBe(2);
+    });
+
+    it('throws 404 for a missing ticket', async () => {
+      repo.findById.mockResolvedValue(null);
+      await expect(
+        service.submitCsat('missing', { rating: 4, comment: null }, AUTHOR),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('findByIdForCustomer (P3.C.2)', () => {
+    it('returns the mapped ticket when it belongs to the customer', async () => {
+      repo.findByIdForCustomer.mockResolvedValue(baseTicket);
+      const result = await service.findByIdForCustomer(baseTicket.id, baseTicket.customerId ?? '');
+      expect(repo.findByIdForCustomer).toHaveBeenCalledWith(
+        baseTicket.id,
+        baseTicket.customerId ?? '',
+      );
+      expect(result?.id).toBe(baseTicket.id);
+    });
+
+    it('returns null when the ticket belongs to another customer', async () => {
+      repo.findByIdForCustomer.mockResolvedValue(null);
+      const result = await service.findByIdForCustomer(baseTicket.id, 'someone-else');
+      expect(result).toBeNull();
     });
   });
 
