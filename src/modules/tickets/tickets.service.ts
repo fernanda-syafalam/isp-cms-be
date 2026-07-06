@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import type { Ticket, TicketEvent } from '../../infrastructure/database/schema/tickets.schema';
 import { CustomersRepository } from '../customers/customers.repository';
+import { NotificationsService } from '../notifications/notifications.service';
 import type { WorkOrderResponse } from '../work-orders/dto/work-order-response.dto';
 // WorkOrdersService now injects TicketsService back (P3.B.4, to close the
 // repair loop on complete()) — a real two-file circular import, so this
@@ -47,6 +48,9 @@ export class TicketsService {
     // Dispatch a repair work order from a ticket.
     @Inject(forwardRef(() => WorkOrdersService))
     private readonly workOrders: WorkOrdersService,
+    // Fires ticket_update on a status transition via the retried queue
+    // (ADR-0012). Best-effort — see notifyStatusChange.
+    private readonly notifications: NotificationsService,
   ) {}
 
   async list(filter: TicketListFilter): Promise<{ items: TicketResponse[]; total: number }> {
@@ -143,6 +147,10 @@ export class TicketsService {
         author,
         body: `Status → ${nextStatus}`,
       });
+      // Notify on status change only (ADR-0012) — an assignee-only change
+      // has no customer-facing template and would be noise; a status
+      // transition is the thing the customer is actually waiting on.
+      await this.notifyStatusChange(ticket.customerId, id, nextStatus);
     }
     return toTicketResponse(updated);
   }
@@ -224,6 +232,8 @@ export class TicketsService {
       author,
       body: `Status → ${nextStatus}`,
     });
+    // Same customer-facing notice as update()'s status-change path (ADR-0012).
+    await this.notifyStatusChange(ticket.customerId, ticketId, nextStatus);
   }
 
   /**
@@ -260,6 +270,36 @@ export class TicketsService {
   // drifts between the two call sites.
   private downgradeIfBreached(ticket: Ticket, status: Ticket['status']): Ticket['status'] {
     return status === 'resolved' && ticket.slaDueAt.getTime() < Date.now() ? 'breached' : status;
+  }
+
+  /**
+   * Notify the ticket's owning customer that its status changed
+   * (ADR-0012). No-op for a ticket with no linked customer (portal-less
+   * tickets) or a customer with no phone. jobId is per ticket + new status,
+   * same granularity ADR-0012's implementation notes prescribe, so a retry
+   * of the same transition never double-sends. Best-effort: a queue outage
+   * must never fail the status update that already committed.
+   */
+  private async notifyStatusChange(
+    customerId: string | null,
+    ticketId: string,
+    status: Ticket['status'],
+  ): Promise<void> {
+    if (!customerId) return;
+    try {
+      const customer = await this.customers.findById(customerId);
+      if (!customer?.phone) return;
+      await this.notifications.enqueue(
+        {
+          event: 'ticket_update',
+          to: customer.phone,
+          vars: { nama: customer.fullName },
+        },
+        `ticket_update:${ticketId}:${status}`,
+      );
+    } catch (err) {
+      this.logger.warn({ ticketId, status, err }, 'ticket_update notification enqueue failed');
+    }
   }
 }
 

@@ -3,6 +3,7 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Invoice } from '../../infrastructure/database/schema/invoices.schema';
 import { CustomersRepository } from '../customers/customers.repository';
+import { NotificationsService } from '../notifications/notifications.service';
 import { ResellersRepository } from '../resellers/resellers.repository';
 import { SecretsRepository } from '../router-resources/secrets.repository';
 import { SettingsService } from '../settings/settings.service';
@@ -54,6 +55,7 @@ describe('InvoicesService', () => {
     findPendingByCustomer: ReturnType<typeof vi.fn>;
     markAppliedWithInvoice: ReturnType<typeof vi.fn>;
   };
+  let notifications: { enqueue: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     repo = {
@@ -95,6 +97,7 @@ describe('InvoicesService', () => {
       findPendingByCustomer: vi.fn().mockResolvedValue([]),
       markAppliedWithInvoice: vi.fn(),
     };
+    notifications = { enqueue: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         InvoicesService,
@@ -104,6 +107,7 @@ describe('InvoicesService', () => {
         { provide: SettingsService, useValue: settings },
         { provide: ResellersRepository, useValue: resellers },
         { provide: SlaCreditsRepository, useValue: slaCreditsFake },
+        { provide: NotificationsService, useValue: notifications },
       ],
     }).compile();
     service = moduleRef.get(InvoicesService);
@@ -435,6 +439,85 @@ describe('InvoicesService', () => {
         NotFoundException,
       );
     });
+
+    // ADR-0012: on full settlement, notify the customer via the queue.
+    describe('paid notification (ADR-0012)', () => {
+      it('enqueues the paid event once the invoice reaches full settlement', async () => {
+        repo.findById.mockResolvedValue(pendingInvoice);
+        repo.recordPayment.mockResolvedValue({
+          invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
+          reactivated: false,
+        });
+        customers.findById.mockResolvedValue({
+          id: CUSTOMER_ID,
+          resellerId: null,
+          phone: '0812',
+          fullName: 'Budi Santoso',
+        });
+
+        await service.pay(pendingInvoice.id, { method: 'transfer' });
+
+        expect(notifications.enqueue).toHaveBeenCalledWith(
+          {
+            event: 'paid',
+            to: '0812',
+            vars: { nama: 'Budi Santoso', no_tagihan: 'INV-2026-100', jumlah: 'Rp222.000' },
+          },
+          `paid:${pendingInvoice.id}`,
+        );
+      });
+
+      it('does not enqueue paid for a partial payment', async () => {
+        repo.findById.mockResolvedValue(pendingInvoice);
+        repo.recordPayment.mockResolvedValue({
+          invoice: { ...pendingInvoice, status: 'partial', paidAmount: 100_000 },
+          reactivated: false,
+        });
+        customers.findById.mockResolvedValue({
+          id: CUSTOMER_ID,
+          resellerId: null,
+          phone: '0812',
+          fullName: 'Budi Santoso',
+        });
+
+        await service.pay(pendingInvoice.id, { method: 'transfer', amount: 100_000 });
+
+        expect(notifications.enqueue).not.toHaveBeenCalled();
+      });
+
+      it('skips the notice (but still settles) when the customer has no phone', async () => {
+        repo.findById.mockResolvedValue(pendingInvoice);
+        repo.recordPayment.mockResolvedValue({
+          invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
+          reactivated: false,
+        });
+        customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null, phone: null });
+
+        const result = await service.pay(pendingInvoice.id, { method: 'transfer' });
+
+        expect(notifications.enqueue).not.toHaveBeenCalled();
+        expect(result.status).toBe('paid');
+      });
+
+      it('does not fail the payment when the notification enqueue rejects (best-effort)', async () => {
+        repo.findById.mockResolvedValue(pendingInvoice);
+        repo.recordPayment.mockResolvedValue({
+          invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
+          reactivated: false,
+        });
+        customers.findById.mockResolvedValue({
+          id: CUSTOMER_ID,
+          resellerId: null,
+          phone: '0812',
+          fullName: 'Budi Santoso',
+        });
+        notifications.enqueue.mockRejectedValue(new Error('queue down'));
+
+        const result = await service.pay(pendingInvoice.id, { method: 'transfer' });
+
+        expect(result.status).toBe('paid');
+      });
+    });
   });
 
   describe('run', () => {
@@ -561,6 +644,48 @@ describe('InvoicesService', () => {
         'inv-new',
       );
     });
+
+    // ADR-0012: a fresh bill fires invoice_created, once per created invoice.
+    it('enqueues invoice_created once per newly created invoice, skipping customers without a phone', async () => {
+      customers.findActiveBillable.mockResolvedValue([
+        { id: 'c1', fullName: 'Ani', planPriceMonthly: 200_000, billingAnchorDay: null },
+        { id: 'c2', fullName: 'Budi', planPriceMonthly: 300_000, billingAnchorDay: null },
+      ]);
+      repo.existsForPeriod.mockResolvedValue(false);
+      repo.create.mockImplementation((input: { customerId: string }) =>
+        Promise.resolve({
+          ...pendingInvoice,
+          id: `inv-${input.customerId}`,
+          customerId: input.customerId,
+        }),
+      );
+      customers.findById.mockImplementation((id: string) =>
+        Promise.resolve(
+          id === 'c1'
+            ? { id, phone: '0811', fullName: 'Ani' }
+            : { id, phone: null, fullName: 'Budi' },
+        ),
+      );
+
+      await service.run();
+
+      expect(repo.create).toHaveBeenCalledTimes(2);
+      // c1 has a phone -> enqueued once; c2 has none -> skipped.
+      expect(notifications.enqueue).toHaveBeenCalledTimes(1);
+      expect(notifications.enqueue).toHaveBeenCalledWith(
+        {
+          event: 'invoice_created',
+          to: '0811',
+          vars: {
+            nama: 'Ani',
+            no_tagihan: pendingInvoice.invoiceNo,
+            jumlah: 'Rp222.000',
+            jatuh_tempo: pendingInvoice.dueDate,
+          },
+        },
+        'invoice_created:inv-c1',
+      );
+    });
   });
 
   describe('generateFirstInvoice', () => {
@@ -607,6 +732,25 @@ describe('InvoicesService', () => {
       expect(repo.create).not.toHaveBeenCalled();
       expect(repo.sumUnpaidByCustomer).not.toHaveBeenCalled();
       expect(customers.setBilling).not.toHaveBeenCalled();
+    });
+
+    // ADR-0012: the customer's very first bill also fires invoice_created.
+    it('enqueues invoice_created for the first invoice', async () => {
+      customers.findBillingInfo.mockResolvedValue({
+        fullName: 'Ani',
+        planPriceMonthly: 200_000,
+        billingAnchorDay: null,
+      });
+      repo.existsForPeriod.mockResolvedValue(false);
+      repo.create.mockResolvedValue({ ...pendingInvoice, id: 'inv-first', customerId: 'c1' });
+      customers.findById.mockResolvedValue({ id: 'c1', phone: '0811', fullName: 'Ani' });
+
+      await service.generateFirstInvoice('c1');
+
+      expect(notifications.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'invoice_created', to: '0811' }),
+        'invoice_created:inv-first',
+      );
     });
   });
 

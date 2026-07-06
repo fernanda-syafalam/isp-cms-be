@@ -117,6 +117,7 @@ export class BillingAutomationService {
   // invoice, refreshing their outstanding balance. Returns how many moved.
   private async isolateActiveDebtors(): Promise<number> {
     const ids = await this.repo.customerIdsWithOverdue();
+    const period = currentPeriodStart();
     let isolated = 0;
     for (const id of ids) {
       const customer = await this.customers.findById(id);
@@ -129,10 +130,44 @@ export class BillingAutomationService {
         });
         // Enforce on the router: disable the customer's PPPoE secret (ADR-0008).
         await this.secrets.applyDisabledForCustomer(id, true);
+        // The exact "overdue → isolir surprise" ADR-0012 was written to
+        // prevent: tell the customer they were just cut off. jobId is per
+        // customer + month, same granularity as dispatchDunning, so a
+        // re-run of this cycle never double-sends. Skip phoneless rows,
+        // same as dispatchDunning.
+        if (customer.phone) {
+          await this.notifyIsolir(id, customer.fullName, customer.phone, outstanding, period);
+        }
         isolated += 1;
       }
     }
     return isolated;
+  }
+
+  // Best-effort (ADR-0012): a queue outage must never abort the isolir
+  // enforcement that already committed (status flip + router secret
+  // disable above) — log and swallow rather than rethrow. Unlike
+  // dispatchDunning (not wrapped today), the new isolir notice is
+  // deliberately made resilient.
+  private async notifyIsolir(
+    customerId: string,
+    fullName: string,
+    phone: string,
+    outstanding: number,
+    period: string,
+  ): Promise<void> {
+    try {
+      await this.notifications.enqueue(
+        {
+          event: 'isolir',
+          to: phone,
+          vars: { nama: fullName, jumlah: formatIdr(outstanding) },
+        },
+        `isolir:${customerId}:${period}`,
+      );
+    } catch (err) {
+      this.logger.warn({ customerId, err }, 'isolir notification enqueue failed');
+    }
   }
 
   private async countActiveDebtors(): Promise<number> {
