@@ -1,7 +1,7 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
-/** Output shape for a reseller. customerCount is derived (by name match). */
+/** Output shape for a reseller. customerCount is derived (by resellerId FK match). */
 export const ResellerResponseSchema = z.object({
   id: z.uuid(),
   name: z.string(),

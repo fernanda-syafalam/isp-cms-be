@@ -30,16 +30,17 @@ export class ResellersService {
 
   constructor(
     private readonly repo: ResellersRepository,
-    // customerCount is derived from customers linked by reseller name.
+    // customerCount is derived from customers linked by resellerId (FK) —
+    // never a name match, which would drift the moment a reseller renames.
     private readonly customers: CustomersRepository,
   ) {}
 
   async list(filter: ResellerListFilter): Promise<{ items: ResellerResponse[]; total: number }> {
     const { items, total } = await this.repo.list(filter);
-    const counts = await this.customers.countsByResellerName();
-    const byName = new Map(counts.map((c) => [c.resellerName, c.count]));
+    const counts = await this.customers.countsByResellerId();
+    const byId = new Map(counts.map((c) => [c.resellerId, c.count]));
     return {
-      items: items.map((r) => toResellerResponse(r, byName.get(r.name) ?? 0)),
+      items: items.map((r) => toResellerResponse(r, byId.get(r.id) ?? 0)),
       total,
     };
   }
@@ -167,7 +168,7 @@ export class ResellersService {
   }
 
   private async withCount(reseller: Reseller): Promise<ResellerResponse> {
-    const customerCount = await this.customers.countByResellerName(reseller.name);
+    const customerCount = await this.customers.countByResellerId(reseller.id);
     return toResellerResponse(reseller, customerCount);
   }
 

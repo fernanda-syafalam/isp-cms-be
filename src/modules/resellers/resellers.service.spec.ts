@@ -39,8 +39,8 @@ describe('ResellersService', () => {
   let service: ResellersService;
   let repo: Record<string, ReturnType<typeof vi.fn>>;
   let customers: {
-    countByResellerName: ReturnType<typeof vi.fn>;
-    countsByResellerName: ReturnType<typeof vi.fn>;
+    countByResellerId: ReturnType<typeof vi.fn>;
+    countsByResellerId: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
@@ -58,7 +58,7 @@ describe('ResellersService', () => {
       rejectPayout: vi.fn(),
       disbursePayout: vi.fn(),
     };
-    customers = { countByResellerName: vi.fn(), countsByResellerName: vi.fn() };
+    customers = { countByResellerId: vi.fn(), countsByResellerId: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         ResellersService,
@@ -69,9 +69,9 @@ describe('ResellersService', () => {
     service = moduleRef.get(ResellersService);
   });
 
-  it('list attaches derived customerCount by name', async () => {
+  it('list attaches derived customerCount by resellerId', async () => {
     repo.list.mockResolvedValue({ items: [reseller], total: 1 });
-    customers.countsByResellerName.mockResolvedValue([{ resellerName: 'Loket Andi', count: 7 }]);
+    customers.countsByResellerId.mockResolvedValue([{ resellerId: reseller.id, count: 7 }]);
     const result = await service.list({ limit: 50, offset: 0 });
     expect(result.items[0]?.customerCount).toBe(7);
     expect(result.items[0]?.commissionPct).toBe(0.05);
@@ -79,7 +79,7 @@ describe('ResellersService', () => {
 
   it('list forwards q, sort, and order to the repository unchanged', async () => {
     repo.list.mockResolvedValue({ items: [reseller], total: 1 });
-    customers.countsByResellerName.mockResolvedValue([]);
+    customers.countsByResellerId.mockResolvedValue([]);
     await service.list({ q: 'Jepara', sort: 'name', order: 'asc', limit: 10, offset: 0 });
     expect(repo.list).toHaveBeenCalledWith({
       q: 'Jepara',
@@ -90,17 +90,17 @@ describe('ResellersService', () => {
     });
   });
 
-  it('findById uses the single-name count', async () => {
+  it('findById uses the single resellerId count', async () => {
     repo.findById.mockResolvedValue(reseller);
-    customers.countByResellerName.mockResolvedValue(3);
+    customers.countByResellerId.mockResolvedValue(3);
     const result = await service.findById(reseller.id);
-    expect(customers.countByResellerName).toHaveBeenCalledWith('Loket Andi');
+    expect(customers.countByResellerId).toHaveBeenCalledWith(reseller.id);
     expect(result.customerCount).toBe(3);
   });
 
   it('update passes the patch through and re-counts', async () => {
     repo.update.mockResolvedValue({ ...reseller, status: 'inactive' });
-    customers.countByResellerName.mockResolvedValue(0);
+    customers.countByResellerId.mockResolvedValue(0);
     const result = await service.update(reseller.id, { status: 'inactive' });
     expect(repo.update).toHaveBeenCalledWith(reseller.id, { status: 'inactive' });
     expect(result.status).toBe('inactive');
@@ -120,7 +120,7 @@ describe('ResellersService', () => {
       status: 'active',
     });
     expect(result.customerCount).toBe(0);
-    expect(customers.countByResellerName).not.toHaveBeenCalled();
+    expect(customers.countByResellerId).not.toHaveBeenCalled();
   });
 
   it('addLedgerEntry rejects a bare withdrawal with 422 — must go through the payout flow', async () => {
@@ -132,7 +132,7 @@ describe('ResellersService', () => {
 
   it('addLedgerEntry defaults note and returns the updated reseller', async () => {
     repo.addLedgerEntry.mockResolvedValue({ ...reseller, balance: 1_500_000 });
-    customers.countByResellerName.mockResolvedValue(7);
+    customers.countByResellerId.mockResolvedValue(7);
     const result = await service.addLedgerEntry(reseller.id, { type: 'topup', amount: 500_000 });
     expect(repo.addLedgerEntry).toHaveBeenCalledWith(reseller.id, {
       type: 'topup',
