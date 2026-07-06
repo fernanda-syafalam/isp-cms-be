@@ -19,7 +19,7 @@ import { RoutersRepository } from '../routers/routers.repository';
 // forwardRef() on both sides — see work-orders.module.ts.
 import { TicketsService } from '../tickets/tickets.service';
 import type { CompleteWorkOrderInput } from './dto/complete-work-order.dto';
-import type { WorkOrderResponse } from './dto/work-order-response.dto';
+import type { WorkOrderListResponse, WorkOrderResponse } from './dto/work-order-response.dto';
 import {
   type WorkOrderCompletion,
   type WorkOrderListFilter,
@@ -47,9 +47,9 @@ export class WorkOrdersService {
     private readonly tickets: TicketsService,
   ) {}
 
-  async list(filter: WorkOrderListFilter): Promise<{ items: WorkOrderResponse[]; total: number }> {
-    const { items, total } = await this.repo.list(filter);
-    return { items: items.map(toWorkOrderResponse), total };
+  async list(filter: WorkOrderListFilter): Promise<WorkOrderListResponse> {
+    const { items, total, summary } = await this.repo.list(filter);
+    return { items: items.map(toWorkOrderResponse), total, summary };
   }
 
   /**

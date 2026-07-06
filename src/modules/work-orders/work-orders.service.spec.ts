@@ -371,9 +371,17 @@ describe('WorkOrdersService', () => {
   describe('list', () => {
     const makeWo = (over: Partial<typeof installWo> = {}) => ({ ...installWo, ...over });
 
+    // Full-set rollup the repo would return alongside a status-filtered page
+    // — used to prove the service passes it through untouched (P3.B.5 /
+    // FE contract parity).
+    const fullSetSummary = {
+      total: 4,
+      byStatus: { scheduled: 1, in_progress: 1, done: 1, cancelled: 1 },
+    };
+
     it('delegates filter to the repo and maps items to WorkOrderResponse', async () => {
       const filter = { limit: 10, offset: 0 };
-      repo.list.mockResolvedValue({ items: [installWo], total: 1 });
+      repo.list.mockResolvedValue({ items: [installWo], total: 1, summary: fullSetSummary });
 
       const result = await service.list(filter);
 
@@ -385,7 +393,7 @@ describe('WorkOrdersService', () => {
 
     it('passes q and status filter through to the repo', async () => {
       const filter = { q: 'budi', status: 'scheduled' as const, limit: 50, offset: 0 };
-      repo.list.mockResolvedValue({ items: [], total: 0 });
+      repo.list.mockResolvedValue({ items: [], total: 0, summary: fullSetSummary });
 
       await service.list(filter);
 
@@ -394,7 +402,7 @@ describe('WorkOrdersService', () => {
 
     it('passes type filter through to the repo', async () => {
       const filter = { type: 'repair' as const, limit: 50, offset: 0 };
-      repo.list.mockResolvedValue({ items: [], total: 0 });
+      repo.list.mockResolvedValue({ items: [], total: 0, summary: fullSetSummary });
 
       await service.list(filter);
 
@@ -403,7 +411,7 @@ describe('WorkOrdersService', () => {
 
     it('passes sort and order through to the repo', async () => {
       const filter = { sort: 'code', order: 'asc' as const, limit: 50, offset: 0 };
-      repo.list.mockResolvedValue({ items: [makeWo()], total: 1 });
+      repo.list.mockResolvedValue({ items: [makeWo()], total: 1, summary: fullSetSummary });
 
       const result = await service.list(filter);
 
@@ -412,12 +420,40 @@ describe('WorkOrdersService', () => {
     });
 
     it('returns empty items when repo returns empty', async () => {
-      repo.list.mockResolvedValue({ items: [], total: 0 });
+      repo.list.mockResolvedValue({ items: [], total: 0, summary: fullSetSummary });
 
       const result = await service.list({ limit: 50, offset: 0 });
 
       expect(result.items).toHaveLength(0);
       expect(result.total).toBe(0);
+    });
+
+    // T1 — FE contract parity: the list response must carry the full-set
+    // byStatus rollup regardless of the page's status filter (dashboard
+    // KPI/tab counts must not shrink when the caller narrows the page).
+    it('passes the repo summary through unchanged, independent of the status filter', async () => {
+      repo.list.mockResolvedValue({
+        items: [installWo],
+        total: 1,
+        summary: fullSetSummary,
+      });
+
+      const result = await service.list({ status: 'scheduled', limit: 50, offset: 0 });
+
+      expect(result.items).toHaveLength(1); // narrowed by the status filter
+      expect(result.summary).toEqual(fullSetSummary); // NOT narrowed
+    });
+
+    it('zero-fills every status key when the repo reports an empty table', async () => {
+      const emptySummary = {
+        total: 0,
+        byStatus: { scheduled: 0, in_progress: 0, done: 0, cancelled: 0 },
+      };
+      repo.list.mockResolvedValue({ items: [], total: 0, summary: emptySummary });
+
+      const result = await service.list({ limit: 50, offset: 0 });
+
+      expect(result.summary).toEqual(emptySummary);
     });
   });
 
