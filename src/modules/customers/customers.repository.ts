@@ -24,6 +24,7 @@ import {
   customers,
 } from '../../infrastructure/database/schema/customers.schema';
 import { plans } from '../../infrastructure/database/schema/plans.schema';
+import { resellers } from '../../infrastructure/database/schema/resellers.schema';
 
 // A customer row joined with its plan's display name. planName is never
 // stored on the customer (single source of truth lives in plans).
@@ -76,11 +77,23 @@ export class CustomersRepository {
 
   // Every read returns the customer columns plus the joined plan name.
   // planId is NOT NULL with an FK, so an inner join never drops a row.
+  //
+  // resellerName is DERIVED here from resellers.name via a LEFT JOIN, not
+  // read from the stored customers.reseller_name column: no create/update
+  // path ever writes that column (M1 prod-only bug — mitra reads/KPIs key
+  // off resellerName and saw it permanently empty), and a stored copy would
+  // drift whenever a reseller is renamed anyway. The LEFT JOIN (not INNER)
+  // is required so a customer with no reseller (reseller_id IS NULL) is
+  // still returned, with resellerName: null. The explicit `resellerName:
+  // resellers.name` key below overrides the stale spread column from
+  // getTableColumns(customers) — object literal key order means the later
+  // key wins.
   private baseSelect() {
     return this.db
-      .select({ ...getTableColumns(customers), planName: plans.name })
+      .select({ ...getTableColumns(customers), planName: plans.name, resellerName: resellers.name })
       .from(customers)
-      .innerJoin(plans, eq(customers.planId, plans.id));
+      .innerJoin(plans, eq(customers.planId, plans.id))
+      .leftJoin(resellers, eq(customers.resellerId, resellers.id));
   }
 
   async list(filter: CustomerListFilter): Promise<{ items: CustomerRow[]; total: number }> {
@@ -139,26 +152,27 @@ export class CustomersRepository {
     return row ?? null;
   }
 
-  // How many customers are linked to a reseller name. Customers reference a
-  // reseller by name (not FK), so the count is derived here for the
-  // resellers module.
-  async countByResellerName(resellerName: string): Promise<number> {
+  // How many customers are linked to a reseller, keyed by the FK
+  // (resellerId) — not a name match, which would silently undercount the
+  // moment a reseller is renamed (same drift class as M1). Used by the
+  // resellers module for the per-reseller customerCount.
+  async countByResellerId(resellerId: string): Promise<number> {
     const [row] = await this.db
       .select({ value: count() })
       .from(customers)
-      .where(eq(customers.resellerName, resellerName));
+      .where(eq(customers.resellerId, resellerId));
     return row?.value ?? 0;
   }
 
-  // Bulk customer counts grouped by reseller name (skips unlinked).
-  async countsByResellerName(): Promise<Array<{ resellerName: string; count: number }>> {
+  // Bulk customer counts grouped by reseller id (skips unlinked).
+  async countsByResellerId(): Promise<Array<{ resellerId: string; count: number }>> {
     const rows = await this.db
-      .select({ resellerName: customers.resellerName, value: count() })
+      .select({ resellerId: customers.resellerId, value: count() })
       .from(customers)
-      .where(isNotNull(customers.resellerName))
-      .groupBy(customers.resellerName);
+      .where(isNotNull(customers.resellerId))
+      .groupBy(customers.resellerId);
     return rows.flatMap((r) =>
-      r.resellerName ? [{ resellerName: r.resellerName, count: r.value }] : [],
+      r.resellerId ? [{ resellerId: r.resellerId, count: r.value }] : [],
     );
   }
 

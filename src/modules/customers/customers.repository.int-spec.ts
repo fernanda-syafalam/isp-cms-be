@@ -7,6 +7,7 @@ import type { DrizzleService } from '../../infrastructure/database/drizzle.servi
 import * as schema from '../../infrastructure/database/schema';
 import { customers } from '../../infrastructure/database/schema/customers.schema';
 import { plans } from '../../infrastructure/database/schema/plans.schema';
+import { resellers } from '../../infrastructure/database/schema/resellers.schema';
 import { CustomersRepository } from './customers.repository';
 
 /**
@@ -37,6 +38,18 @@ describe('CustomersRepository (integration)', () => {
         created_at timestamptz(3) NOT NULL DEFAULT now(),
         updated_at timestamptz(3) NOT NULL DEFAULT now()
       );
+      CREATE TYPE reseller_status AS ENUM ('active', 'inactive');
+      CREATE TABLE resellers (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        name varchar(120) NOT NULL,
+        area varchar(120) NOT NULL,
+        balance integer NOT NULL DEFAULT 0,
+        commission_pct real NOT NULL DEFAULT 0,
+        status reseller_status NOT NULL DEFAULT 'active',
+        created_at timestamptz(3) NOT NULL DEFAULT now(),
+        updated_at timestamptz(3) NOT NULL DEFAULT now()
+      );
+      CREATE INDEX resellers_status_idx ON resellers (status);
       CREATE TYPE customer_status AS ENUM ('prospek', 'instalasi', 'aktif', 'isolir', 'berhenti');
       CREATE TYPE customer_hold_reason AS ENUM ('overdue', 'voluntary');
       CREATE SEQUENCE customer_no_seq START WITH 9001;
@@ -58,7 +71,7 @@ describe('CustomersRepository (integration)', () => {
         ktp varchar(32),
         consent_at timestamptz(3),
         data_deletion_requested_at timestamptz(3),
-        reseller_name varchar(120), reseller_id uuid,
+        reseller_name varchar(120), reseller_id uuid REFERENCES resellers(id),
         connection jsonb,
         created_at timestamptz(3) NOT NULL DEFAULT now(),
         updated_at timestamptz(3) NOT NULL DEFAULT now()
@@ -66,6 +79,7 @@ describe('CustomersRepository (integration)', () => {
       CREATE INDEX customers_status_idx ON customers (status);
       CREATE INDEX customers_full_name_idx ON customers (full_name);
       CREATE INDEX customers_plan_id_idx ON customers (plan_id);
+      CREATE INDEX customers_reseller_id_idx ON customers (reseller_id);
     `);
 
     const [plan] = await db
@@ -85,6 +99,7 @@ describe('CustomersRepository (integration)', () => {
 
   beforeEach(async () => {
     await db.delete(customers);
+    await db.delete(resellers);
   });
 
   it('creates customers with sequential customer_no and joins the plan name', async () => {
@@ -325,6 +340,99 @@ describe('CustomersRepository (integration)', () => {
       { month: '2026-04', count: 1 },
       { month: '2026-06', count: 1 },
     ]);
+  });
+
+  // -----------------------------------------------------------------------
+  // resellerName derivation (M1 prod-only fix): resellerName is never a
+  // stored column write — it is joined from resellers.name at read time, so
+  // it can never drift when a reseller is renamed.
+  // -----------------------------------------------------------------------
+
+  it('derives resellerName via LEFT JOIN when a customer has a resellerId', async () => {
+    const [reseller] = await db
+      .insert(resellers)
+      .values({ name: 'Loket Andi', area: 'Jepara' })
+      .returning();
+    if (!reseller) throw new Error('reseller seed failed');
+
+    const created = await repo.create({
+      fullName: 'Budi',
+      phone: '0811',
+      address: 'Jl. A',
+      planId,
+      resellerId: reseller.id,
+    });
+    expect(created.resellerName).toBe('Loket Andi');
+
+    const read = await repo.findById(created.id);
+    expect(read?.resellerName).toBe('Loket Andi');
+
+    // Renaming the reseller is reflected immediately — proves the name is
+    // derived at read time, not a stale denormalized copy.
+    await db
+      .update(resellers)
+      .set({ name: 'Loket Andi Baru' })
+      .where(eq(resellers.id, reseller.id));
+    const renamed = await repo.findById(created.id);
+    expect(renamed?.resellerName).toBe('Loket Andi Baru');
+  });
+
+  it('returns resellerName: null for a customer with no reseller (LEFT JOIN, not INNER)', async () => {
+    const created = await repo.create({
+      fullName: 'Ani',
+      phone: '0812',
+      address: 'Jl. B',
+      planId,
+    });
+    expect(created.resellerName).toBeNull();
+
+    const read = await repo.findById(created.id);
+    expect(read?.resellerName).toBeNull();
+  });
+
+  it('countByResellerId and countsByResellerId key off the FK, not the name', async () => {
+    const [resellerA] = await db
+      .insert(resellers)
+      .values({ name: 'Loket Andi', area: 'Jepara' })
+      .returning();
+    const [resellerB] = await db
+      .insert(resellers)
+      .values({ name: 'Loket Budi', area: 'Kudus' })
+      .returning();
+    if (!resellerA || !resellerB) throw new Error('reseller seed failed');
+
+    await repo.create({
+      fullName: 'C1',
+      phone: '08',
+      address: 'Jl',
+      planId,
+      resellerId: resellerA.id,
+    });
+    const onboarded = await repo.create({
+      fullName: 'C2',
+      phone: '08',
+      address: 'Jl',
+      planId,
+      resellerId: resellerA.id,
+    });
+    // An onboarded/instalasi customer must still be counted for the reseller.
+    await repo.setStatus(onboarded.id, 'instalasi', {});
+    await repo.create({
+      fullName: 'C3',
+      phone: '08',
+      address: 'Jl',
+      planId,
+      resellerId: resellerB.id,
+    });
+    await repo.create({ fullName: 'C4', phone: '08', address: 'Jl', planId }); // unlinked
+
+    expect(await repo.countByResellerId(resellerA.id)).toBe(2);
+    expect(await repo.countByResellerId(resellerB.id)).toBe(1);
+
+    const counts = await repo.countsByResellerId();
+    const byId = new Map(counts.map((c) => [c.resellerId, c.count]));
+    expect(byId.get(resellerA.id)).toBe(2);
+    expect(byId.get(resellerB.id)).toBe(1);
   });
 
   // Insert helper for the month-grouping aggregates (explicit timestamps).
