@@ -1,5 +1,10 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { AuthUser } from '../../common/decorators/current-user.decorator';
+import { AcsService } from '../acs/acs.service';
+import type { SetWifiInput } from '../acs/dto/set-wifi.dto';
+import type { SetWifiResult, WifiResponse } from '../acs/dto/wifi-response.dto';
+import { AnnouncementsService } from '../announcements/announcements.service';
+import type { AnnouncementResponse } from '../announcements/dto/announcement-response.dto';
 import { CustomersService } from '../customers/customers.service';
 import type { CreatePaymentIntentInput } from '../invoices/dto/create-payment-intent.dto';
 import type { PaymentIntentResponse } from '../invoices/dto/payment-intent-response.dto';
@@ -8,6 +13,8 @@ import { PaymentIntentsService } from '../invoices/payment-intents.service';
 import type { AddCommentInput } from '../tickets/dto/add-comment.dto';
 import type { TicketResponse } from '../tickets/dto/ticket-response.dto';
 import { TicketsService } from '../tickets/tickets.service';
+import type { UsageResponse } from '../usage/dto/usage-response.dto';
+import { UsageService } from '../usage/usage.service';
 import type { PortalMeResponse } from './dto/portal-me-response.dto';
 import type { PortalTicketDetailResponse } from './dto/portal-ticket-detail-response.dto';
 import type { ReportIssueInput } from './dto/report-issue.dto';
@@ -30,6 +37,9 @@ export class PortalService {
     private readonly invoices: InvoicesService,
     private readonly tickets: TicketsService,
     private readonly intents: PaymentIntentsService,
+    private readonly usage: UsageService,
+    private readonly acs: AcsService,
+    private readonly announcements: AnnouncementsService,
   ) {}
 
   /** The authenticated customer's self-service snapshot. */
@@ -117,5 +127,35 @@ export class PortalService {
     const ticket = await this.tickets.findByIdForCustomer(ticketId, customer.id);
     if (!ticket) throw new NotFoundException('ticket not found');
     return ticket;
+  }
+
+  // --- Self-care: usage / WiFi / announcements (P3.C.4) ---------------------
+  //
+  // Every method below resolves the caller's own customer from the session
+  // first, then scopes the downstream call to that customer's id/name —
+  // never a client-supplied id (same IDOR posture as the ticket methods
+  // above).
+
+  /** The authenticated customer's own data-usage/quota snapshot. */
+  async getUsage(user: AuthUser): Promise<UsageResponse> {
+    const customer = await this.customers.resolveForPortal(user);
+    return this.usage.forCustomer(customer.id);
+  }
+
+  /** The authenticated customer's current WiFi SSID/serial/model (ACS seam). */
+  async getWifi(user: AuthUser): Promise<WifiResponse> {
+    const customer = await this.customers.resolveForPortal(user);
+    return this.acs.wifiForCustomer(customer.fullName);
+  }
+
+  /** Change the authenticated customer's own WiFi SSID/password. */
+  async updateWifi(user: AuthUser, input: SetWifiInput): Promise<SetWifiResult> {
+    const customer = await this.customers.resolveForPortal(user);
+    return this.acs.setWifiForCustomer(customer.fullName, input.ssid, input.password);
+  }
+
+  /** Active announcements/outage notices — the same feed for every customer. */
+  async getAnnouncements(): Promise<AnnouncementResponse[]> {
+    return this.announcements.listActive();
   }
 }

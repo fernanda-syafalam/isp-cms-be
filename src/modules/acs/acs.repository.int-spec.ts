@@ -9,7 +9,8 @@ import { AcsRepository } from './acs.repository';
 
 /**
  * Real Postgres integration test for AcsRepository. Requires Docker.
- * Schema applied by hand (mirroring migration 0020).
+ * Schema applied by hand (mirroring migration 0020 + the ssid column added
+ * in migration 0040).
  */
 describe('AcsRepository (integration)', () => {
   let container: StartedPostgreSqlContainer;
@@ -49,6 +50,7 @@ describe('AcsRepository (integration)', () => {
         customer_name varchar(120) NOT NULL,
         model varchar(80) NOT NULL,
         firmware varchar(40) NOT NULL,
+        ssid varchar(32),
         rx_power_dbm real,
         status acs_status NOT NULL DEFAULT 'online',
         last_inform timestamptz(3) NOT NULL DEFAULT now(),
@@ -299,6 +301,37 @@ describe('AcsRepository (integration)', () => {
         'B-SERIAL80002',
         'C-SERIAL80003',
       ]);
+    });
+  });
+
+  // --- portal WiFi self-care seam (P3.C.4) ------------------------------------
+
+  describe('findByCustomerName / setWifi', () => {
+    it('resolves the device denormalized to an exact customer name match', async () => {
+      await repo.ensureSeeded(DEFAULTS);
+      const found = await repo.findByCustomerName('Budi');
+      expect(found?.serial).toBe('ZTEG10000001');
+    });
+
+    it('returns null when no device is denormalized to that customer name', async () => {
+      await repo.ensureSeeded(DEFAULTS);
+      expect(await repo.findByCustomerName('Nobody')).toBeNull();
+    });
+
+    it('setWifi persists the new ssid and returns the updated row', async () => {
+      await repo.ensureSeeded(DEFAULTS);
+      const device = await repo.findByCustomerName('Budi');
+      const updated = await repo.setWifi(device?.id ?? '', 'RumahBudi_5G');
+      expect(updated?.ssid).toBe('RumahBudi_5G');
+
+      // Persisted — a fresh read sees the same value, not just the RETURNING row.
+      const reread = await repo.findByCustomerName('Budi');
+      expect(reread?.ssid).toBe('RumahBudi_5G');
+    });
+
+    it('setWifi returns null for a non-existent device id', async () => {
+      const result = await repo.setWifi('00000000-0000-0000-0000-0000000000ff', 'X');
+      expect(result).toBeNull();
     });
   });
 });

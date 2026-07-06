@@ -3,10 +3,13 @@ import { ZodSerializerDto } from 'nestjs-zod';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { type AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { SetWifiDto } from '../acs/dto/set-wifi.dto';
+import { SetWifiResultDto, WifiResponseDto } from '../acs/dto/wifi-response.dto';
 import { CreatePaymentIntentDto } from '../invoices/dto/create-payment-intent.dto';
 import { PaymentIntentResponseDto } from '../invoices/dto/payment-intent-response.dto';
 import { AddCommentDto } from '../tickets/dto/add-comment.dto';
 import { TicketResponseDto } from '../tickets/dto/ticket-response.dto';
+import { UsageResponseDto } from '../usage/dto/usage-response.dto';
 import { PortalMeResponseDto } from './dto/portal-me-response.dto';
 import { PortalTicketDetailResponseDto } from './dto/portal-ticket-detail-response.dto';
 import { ReportIssueDto } from './dto/report-issue.dto';
@@ -80,5 +83,35 @@ export class PortalController {
   @ZodSerializerDto(PaymentIntentResponseDto)
   confirmPayIntent(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.portal.confirmPayIntent(user, id);
+  }
+
+  // --- Self-care: usage / WiFi / announcements (P3.C.4) ---------------------
+  // Every handler below is scoped to the resolved caller only — the
+  // customer id/name is never accepted from the client (see portal.service).
+
+  @Get('usage')
+  @ZodSerializerDto(UsageResponseDto)
+  usage(@CurrentUser() user: AuthUser) {
+    return this.portal.getUsage(user);
+  }
+
+  @Get('wifi')
+  @ZodSerializerDto(WifiResponseDto)
+  wifi(@CurrentUser() user: AuthUser) {
+    return this.portal.getWifi(user);
+  }
+
+  @Audit('portal.wifi.update')
+  @Post('wifi')
+  @ZodSerializerDto(SetWifiResultDto)
+  updateWifi(@CurrentUser() user: AuthUser, @Body() body: SetWifiDto) {
+    return this.portal.updateWifi(user, body);
+  }
+
+  // No @CurrentUser needed — the active feed is identical for every
+  // customer, so there is nothing to scope.
+  @Get('announcements')
+  announcements() {
+    return this.portal.getAnnouncements();
   }
 }

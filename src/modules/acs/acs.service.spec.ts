@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AcsDevice } from '../../infrastructure/database/schema/acs.schema';
@@ -11,6 +11,7 @@ const device: AcsDevice = {
   customerName: 'Budi Santoso',
   model: 'ZTE F670L',
   firmware: 'v2.3.0',
+  ssid: null,
   rxPowerDbm: -21.5,
   status: 'online',
   lastInform: new Date('2026-06-15T00:00:00.000Z'),
@@ -23,7 +24,14 @@ describe('AcsService', () => {
   let repo: Record<string, ReturnType<typeof vi.fn>>;
 
   beforeEach(async () => {
-    repo = { ensureSeeded: vi.fn(), list: vi.fn(), countByIds: vi.fn(), updateFirmware: vi.fn() };
+    repo = {
+      ensureSeeded: vi.fn(),
+      list: vi.fn(),
+      countByIds: vi.fn(),
+      updateFirmware: vi.fn(),
+      findByCustomerName: vi.fn(),
+      setWifi: vi.fn(),
+    };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [AcsService, { provide: AcsRepository, useValue: repo }],
     }).compile();
@@ -103,6 +111,58 @@ describe('AcsService', () => {
         password: 'supersecret',
       });
       expect(result.affected).toBe(1);
+    });
+  });
+
+  // --- portal WiFi self-care seam (P3.C.4) ------------------------------------
+
+  describe('wifiForCustomer', () => {
+    it('seeds then resolves the caller device by exact customerName match', async () => {
+      repo.findByCustomerName.mockResolvedValue(device);
+      const result = await service.wifiForCustomer('Budi Santoso');
+      expect(repo.ensureSeeded).toHaveBeenCalledTimes(1);
+      expect(repo.findByCustomerName).toHaveBeenCalledWith('Budi Santoso');
+      expect(result).toEqual({ serial: 'ZTEG10000001', model: 'ZTE F670L', ssid: null });
+    });
+
+    it('404s when no device is denormalized to that customer name', async () => {
+      repo.findByCustomerName.mockResolvedValue(null);
+      await expect(service.wifiForCustomer('Nobody')).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('setWifiForCustomer', () => {
+    it('validates ssid/password, persists only the ssid, and acks with the new value', async () => {
+      repo.findByCustomerName.mockResolvedValue(device);
+      repo.setWifi.mockResolvedValue({ ...device, ssid: 'RumahBudi_5G' });
+
+      const result = await service.setWifiForCustomer(
+        'Budi Santoso',
+        'RumahBudi_5G',
+        'supersecret',
+      );
+
+      expect(repo.setWifi).toHaveBeenCalledWith(device.id, 'RumahBudi_5G');
+      expect(result).toEqual({ ok: true, ssid: 'RumahBudi_5G' });
+    });
+
+    it('rejects an ssid over 32 chars before touching the repository', async () => {
+      await expect(
+        service.setWifiForCustomer('Budi Santoso', 'x'.repeat(33), 'supersecret'),
+      ).rejects.toThrow();
+      expect(repo.findByCustomerName).not.toHaveBeenCalled();
+    });
+
+    it('rejects a password shorter than 8 chars before touching the repository', async () => {
+      await expect(service.setWifiForCustomer('Budi Santoso', 'Net', 'short')).rejects.toThrow();
+      expect(repo.findByCustomerName).not.toHaveBeenCalled();
+    });
+
+    it('404s when no device is denormalized to that customer name', async () => {
+      repo.findByCustomerName.mockResolvedValue(null);
+      await expect(
+        service.setWifiForCustomer('Nobody', 'Net12345', 'supersecret'),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 });

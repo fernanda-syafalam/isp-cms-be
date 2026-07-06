@@ -2,11 +2,14 @@ import { NotFoundException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthUser } from '../../common/decorators/current-user.decorator';
+import { AcsService } from '../acs/acs.service';
+import { AnnouncementsService } from '../announcements/announcements.service';
 import { CustomersService } from '../customers/customers.service';
 import type { CustomerResponse } from '../customers/dto/customer-response.dto';
 import { InvoicesService } from '../invoices/invoices.service';
 import { PaymentIntentsService } from '../invoices/payment-intents.service';
 import { TicketsService } from '../tickets/tickets.service';
+import { UsageService } from '../usage/usage.service';
 import { PortalService } from './portal.service';
 
 const CUSTOMER_ID = '00000000-0000-0000-0000-0000000000c1';
@@ -50,6 +53,9 @@ describe('PortalService', () => {
   let invoices: Record<string, ReturnType<typeof vi.fn>>;
   let tickets: Record<string, ReturnType<typeof vi.fn>>;
   let intents: Record<string, ReturnType<typeof vi.fn>>;
+  let usage: Record<string, ReturnType<typeof vi.fn>>;
+  let acs: Record<string, ReturnType<typeof vi.fn>>;
+  let announcements: Record<string, ReturnType<typeof vi.fn>>;
 
   beforeEach(async () => {
     customers = { resolveForPortal: vi.fn().mockResolvedValue(customer()) };
@@ -74,6 +80,9 @@ describe('PortalService', () => {
       // PortalService plumbs whatever the service hands back into `/me`.
       pendingForCustomer: vi.fn().mockResolvedValue([{ id: 'int-pending', status: 'pending' }]),
     };
+    usage = { forCustomer: vi.fn() };
+    acs = { wifiForCustomer: vi.fn(), setWifiForCustomer: vi.fn() };
+    announcements = { listActive: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         PortalService,
@@ -81,6 +90,9 @@ describe('PortalService', () => {
         { provide: InvoicesService, useValue: invoices },
         { provide: TicketsService, useValue: tickets },
         { provide: PaymentIntentsService, useValue: intents },
+        { provide: UsageService, useValue: usage },
+        { provide: AcsService, useValue: acs },
+        { provide: AnnouncementsService, useValue: announcements },
       ],
     }).compile();
     service = moduleRef.get(PortalService);
@@ -240,6 +252,56 @@ describe('PortalService', () => {
         service.submitTicketCsat(user, 'not-mine', { rating: 5 }),
       ).rejects.toBeInstanceOf(NotFoundException);
       expect(tickets.submitCsat).not.toHaveBeenCalled();
+    });
+  });
+
+  // --- self-care: usage / WiFi / announcements (P3.C.4) ---
+
+  describe('getUsage', () => {
+    it('resolves the caller and forwards their own customer id to UsageService', async () => {
+      usage.forCustomer.mockResolvedValue({ customerId: CUSTOMER_ID, usedGb: 320 });
+      const result = await service.getUsage(user);
+      expect(customers.resolveForPortal).toHaveBeenCalledWith(user);
+      expect(usage.forCustomer).toHaveBeenCalledWith(CUSTOMER_ID);
+      expect(result).toEqual({ customerId: CUSTOMER_ID, usedGb: 320 });
+    });
+
+    it('propagates a 404 from UsageService (customer not in the provisioned set)', async () => {
+      usage.forCustomer.mockRejectedValue(new NotFoundException('not found'));
+      await expect(service.getUsage(user)).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('getWifi', () => {
+    it('resolves the caller by session, then reads the device by fullName (not a client-supplied id)', async () => {
+      acs.wifiForCustomer.mockResolvedValue({ serial: 'ZTEG1', model: 'ZTE F670L', ssid: null });
+      const result = await service.getWifi(user);
+      expect(acs.wifiForCustomer).toHaveBeenCalledWith('Budi Santoso');
+      expect(result).toEqual({ serial: 'ZTEG1', model: 'ZTE F670L', ssid: null });
+    });
+  });
+
+  describe('updateWifi', () => {
+    it('resolves the caller, then forwards ssid/password scoped to their own fullName', async () => {
+      acs.setWifiForCustomer.mockResolvedValue({ ok: true, ssid: 'RumahBudi_5G' });
+      const result = await service.updateWifi(user, {
+        ssid: 'RumahBudi_5G',
+        password: 'supersecret',
+      });
+      expect(acs.setWifiForCustomer).toHaveBeenCalledWith(
+        'Budi Santoso',
+        'RumahBudi_5G',
+        'supersecret',
+      );
+      expect(result).toEqual({ ok: true, ssid: 'RumahBudi_5G' });
+    });
+  });
+
+  describe('getAnnouncements', () => {
+    it('returns the active feed as-is, unscoped (same for every customer)', async () => {
+      announcements.listActive.mockResolvedValue([{ id: 'a1', severity: 'outage' }]);
+      const result = await service.getAnnouncements();
+      expect(result).toEqual([{ id: 'a1', severity: 'outage' }]);
     });
   });
 });

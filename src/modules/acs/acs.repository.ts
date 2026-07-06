@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { and, asc, count, ilike, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, count, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
@@ -93,5 +93,28 @@ export class AcsRepository {
       .set({ firmware, lastInform: sql`now()`, updatedAt: sql`now()` })
       .where(inArray(acsDevices.id, ids));
     return result.rowCount ?? 0;
+  }
+
+  // Resolve the single CPE denormalized to a given customer name — the
+  // portal WiFi self-care seam (P3.C.4). See the module header comment on
+  // acs_devices for why this is a name match rather than a typed FK.
+  async findByCustomerName(customerName: string): Promise<AcsDevice | null> {
+    const [row] = await this.db
+      .select()
+      .from(acsDevices)
+      .where(eq(acsDevices.customerName, customerName))
+      .limit(1);
+    return row ?? null;
+  }
+
+  // Persist the new WiFi SSID for a single device. Returns null when the id
+  // does not exist.
+  async setWifi(id: string, ssid: string): Promise<AcsDevice | null> {
+    const [row] = await this.db
+      .update(acsDevices)
+      .set({ ssid, updatedAt: sql`now()` })
+      .where(eq(acsDevices.id, id))
+      .returning();
+    return row ?? null;
   }
 }
