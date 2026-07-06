@@ -82,18 +82,69 @@ describe('PaymentIntentsService', () => {
   });
 
   describe('create', () => {
-    it('charges the invoice total and issues a VA number for VA rails', async () => {
+    it('charges the invoice balanceDue (amount + lateFee + tax, no discount/prior payment here) and issues a VA number for VA rails', async () => {
       invoices.findById.mockResolvedValue(invoice());
 
       const result = await service.create({ invoiceId: INVOICE_ID, channel: 'va_bca' });
 
-      // amount = 100_000 + 5_000 (lateFee) + 11_000 (tax)
+      // balanceDue = 100_000 + 5_000 (lateFee) + 11_000 (tax) - 0 (discount) - 0 (paid)
       expect(repo.create).toHaveBeenCalledWith(
         expect.objectContaining({ amount: 116_000, channel: 'va_bca', status: 'pending' }),
       );
       expect(result.vaNumber).toMatch(/^8808/);
       expect(result.qrPayload).toBeNull();
       expect(result.amount).toBe(116_000);
+    });
+
+    // C4: the intent must charge exactly what's still owed, never the gross
+    // amount + lateFee + taxAmount — that overstates a VA/QR charge once a
+    // real gateway settles on the intent amount (SLA-credit discount case).
+    it('charges the balanceDue net of a discount (SLA credit), not the gross total', async () => {
+      invoices.findById.mockResolvedValue(
+        invoice({
+          amount: 200_000,
+          lateFee: 0,
+          taxAmount: 22_000,
+          discountAmount: 50_000,
+          balanceDue: 172_000,
+        }),
+      );
+
+      const result = await service.create({ invoiceId: INVOICE_ID, channel: 'qris' });
+
+      // Gross would be 222_000 — must charge the net 172_000 instead.
+      expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ amount: 172_000 }));
+      expect(result.amount).toBe(172_000);
+    });
+
+    // C4: same principle for a prior partial payment — the intent must only
+    // ask for what's left, not re-charge the full gross total.
+    it('charges the balanceDue net of a prior partial payment, not the gross total', async () => {
+      invoices.findById.mockResolvedValue(
+        invoice({
+          amount: 200_000,
+          lateFee: 0,
+          taxAmount: 22_000,
+          paidAmount: 100_000,
+          balanceDue: 122_000,
+        }),
+      );
+
+      const result = await service.create({ invoiceId: INVOICE_ID, channel: 'va_bca' });
+
+      expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ amount: 122_000 }));
+      expect(result.amount).toBe(122_000);
+    });
+
+    // C4: nothing left to pay must reject up front — a real gateway must
+    // never be handed a zero/negative charge.
+    it('rejects creating an intent when the invoice has no balance due', async () => {
+      invoices.findById.mockResolvedValue(invoice({ balanceDue: 0 }));
+
+      await expect(
+        service.create({ invoiceId: INVOICE_ID, channel: 'qris' }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(repo.create).not.toHaveBeenCalled();
     });
 
     it('issues a QR payload (no VA number) for QR / e-wallet rails', async () => {

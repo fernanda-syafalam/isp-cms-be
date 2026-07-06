@@ -120,18 +120,22 @@ export class InvoicesService {
       changeAmount = tenderedAmount - amount;
     }
 
-    const updated = await this.repo.applyPayment(id, amount);
-    await this.repo.createPayment({
-      invoiceId: invoice.id,
-      invoiceNo: invoice.invoiceNo,
-      customerId: invoice.customerId,
-      customerName: invoice.customerName,
+    // C2: the ledger row, the invoice's paid_amount/status flip, and the
+    // customer's outstanding refresh all land in ONE DB transaction inside
+    // the repository — a failure partway through rolls everything back, so
+    // a 'paid' invoice can never exist without its payments row (P3.A.4).
+    const { invoice: updated, reactivated } = await this.repo.recordPayment(id, {
       amount,
       method: input.method,
       tenderedAmount,
       changeAmount,
     });
-    await this.refreshCustomerBilling(invoice.customerId);
+    // Reactivation re-enables the PPPoE secret on the router (ADR-0008) —
+    // a different module's repository, so it stays outside the invoice/
+    // customer transaction above.
+    if (reactivated) {
+      await this.secrets.setDisabledByCustomerId(invoice.customerId, false);
+    }
     // Reactivation + commission are keyed off the invoice actually reaching
     // 'paid' — a partial payment must never trigger either.
     if (updated.status === 'paid') {
@@ -211,6 +215,9 @@ export class InvoicesService {
         status: 'pending',
       });
       await this.absorbSlaCredits(creditIds, invoice.id);
+      // C3: a freshly-billed customer must show their new debt immediately,
+      // not just once they pay or cross into isolir.
+      await this.refreshOutstanding(customer.id);
       created += 1;
     }
 
@@ -251,6 +258,9 @@ export class InvoicesService {
       status: 'pending',
     });
     await this.absorbSlaCredits(creditIds, invoice.id);
+    // C3: an onboarded/first-billed customer must show their new debt
+    // immediately — not `outstanding = 0` until they pay or go isolir.
+    await this.refreshOutstanding(customerId);
     this.logger.log({ customerId }, 'first invoice generated');
   }
 
@@ -280,21 +290,16 @@ export class InvoicesService {
     await this.slaCredits.markAppliedWithInvoice(creditIds, invoiceId);
   }
 
-  private async refreshCustomerBilling(customerId: string): Promise<void> {
+  /**
+   * Refresh one customer's `outstanding` from the same `sumUnpaidByCustomer`
+   * recompute `pay()`'s transaction uses (C3) — never a hand-computed delta.
+   * A freshly-created invoice only ever ADDS to the balance, so unlike
+   * `pay()` this never needs to consider isolir reactivation (that only
+   * ever follows a balance going DOWN to zero).
+   */
+  private async refreshOutstanding(customerId: string): Promise<void> {
     const outstanding = await this.repo.sumUnpaidByCustomer(customerId);
-    const customer = await this.customers.findById(customerId);
-    // Gate strictly on the actual balance, not "no more overdue invoices":
-    // a 'partial' invoice has no 'overdue' status but can still leave a
-    // balance > 0, and must never trigger reactivation (P3.A.4).
-    const reactivate = customer?.status === 'isolir' && outstanding === 0;
-    await this.customers.setBilling(customerId, {
-      outstanding,
-      ...(reactivate ? { status: 'aktif' as const } : {}),
-    });
-    // Payment cleared the debt -> bring the PPPoE secret back online (ADR-0008).
-    if (reactivate) {
-      await this.secrets.setDisabledByCustomerId(customerId, false);
-    }
+    await this.customers.setBilling(customerId, { outstanding });
   }
 }
 

@@ -38,8 +38,15 @@ export class PaymentIntentsService {
     if (invoice.status === 'paid') {
       throw new ConflictException('invoice already paid');
     }
+    // C4: charge exactly what's still owed. `balanceDue` already nets out
+    // discountAmount (SLA credit) and any prior partial payment — the same
+    // derived field `pay()` settles against — so the VA/QR amount can never
+    // overstate what a real gateway settlement would actually credit.
+    if (invoice.balanceDue <= 0) {
+      throw new ConflictException('invoice has no balance due');
+    }
 
-    const amount = invoice.amount + invoice.lateFee + invoice.taxAmount;
+    const amount = invoice.balanceDue;
     const { channel } = input;
     // Inline guard so the type predicate narrows `channel` in each branch.
     const row = await this.repo.create({
