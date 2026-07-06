@@ -154,9 +154,7 @@ describe('AcsService', () => {
     });
 
     it('rejects a password shorter than 8 chars before touching the repository', async () => {
-      await expect(
-        service.setWifiForCustomer('Budi Santoso', 'Net', 'short'),
-      ).rejects.toThrow();
+      await expect(service.setWifiForCustomer('Budi Santoso', 'Net', 'short')).rejects.toThrow();
       expect(repo.findByCustomerName).not.toHaveBeenCalled();
     });
 
