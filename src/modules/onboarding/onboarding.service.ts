@@ -85,6 +85,7 @@ export class OnboardingService {
       ktp: input.ktp ?? null,
       npwp: input.npwp ?? null,
       consentAt: input.consent ? new Date() : null,
+      resellerId: input.resellerId ?? null,
     });
     await this.workOrders.scheduleInstallForCustomer({
       customerId: customer.id,
@@ -118,6 +119,8 @@ export class OnboardingService {
     address: string;
     areaName: string;
     planId: string;
+    // Reseller/mitra attribution carried over from the lead (P3.D.2).
+    resellerId?: string | null;
   }): Promise<CustomerResponse> {
     const serviceability = await this.coverage.checkServiceability(input.areaName);
     if (!serviceability.serviceable) {
@@ -136,6 +139,7 @@ export class OnboardingService {
       areaName: input.areaName,
       planId: input.planId,
       userId: login?.userId ?? null,
+      resellerId: input.resellerId ?? null,
     });
     await this.workOrders.scheduleInstall({
       customerId: customer.id,

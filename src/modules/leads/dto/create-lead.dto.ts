@@ -15,6 +15,9 @@ export const CreateLeadSchema = z
     estValue: z.number().int().nonnegative(),
     source: z.enum(['walk_in', 'referral', 'online', 'reseller']),
     note: z.string().trim().max(500).optional(),
+    // Acquisition channel (P3.D.2): which reseller/mitra brought this lead.
+    // Propagated to the customer on convert.
+    resellerId: z.uuid().nullable().optional(),
   })
   .strict();
 

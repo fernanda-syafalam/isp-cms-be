@@ -112,13 +112,14 @@ describe('OnboardingService', () => {
       areaName: 'Bangsri',
       planId: '00000000-0000-0000-0000-0000000000p1',
       userId: USER_ID,
-      // No geo/KYC/ODP on the base fixture — all default to null.
+      // No geo/KYC/ODP/reseller on the base fixture — all default to null.
       lat: null,
       lng: null,
       odpId: null,
       ktp: null,
       npwp: null,
       consentAt: null,
+      resellerId: null,
     });
     // The install work order is linked to the new customer with the chosen
     // technician and date (a real Date, not the raw string).
@@ -167,6 +168,13 @@ describe('OnboardingService', () => {
     expect(customers.onboard).toHaveBeenCalledWith(
       expect.objectContaining({ ktp: '3320123456780001', consentAt: null }),
     );
+  });
+
+  it('threads a supplied resellerId into customers.onboard (P3.D.2)', async () => {
+    const resellerId = '00000000-0000-0000-0000-0000000000a1';
+    await service.onboard({ ...input, resellerId });
+
+    expect(customers.onboard).toHaveBeenCalledWith(expect.objectContaining({ resellerId }));
   });
 
   it('skips login provisioning when the wizard has no email', async () => {
@@ -269,6 +277,32 @@ describe('OnboardingService', () => {
       expect(contracts.create).toHaveBeenCalledWith(CUSTOMER_ID);
       // Leads carry no odpId — port assignment is never attempted.
       expect(odp.assignPort).not.toHaveBeenCalled();
+    });
+
+    it('forwards resellerId into customers.onboard (P3.D.2)', async () => {
+      const resellerId = '00000000-0000-0000-0000-0000000000a1';
+      await service.onboardFromLead({
+        fullName: 'Budi Santoso',
+        phone: '081200000000',
+        address: 'Jl. Mawar 1',
+        areaName: 'Bangsri',
+        planId: '00000000-0000-0000-0000-0000000000p1',
+        resellerId,
+      });
+
+      expect(customers.onboard).toHaveBeenCalledWith(expect.objectContaining({ resellerId }));
+    });
+
+    it('defaults resellerId to null when the lead carries none', async () => {
+      await service.onboardFromLead({
+        fullName: 'Budi Santoso',
+        phone: '081200000000',
+        address: 'Jl. Mawar 1',
+        areaName: 'Bangsri',
+        planId: '00000000-0000-0000-0000-0000000000p1',
+      });
+
+      expect(customers.onboard).toHaveBeenCalledWith(expect.objectContaining({ resellerId: null }));
     });
 
     it('blocks the lead conversion with 422 when the area is not serviceable', async () => {

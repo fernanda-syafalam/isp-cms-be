@@ -34,6 +34,7 @@ export class LeadsService {
       estValue: input.estValue,
       source: input.source,
       note: input.note ?? null,
+      resellerId: input.resellerId ?? null,
     });
     this.logger.log({ leadId: lead.id }, 'lead created');
     return toLeadResponse(lead);
@@ -71,6 +72,9 @@ export class LeadsService {
       address: lead.address,
       areaName: lead.areaName,
       planId: plan.id,
+      // Propagate the lead's acquisition channel (P3.D.2) so the resulting
+      // customer keeps the same reseller attribution.
+      resellerId: lead.resellerId,
     });
 
     const won = await this.repo.setStage(id, 'won');
@@ -91,6 +95,7 @@ function toLeadResponse(row: Lead): LeadResponse {
     estValue: row.estValue,
     source: row.source,
     note: row.note,
+    resellerId: row.resellerId,
     createdAt: row.createdAt.toISOString(),
   };
 }
