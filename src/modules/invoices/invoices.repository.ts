@@ -1,7 +1,8 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, count, desc, eq, gte, ilike, inArray, or, sql } from 'drizzle-orm';
 import { buildOrderBy } from '../../common/utils/list-sort';
-import { DrizzleService } from '../../infrastructure/database/drizzle.service';
+import { type Db, DrizzleService } from '../../infrastructure/database/drizzle.service';
+import { customers } from '../../infrastructure/database/schema/customers.schema';
 import {
   type Invoice,
   type NewInvoice,
@@ -12,6 +13,10 @@ import {
 } from '../../infrastructure/database/schema/invoices.schema';
 import type { InvoiceListResponse, InvoiceSummary } from './dto/invoice-response.dto';
 import type { PaymentReconciliation } from './dto/payment-reconciliation.dto';
+
+// The transaction handle drizzle hands its callback — used to type the
+// private write helper without an `any` (mirrors VouchersRepository).
+type DbTx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 export interface InvoiceListFilter {
   status?: Invoice['status'];
@@ -223,6 +228,149 @@ export class InvoicesRepository {
       throw new ConflictException('Saldo tagihan sudah berubah — muat ulang lalu coba lagi');
     }
     return row;
+  }
+
+  /**
+   * Record a (partial or full) payment against an invoice, atomically (C2,
+   * mirrors `VouchersRepository.settle` / `ResellersRepository.disbursePayout`):
+   * the ledger row, the invoice's `paid_amount`/status flip, and the paying
+   * customer's `outstanding` refresh either all land together or none do.
+   * Previously these were three separate round-trips through `applyPayment` +
+   * `createPayment` + a later `sumUnpaidByCustomer`/`setBilling` call — a
+   * crash after the status flip committed left a `paid` invoice with no
+   * payments row: money invisible to cash-drawer reconciliation and never
+   * retried.
+   *
+   * Steps, all inside `tx`:
+   *  1. `SELECT ... FOR UPDATE` locks the invoice row — a concurrent second
+   *     call on the same id blocks until this transaction commits, then
+   *     re-reads a status/balance that has since moved.
+   *  2. Idempotency: an already-`paid` invoice is a no-op — no new payment
+   *     row, no re-application (mirrors `settle()`'s used-voucher guard; the
+   *     service already short-circuits on this too, so this is defense in
+   *     depth against a race between the service's read and this lock).
+   *  3. Re-validates `input.amount` against the balance due on the LOCKED
+   *     row (not the caller's possibly-stale snapshot) — throws the same
+   *     `ConflictException` the old `applyPayment` WHERE guard threw on a
+   *     genuine race.
+   *  4. Inserts the payment ledger row.
+   *  5. Updates `paid_amount`/status/`paid_at` on the invoice.
+   *  6. Recomputes and persists `customers.outstanding` from the exact same
+   *     expression `sumUnpaidByCustomer` uses — never a hand-computed delta
+   *     (see `VouchersRepository.allocateToInvoices` for why that matters).
+   *
+   * This is the same deliberate "one repository per table" exception
+   * `VouchersRepository.settle` documents: it reaches into `customers`
+   * directly so the outstanding refresh shares this transaction. Whether the
+   * payment cleared an isolir customer's debt is signaled back via
+   * `reactivated` — flipping `customers.status` back to `aktif` is done here
+   * (same table, same transaction), but re-enabling the PPPoE secret (a
+   * different module's repository) and posting the reseller commission stay
+   * in the service, outside this transaction, unchanged from before.
+   */
+  async recordPayment(
+    invoiceId: string,
+    input: {
+      amount: number;
+      method: Payment['method'];
+      tenderedAmount: number | null;
+      changeAmount: number | null;
+    },
+  ): Promise<{ invoice: Invoice; reactivated: boolean }> {
+    return this.db.transaction(async (tx) => {
+      const [invoice] = await tx
+        .select()
+        .from(invoices)
+        .where(eq(invoices.id, invoiceId))
+        .for('update')
+        .limit(1);
+      if (!invoice) {
+        throw new NotFoundException('invoice not found');
+      }
+      if (invoice.status === 'paid') {
+        return { invoice, reactivated: false }; // idempotent — see method doc.
+      }
+
+      const total = invoice.amount + invoice.lateFee + invoice.taxAmount - invoice.discountAmount;
+      const balanceDue = total - invoice.paidAmount;
+      if (input.amount > balanceDue) {
+        // The balance moved under us since the caller's snapshot — surface as
+        // a conflict so it re-reads rather than silently over-crediting.
+        throw new ConflictException('Saldo tagihan sudah berubah — muat ulang lalu coba lagi');
+      }
+
+      await tx.insert(payments).values({
+        invoiceId: invoice.id,
+        invoiceNo: invoice.invoiceNo,
+        customerId: invoice.customerId,
+        customerName: invoice.customerName,
+        amount: input.amount,
+        method: input.method,
+        tenderedAmount: input.tenderedAmount,
+        changeAmount: input.changeAmount,
+      });
+
+      const paidAmount = invoice.paidAmount + input.amount;
+      const paidInFull = paidAmount >= total;
+      const [updated] = await tx
+        .update(invoices)
+        .set({
+          paidAmount,
+          status: paidInFull ? 'paid' : 'partial',
+          paidAt: paidInFull ? sql`now()` : invoice.paidAt,
+          updatedAt: sql`now()`,
+        })
+        .where(eq(invoices.id, invoiceId))
+        .returning();
+      if (!updated) {
+        throw new NotFoundException('invoice not found');
+      }
+
+      const reactivated = await this.refreshOutstandingTx(tx, invoice.customerId);
+      return { invoice: updated, reactivated };
+    });
+  }
+
+  /**
+   * Recompute `customers.outstanding` from `sumUnpaidByCustomer`'s exact
+   * expression and persist it, inside the caller's transaction — shared by
+   * `recordPayment` (C2) and available to any other write that must keep
+   * `outstanding` in sync within the same transaction (C3 refreshes it
+   * outside a transaction via the public `sumUnpaidByCustomer` + the
+   * customers repository instead, since invoice-create has no invoice-row
+   * lock to hold open). Reactivates an isolir customer whose balance just
+   * reached zero — mirrors `InvoicesService.refreshCustomerBilling`'s old
+   * gate (strictly on the balance, never on "no more overdue invoices").
+   */
+  private async refreshOutstandingTx(tx: DbTx, customerId: string): Promise<boolean> {
+    const [sumRow] = await tx
+      .select({
+        total: sql<string>`coalesce(sum(${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount}), 0)`,
+      })
+      .from(invoices)
+      .where(
+        and(eq(invoices.customerId, customerId), inArray(invoices.status, [...UNPAID_STATUSES])),
+      );
+    const outstanding = Number(sumRow?.total ?? 0);
+
+    const [customerRow] = await tx
+      .select({ status: customers.status })
+      .from(customers)
+      .where(eq(customers.id, customerId))
+      .for('update')
+      .limit(1);
+    const reactivate = customerRow?.status === 'isolir' && outstanding === 0;
+
+    await tx
+      .update(customers)
+      .set({
+        outstanding,
+        ...(reactivate ? { status: 'aktif' as const } : {}),
+        updatedAt: sql`now()`,
+      })
+      .where(eq(customers.id, customerId));
+
+    return reactivate;
   }
 
   /**

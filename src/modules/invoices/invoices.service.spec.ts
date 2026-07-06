@@ -62,11 +62,10 @@ describe('InvoicesService', () => {
       create: vi.fn(),
       existsForPeriod: vi.fn(),
       markPaid: vi.fn(),
-      applyPayment: vi.fn(),
+      recordPayment: vi.fn(),
       sumUnpaidByCustomer: vi.fn(),
       countOverdueByCustomer: vi.fn(),
       listPayments: vi.fn(),
-      createPayment: vi.fn(),
       reconciliation: vi.fn(),
     };
     customers = {
@@ -222,40 +221,37 @@ describe('InvoicesService', () => {
   });
 
   describe('pay', () => {
+    // C2: `pay()` now delegates the ledger row + status flip + outstanding
+    // refresh to ONE atomic `repo.recordPayment` call (see
+    // `invoices.repository.ts` and its int-spec for the transactional
+    // behavior itself) — these unit tests assert the service calls that one
+    // method with the right computed inputs and wires its result correctly,
+    // rather than orchestrating `applyPayment`/`createPayment` itself.
     it('settles the invoice in full, writes the full total to the ledger, and reactivates an isolated customer', async () => {
       repo.findById.mockResolvedValue(pendingInvoice);
-      repo.applyPayment.mockResolvedValue({
-        ...pendingInvoice,
-        status: 'paid',
-        paidAmount: 222_000,
-        paidAt: new Date('2026-06-15T10:00:00.000Z'),
+      repo.recordPayment.mockResolvedValue({
+        invoice: {
+          ...pendingInvoice,
+          status: 'paid',
+          paidAmount: 222_000,
+          paidAt: new Date('2026-06-15T10:00:00.000Z'),
+        },
+        reactivated: true,
       });
-      repo.sumUnpaidByCustomer.mockResolvedValue(0);
-      repo.countOverdueByCustomer.mockResolvedValue(0);
-      customers.findById.mockResolvedValue({
-        id: CUSTOMER_ID,
-        status: 'isolir',
-      });
+      // Only used for the commission lookup now — reactivation is decided
+      // and applied inside the repository's transaction.
+      customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
 
       const result = await service.pay(pendingInvoice.id, {
         method: 'transfer',
       });
 
       // amount defaults to the full balance due = amount + lateFee + taxAmount
-      expect(repo.applyPayment).toHaveBeenCalledWith(pendingInvoice.id, 222_000);
-      expect(repo.createPayment).toHaveBeenCalledWith(
-        expect.objectContaining({
-          amount: 222_000,
-          method: 'transfer',
-          invoiceNo: 'INV-2026-100',
-          tenderedAmount: null,
-          changeAmount: null,
-        }),
-      );
-      // no debt left + no overdue -> reactivate from isolir
-      expect(customers.setBilling).toHaveBeenCalledWith(CUSTOMER_ID, {
-        outstanding: 0,
-        status: 'aktif',
+      expect(repo.recordPayment).toHaveBeenCalledWith(pendingInvoice.id, {
+        amount: 222_000,
+        method: 'transfer',
+        tenderedAmount: null,
+        changeAmount: null,
       });
       // ADR-0008: reactivation re-enables the PPPoE secret on the router.
       expect(secrets.setDisabledByCustomerId).toHaveBeenCalledWith(CUSTOMER_ID, false);
@@ -268,25 +264,21 @@ describe('InvoicesService', () => {
 
     it('records a partial payment: status becomes partial, balance stays > 0, and the customer is not reactivated', async () => {
       repo.findById.mockResolvedValue(pendingInvoice);
-      repo.applyPayment.mockResolvedValue({
-        ...pendingInvoice,
-        status: 'partial',
-        paidAmount: 100_000,
+      repo.recordPayment.mockResolvedValue({
+        invoice: { ...pendingInvoice, status: 'partial', paidAmount: 100_000 },
+        reactivated: false,
       });
-      repo.sumUnpaidByCustomer.mockResolvedValue(122_000);
-      repo.countOverdueByCustomer.mockResolvedValue(0);
-      customers.findById.mockResolvedValue({ id: CUSTOMER_ID, status: 'isolir' });
+      customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
 
       const result = await service.pay(pendingInvoice.id, { method: 'transfer', amount: 100_000 });
 
-      expect(repo.applyPayment).toHaveBeenCalledWith(pendingInvoice.id, 100_000);
-      expect(repo.createPayment).toHaveBeenCalledWith(
+      expect(repo.recordPayment).toHaveBeenCalledWith(
+        pendingInvoice.id,
         expect.objectContaining({ amount: 100_000, method: 'transfer' }),
       );
       expect(result.status).toBe('partial');
       expect(result.balanceDue).toBe(122_000);
-      // Still isolir/in-debt -> no reactivation, no commission, no secret re-enable.
-      expect(customers.setBilling).toHaveBeenCalledWith(CUSTOMER_ID, { outstanding: 122_000 });
+      // Still in debt -> no reactivation, no commission, no secret re-enable.
       expect(secrets.setDisabledByCustomerId).not.toHaveBeenCalled();
       expect(resellersFake.postCommissionForInvoice).not.toHaveBeenCalled();
     });
@@ -294,27 +286,27 @@ describe('InvoicesService', () => {
     it('a second partial payment that clears the balance flips to paid, stamps paidAt, and reactivates the isolir customer', async () => {
       const partiallyPaid: Invoice = { ...pendingInvoice, status: 'partial', paidAmount: 100_000 };
       repo.findById.mockResolvedValue(partiallyPaid);
-      repo.applyPayment.mockResolvedValue({
-        ...partiallyPaid,
-        status: 'paid',
-        paidAmount: 222_000,
-        paidAt: new Date('2026-06-20T09:00:00.000Z'),
+      repo.recordPayment.mockResolvedValue({
+        invoice: {
+          ...partiallyPaid,
+          status: 'paid',
+          paidAmount: 222_000,
+          paidAt: new Date('2026-06-20T09:00:00.000Z'),
+        },
+        reactivated: true,
       });
-      repo.sumUnpaidByCustomer.mockResolvedValue(0);
-      repo.countOverdueByCustomer.mockResolvedValue(0);
-      customers.findById.mockResolvedValue({ id: CUSTOMER_ID, status: 'isolir' });
+      customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
 
       // Remaining balance = 222_000 - 100_000 = 122_000, paid in full now.
       const result = await service.pay(partiallyPaid.id, { method: 'transfer', amount: 122_000 });
 
-      expect(repo.applyPayment).toHaveBeenCalledWith(partiallyPaid.id, 122_000);
+      expect(repo.recordPayment).toHaveBeenCalledWith(
+        partiallyPaid.id,
+        expect.objectContaining({ amount: 122_000 }),
+      );
       expect(result.status).toBe('paid');
       expect(result.paidAt).toBe('2026-06-20T09:00:00.000Z');
       expect(result.balanceDue).toBe(0);
-      expect(customers.setBilling).toHaveBeenCalledWith(CUSTOMER_ID, {
-        outstanding: 0,
-        status: 'aktif',
-      });
       expect(secrets.setDisabledByCustomerId).toHaveBeenCalledWith(CUSTOMER_ID, false);
     });
 
@@ -323,27 +315,24 @@ describe('InvoicesService', () => {
       await expect(
         service.pay(pendingInvoice.id, { method: 'transfer', amount: 999_999 }),
       ).rejects.toThrow();
-      expect(repo.applyPayment).not.toHaveBeenCalled();
+      expect(repo.recordPayment).not.toHaveBeenCalled();
     });
 
     it('cash payment computes the change from the tendered amount', async () => {
       repo.findById.mockResolvedValue(pendingInvoice);
-      repo.applyPayment.mockResolvedValue({
-        ...pendingInvoice,
-        status: 'paid',
-        paidAmount: 222_000,
-        paidAt: new Date(),
+      repo.recordPayment.mockResolvedValue({
+        invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
+        reactivated: false,
       });
-      repo.sumUnpaidByCustomer.mockResolvedValue(0);
-      repo.countOverdueByCustomer.mockResolvedValue(0);
-      customers.findById.mockResolvedValue({ id: CUSTOMER_ID, status: 'aktif' });
+      customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
 
       await service.pay(pendingInvoice.id, {
         method: 'cash',
         tenderedAmount: 250_000,
       });
 
-      expect(repo.createPayment).toHaveBeenCalledWith(
+      expect(repo.recordPayment).toHaveBeenCalledWith(
+        pendingInvoice.id,
         expect.objectContaining({
           amount: 222_000,
           method: 'cash',
@@ -358,19 +347,15 @@ describe('InvoicesService', () => {
       await expect(
         service.pay(pendingInvoice.id, { method: 'cash', tenderedAmount: 100_000 }),
       ).rejects.toThrow();
-      expect(repo.applyPayment).not.toHaveBeenCalled();
+      expect(repo.recordPayment).not.toHaveBeenCalled();
     });
 
     it('posts the acquiring reseller commission once the invoice is fully paid (P3.D.1)', async () => {
       repo.findById.mockResolvedValue(pendingInvoice);
-      repo.applyPayment.mockResolvedValue({
-        ...pendingInvoice,
-        status: 'paid',
-        paidAmount: 222_000,
-        paidAt: new Date(),
+      repo.recordPayment.mockResolvedValue({
+        invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
+        reactivated: false,
       });
-      repo.sumUnpaidByCustomer.mockResolvedValue(0);
-      repo.countOverdueByCustomer.mockResolvedValue(0);
       customers.findById.mockResolvedValue({
         id: CUSTOMER_ID,
         status: 'aktif',
@@ -391,13 +376,10 @@ describe('InvoicesService', () => {
 
     it('does not post a commission for a partial payment (only once fully paid)', async () => {
       repo.findById.mockResolvedValue(pendingInvoice);
-      repo.applyPayment.mockResolvedValue({
-        ...pendingInvoice,
-        status: 'partial',
-        paidAmount: 100_000,
+      repo.recordPayment.mockResolvedValue({
+        invoice: { ...pendingInvoice, status: 'partial', paidAmount: 100_000 },
+        reactivated: false,
       });
-      repo.sumUnpaidByCustomer.mockResolvedValue(122_000);
-      repo.countOverdueByCustomer.mockResolvedValue(0);
       customers.findById.mockResolvedValue({
         id: CUSTOMER_ID,
         status: 'aktif',
@@ -412,14 +394,10 @@ describe('InvoicesService', () => {
 
     it('skips commission when the reseller rate is zero', async () => {
       repo.findById.mockResolvedValue(pendingInvoice);
-      repo.applyPayment.mockResolvedValue({
-        ...pendingInvoice,
-        status: 'paid',
-        paidAmount: 222_000,
-        paidAt: new Date(),
+      repo.recordPayment.mockResolvedValue({
+        invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
+        reactivated: false,
       });
-      repo.sumUnpaidByCustomer.mockResolvedValue(0);
-      repo.countOverdueByCustomer.mockResolvedValue(0);
       customers.findById.mockResolvedValue({ id: CUSTOMER_ID, status: 'aktif', resellerId: 'r-1' });
       resellersFake.findById.mockResolvedValue({ id: 'r-1', commissionPct: 0 });
 
@@ -428,35 +406,26 @@ describe('InvoicesService', () => {
       expect(resellersFake.postCommissionForInvoice).not.toHaveBeenCalled();
     });
 
-    it('keeps an active customer active and only refreshes the balance', async () => {
+    it('does not reactivate or touch the secret when the repository reports no reactivation', async () => {
       repo.findById.mockResolvedValue(pendingInvoice);
-      repo.applyPayment.mockResolvedValue({
-        ...pendingInvoice,
-        status: 'paid',
-        paidAmount: 222_000,
-        paidAt: new Date(),
+      repo.recordPayment.mockResolvedValue({
+        invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
+        reactivated: false,
       });
-      repo.sumUnpaidByCustomer.mockResolvedValue(50_000);
-      repo.countOverdueByCustomer.mockResolvedValue(1);
-      customers.findById.mockResolvedValue({
-        id: CUSTOMER_ID,
-        status: 'aktif',
-      });
+      customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
 
       await service.pay(pendingInvoice.id, { method: 'cash' });
-      expect(customers.setBilling).toHaveBeenCalledWith(CUSTOMER_ID, {
-        outstanding: 50_000,
-      });
-      // Still in debt -> no reactivation, so the secret is left untouched.
+
+      // Still in debt (or was never isolir) -> no reactivation, so the
+      // secret is left untouched. Deciding + persisting `outstanding` and
+      // any reactivation now happens inside `repo.recordPayment` itself.
       expect(secrets.setDisabledByCustomerId).not.toHaveBeenCalled();
     });
 
     it('is a no-op for an already-paid invoice (no duplicate ledger entry)', async () => {
       repo.findById.mockResolvedValue({ ...pendingInvoice, status: 'paid' });
       const result = await service.pay(pendingInvoice.id, { method: 'qris' });
-      expect(repo.applyPayment).not.toHaveBeenCalled();
-      expect(repo.createPayment).not.toHaveBeenCalled();
-      expect(customers.setBilling).not.toHaveBeenCalled();
+      expect(repo.recordPayment).not.toHaveBeenCalled();
       expect(result.status).toBe('paid');
     });
 
@@ -491,6 +460,23 @@ describe('InvoicesService', () => {
           status: 'pending',
         }),
       );
+    });
+
+    // C3: a freshly-billed customer must show their new debt immediately —
+    // not `outstanding = 0` until they pay or cross into isolir.
+    it('refreshes the newly-billed customer outstanding via the same sumUnpaidByCustomer recompute pay() uses', async () => {
+      customers.findActiveBillable.mockResolvedValue([
+        { id: 'c1', fullName: 'Ani', planPriceMonthly: 200_000, billingAnchorDay: null },
+      ]);
+      repo.existsForPeriod.mockResolvedValue(false);
+      repo.create.mockResolvedValue({ ...pendingInvoice, id: 'inv-c1', customerId: 'c1' });
+      // The customer's only other unpaid invoice plus this new one.
+      repo.sumUnpaidByCustomer.mockResolvedValue(222_000);
+
+      await service.run();
+
+      expect(repo.sumUnpaidByCustomer).toHaveBeenCalledWith('c1');
+      expect(customers.setBilling).toHaveBeenCalledWith('c1', { outstanding: 222_000 });
     });
 
     it('honors billingAnchorDay for the due date instead of the settings dueDays policy', async () => {
@@ -544,7 +530,8 @@ describe('InvoicesService', () => {
 
       // 200_000 + 22_000 (PPN) gross; the 50_000 credit fits under that, so it's
       // taken in full as the discount line — never separately subtracted from
-      // outstanding (refreshCustomerBilling only reads invoices.paidAmount/total).
+      // outstanding (the C3 refresh only reads invoices.paidAmount/total via
+      // sumUnpaidByCustomer, so the discount and the outstanding stay consistent).
       expect(repo.create).toHaveBeenCalledWith(
         expect.objectContaining({ customerId: 'c1', discountAmount: 50_000 }),
       );
@@ -573,6 +560,53 @@ describe('InvoicesService', () => {
         ['credit-1', 'credit-2'],
         'inv-new',
       );
+    });
+  });
+
+  describe('generateFirstInvoice', () => {
+    // C3: an onboarded customer's first bill must show up in their
+    // outstanding balance right away — not sit at 0 until they pay or go
+    // isolir — using the exact same sumUnpaidByCustomer recompute as pay().
+    it('creates the invoice and refreshes the customer outstanding to the non-zero recomputed sum', async () => {
+      customers.findBillingInfo.mockResolvedValue({
+        fullName: 'Ani',
+        planPriceMonthly: 200_000,
+        billingAnchorDay: null,
+      });
+      repo.existsForPeriod.mockResolvedValue(false);
+      repo.create.mockResolvedValue({ ...pendingInvoice, id: 'inv-first', customerId: 'c1' });
+      repo.sumUnpaidByCustomer.mockResolvedValue(222_000);
+
+      await service.generateFirstInvoice('c1');
+
+      expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ customerId: 'c1' }));
+      expect(repo.sumUnpaidByCustomer).toHaveBeenCalledWith('c1');
+      expect(customers.setBilling).toHaveBeenCalledWith('c1', { outstanding: 222_000 });
+    });
+
+    it('is a no-op (and never refreshes outstanding) when the customer is unknown', async () => {
+      customers.findBillingInfo.mockResolvedValue(null);
+
+      await service.generateFirstInvoice('missing');
+
+      expect(repo.create).not.toHaveBeenCalled();
+      expect(repo.sumUnpaidByCustomer).not.toHaveBeenCalled();
+      expect(customers.setBilling).not.toHaveBeenCalled();
+    });
+
+    it('is idempotent: skips (and never refreshes outstanding again) when a period invoice already exists', async () => {
+      customers.findBillingInfo.mockResolvedValue({
+        fullName: 'Ani',
+        planPriceMonthly: 200_000,
+        billingAnchorDay: null,
+      });
+      repo.existsForPeriod.mockResolvedValue(true);
+
+      await service.generateFirstInvoice('c1');
+
+      expect(repo.create).not.toHaveBeenCalled();
+      expect(repo.sumUnpaidByCustomer).not.toHaveBeenCalled();
+      expect(customers.setBilling).not.toHaveBeenCalled();
     });
   });
 

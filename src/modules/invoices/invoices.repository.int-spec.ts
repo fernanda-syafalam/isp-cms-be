@@ -1,4 +1,5 @@
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { eq } from 'drizzle-orm';
 import { type NodePgDatabase, drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -417,6 +418,172 @@ describe('InvoicesRepository (integration)', () => {
     it('throws for an unknown invoice', async () => {
       const missing = '00000000-0000-0000-0000-0000000000ff';
       await expect(repo.applyPayment(missing, 1)).rejects.toThrow();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // recordPayment — C2: the ledger row, the invoice's paid_amount/status
+  // flip, and the customer's outstanding refresh all land atomically.
+  // ---------------------------------------------------------------------------
+
+  describe('recordPayment', () => {
+    beforeEach(async () => {
+      // recordPayment writes customers.outstanding/status directly, and the
+      // outer beforeEach above only clears invoices/payments — reset the
+      // shared customer row to a known baseline before every test here.
+      await db
+        .update(customers)
+        .set({ outstanding: 0, status: 'aktif' })
+        .where(eq(customers.id, customerId));
+    });
+
+    it('writes exactly one payment row and flips the invoice to paid in one call', async () => {
+      const created = await repo.create(newInvoice()); // total = 222_000
+
+      const { invoice, reactivated } = await repo.recordPayment(created.id, {
+        amount: 222_000,
+        method: 'transfer',
+        tenderedAmount: null,
+        changeAmount: null,
+      });
+
+      expect(invoice.status).toBe('paid');
+      expect(invoice.paidAmount).toBe(222_000);
+      expect(invoice.paidAt).toBeInstanceOf(Date);
+      expect(reactivated).toBe(false); // customer was never isolir
+
+      const ledger = await repo.listPayments({ limit: 50, offset: 0 });
+      expect(ledger.total).toBe(1);
+      expect(ledger.items[0]?.amount).toBe(222_000);
+      expect(ledger.items[0]?.invoiceId).toBe(created.id);
+    });
+
+    it('a double-pay (invoice already paid) is a no-op: no second ledger row, no over-credit', async () => {
+      const created = await repo.create(newInvoice());
+      await repo.recordPayment(created.id, {
+        amount: 222_000,
+        method: 'transfer',
+        tenderedAmount: null,
+        changeAmount: null,
+      });
+
+      const retry = await repo.recordPayment(created.id, {
+        amount: 222_000,
+        method: 'transfer',
+        tenderedAmount: null,
+        changeAmount: null,
+      });
+
+      expect(retry.invoice.status).toBe('paid');
+      expect(retry.reactivated).toBe(false);
+      const ledger = await repo.listPayments({ limit: 50, offset: 0 });
+      expect(ledger.total).toBe(1); // still exactly one payment row
+    });
+
+    it('a partial payment increments paid_amount, flips to partial, and refreshes outstanding to what remains', async () => {
+      const created = await repo.create(newInvoice()); // total = 222_000
+
+      const { invoice, reactivated } = await repo.recordPayment(created.id, {
+        amount: 100_000,
+        method: 'cash',
+        tenderedAmount: 100_000,
+        changeAmount: 0,
+      });
+
+      expect(invoice.status).toBe('partial');
+      expect(invoice.paidAmount).toBe(100_000);
+      expect(invoice.paidAt).toBeNull();
+      expect(reactivated).toBe(false);
+
+      const [customer] = await db
+        .select()
+        .from(customers)
+        .where(eq(customers.id, customerId))
+        .limit(1);
+      expect(customer?.outstanding).toBe(122_000); // 222_000 - 100_000
+    });
+
+    it('rejects an amount greater than the balance due (race guard) without writing a ledger row', async () => {
+      const created = await repo.create(newInvoice()); // total = 222_000
+
+      await expect(
+        repo.recordPayment(created.id, {
+          amount: 999_999,
+          method: 'transfer',
+          tenderedAmount: null,
+          changeAmount: null,
+        }),
+      ).rejects.toThrow();
+
+      const ledger = await repo.listPayments({ limit: 50, offset: 0 });
+      expect(ledger.total).toBe(0);
+      const row = await repo.findById(created.id);
+      expect(row?.status).toBe('pending');
+      expect(row?.paidAmount).toBe(0);
+    });
+
+    it('throws for an unknown invoice without writing anything', async () => {
+      const missing = '00000000-0000-0000-0000-0000000000ff';
+      await expect(
+        repo.recordPayment(missing, {
+          amount: 1,
+          method: 'transfer',
+          tenderedAmount: null,
+          changeAmount: null,
+        }),
+      ).rejects.toThrow();
+      const ledger = await repo.listPayments({ limit: 50, offset: 0 });
+      expect(ledger.total).toBe(0);
+    });
+
+    it('reactivates an isolir customer whose balance reaches zero, and reports it back', async () => {
+      await db
+        .update(customers)
+        .set({ status: 'isolir', outstanding: 222_000 })
+        .where(eq(customers.id, customerId));
+      const created = await repo.create(newInvoice()); // total = 222_000
+
+      const { invoice, reactivated } = await repo.recordPayment(created.id, {
+        amount: 222_000,
+        method: 'transfer',
+        tenderedAmount: null,
+        changeAmount: null,
+      });
+
+      expect(invoice.status).toBe('paid');
+      expect(reactivated).toBe(true);
+      const [customer] = await db
+        .select()
+        .from(customers)
+        .where(eq(customers.id, customerId))
+        .limit(1);
+      expect(customer?.status).toBe('aktif');
+      expect(customer?.outstanding).toBe(0);
+    });
+
+    it('does not reactivate an isolir customer while a balance remains', async () => {
+      await db
+        .update(customers)
+        .set({ status: 'isolir', outstanding: 222_000 })
+        .where(eq(customers.id, customerId));
+      const created = await repo.create(newInvoice()); // total = 222_000
+
+      const { invoice, reactivated } = await repo.recordPayment(created.id, {
+        amount: 100_000,
+        method: 'transfer',
+        tenderedAmount: null,
+        changeAmount: null,
+      });
+
+      expect(invoice.status).toBe('partial');
+      expect(reactivated).toBe(false);
+      const [customer] = await db
+        .select()
+        .from(customers)
+        .where(eq(customers.id, customerId))
+        .limit(1);
+      expect(customer?.status).toBe('isolir');
+      expect(customer?.outstanding).toBe(122_000);
     });
   });
 
