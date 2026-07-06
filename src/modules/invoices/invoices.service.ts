@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import type { Invoice, Payment } from '../../infrastructure/database/schema/invoices.schema';
 import { CustomersRepository } from '../customers/customers.repository';
+import { NotificationsService } from '../notifications/notifications.service';
 import { ResellersRepository } from '../resellers/resellers.repository';
 import { SecretsRepository } from '../router-resources/secrets.repository';
 import { SettingsService } from '../settings/settings.service';
@@ -44,6 +45,9 @@ export class InvoicesService {
     // A billing run absorbs a customer's pending SLA credits into the new
     // invoice's discount line (P3.A.4).
     private readonly slaCredits: SlaCreditsRepository,
+    // Fires invoice_created/paid via the retried queue (ADR-0012). Best-effort:
+    // see notifyBestEffort — a notification failure must never break billing.
+    private readonly notifications: NotificationsService,
   ) {}
 
   async list(filter: InvoiceListFilter): Promise<InvoiceListResponse> {
@@ -136,10 +140,14 @@ export class InvoicesService {
     if (reactivated) {
       await this.secrets.setDisabledByCustomerId(invoice.customerId, false);
     }
-    // Reactivation + commission are keyed off the invoice actually reaching
-    // 'paid' — a partial payment must never trigger either.
+    // Reactivation + commission + the 'paid' notice are all keyed off the
+    // invoice actually reaching 'paid' — a partial payment must never
+    // trigger any of them. The notice fires AFTER recordPayment's
+    // transaction has already committed (ADR-0012) — never inside it, so a
+    // rolled-back payment can never send a false "paid" message.
     if (updated.status === 'paid') {
       await this.postResellerCommission(invoice.customerId, invoice.id, total);
+      await this.notifyPaid(updated, total);
     }
     this.logger.log(
       { invoiceId: id, method: input.method, amount, status: updated.status },
@@ -218,6 +226,7 @@ export class InvoicesService {
       // C3: a freshly-billed customer must show their new debt immediately,
       // not just once they pay or cross into isolir.
       await this.refreshOutstanding(customer.id);
+      await this.notifyInvoiceCreated(invoice);
       created += 1;
     }
 
@@ -261,6 +270,7 @@ export class InvoicesService {
     // C3: an onboarded/first-billed customer must show their new debt
     // immediately — not `outstanding = 0` until they pay or go isolir.
     await this.refreshOutstanding(customerId);
+    await this.notifyInvoiceCreated(invoice);
     this.logger.log({ customerId }, 'first invoice generated');
   }
 
@@ -301,10 +311,94 @@ export class InvoicesService {
     const outstanding = await this.repo.sumUnpaidByCustomer(customerId);
     await this.customers.setBilling(customerId, { outstanding });
   }
+
+  /**
+   * Notify the customer their invoice was just issued (ADR-0012). jobId is
+   * per invoice id — `run()`/`generateFirstInvoice()` only ever create an
+   * invoice once per period (guarded by `existsForPeriod`), so this can
+   * never double-fire for the same bill. Best-effort: a queue outage must
+   * never fail a billing run (see `notifyBestEffort`).
+   */
+  private async notifyInvoiceCreated(invoice: Invoice): Promise<void> {
+    await this.notifyBestEffort(
+      async () => {
+        const customer = await this.customers.findById(invoice.customerId);
+        if (!customer?.phone) return;
+        await this.notifications.enqueue(
+          {
+            event: 'invoice_created',
+            to: customer.phone,
+            vars: {
+              nama: customer.fullName,
+              no_tagihan: invoice.invoiceNo,
+              jumlah: formatIdr(invoiceTotal(invoice)),
+              jatuh_tempo: invoice.dueDate,
+            },
+          },
+          `invoice_created:${invoice.id}`,
+        );
+      },
+      { event: 'invoice_created', invoiceId: invoice.id },
+    );
+  }
+
+  /**
+   * Notify the customer their payment cleared the invoice in full
+   * (ADR-0012). Only called once `updated.status === 'paid'` — never for a
+   * partial payment. jobId is per invoice id: an invoice can only reach
+   * 'paid' once (repeat calls short-circuit at the top of `pay()`, and a
+   * concurrent race resolves to a single winner inside `recordPayment`'s
+   * `for update` lock), so no period/payment-id component is needed for
+   * idempotency. Best-effort: see `notifyBestEffort`.
+   */
+  private async notifyPaid(invoice: Invoice, total: number): Promise<void> {
+    await this.notifyBestEffort(
+      async () => {
+        const customer = await this.customers.findById(invoice.customerId);
+        if (!customer?.phone) return;
+        await this.notifications.enqueue(
+          {
+            event: 'paid',
+            to: customer.phone,
+            vars: {
+              nama: customer.fullName,
+              no_tagihan: invoice.invoiceNo,
+              jumlah: formatIdr(total),
+            },
+          },
+          `paid:${invoice.id}`,
+        );
+      },
+      { event: 'paid', invoiceId: invoice.id },
+    );
+  }
+
+  // A notification enqueue failure (e.g. Redis unavailable) must never
+  // break the billing/payment write that already committed — log and
+  // swallow rather than rethrow. Mirrors the resilience gap called out in
+  // ADR-0012 for the new events (dunning's own dispatchDunning is not
+  // wrapped this way today).
+  private async notifyBestEffort(
+    fn: () => Promise<void>,
+    context: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      await fn();
+    } catch (err) {
+      this.logger.warn({ ...context, err }, 'notification enqueue failed');
+    }
+  }
 }
 
 function ppnOf(amount: number, rate: number): number {
   return Math.round(amount * rate);
+}
+
+// Whole-rupiah formatting for notification template variables, e.g.
+// "Rp250.000". Duplicated from billing-automation.service.ts's identical
+// helper (same module, kept local rather than extracted — see PR notes).
+function formatIdr(amount: number): string {
+  return `Rp${amount.toLocaleString('id-ID')}`;
 }
 
 // --- date helpers (whole-day, UTC) ------------------------------------

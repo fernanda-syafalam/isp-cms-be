@@ -68,7 +68,7 @@ describe('BillingAutomationService', () => {
       repo.markOverduePastDue.mockResolvedValue(3);
       repo.customerIdsWithOverdue.mockResolvedValue(['c1', 'c2']);
       customers.findById.mockImplementation((id: string) =>
-        Promise.resolve({ id, status: id === 'c1' ? 'aktif' : 'isolir' }),
+        Promise.resolve({ id, status: id === 'c1' ? 'aktif' : 'isolir', phone: null }),
       );
       repo.sumUnpaidByCustomer.mockResolvedValue(247_000);
 
@@ -87,6 +87,53 @@ describe('BillingAutomationService', () => {
       expect(secrets.applyDisabledForCustomer).toHaveBeenCalledTimes(1);
       expect(secrets.applyDisabledForCustomer).toHaveBeenCalledWith('c1', true);
       expect(result).toEqual({ markedOverdue: 3, isolated: 1 });
+    });
+
+    // ADR-0012: the exact "overdue → isolir surprise" this ADR exists to
+    // prevent — the newly-isolated customer must be told via WhatsApp.
+    it('enqueues an isolir notice to each newly-isolated customer with a phone', async () => {
+      repo.markOverduePastDue.mockResolvedValue(1);
+      repo.customerIdsWithOverdue.mockResolvedValue(['c1', 'c2']);
+      customers.findById.mockImplementation((id: string) =>
+        Promise.resolve(
+          id === 'c1'
+            ? { id, status: 'aktif', phone: '0812', fullName: 'Budi' }
+            : { id, status: 'aktif', phone: null, fullName: 'Tanpa Telepon' },
+        ),
+      );
+      repo.sumUnpaidByCustomer.mockResolvedValue(300_000);
+
+      await service.isolirOverdue();
+
+      // c1 has a phone -> enqueued; c2 has none -> skipped (still isolated).
+      expect(notifications.enqueue).toHaveBeenCalledTimes(1);
+      expect(notifications.enqueue).toHaveBeenCalledWith(
+        { event: 'isolir', to: '0812', vars: { nama: 'Budi', jumlah: 'Rp300.000' } },
+        expect.stringMatching(/^isolir:c1:/),
+      );
+      // c2 is still isolated even without a phone to notify.
+      expect(customers.setBilling).toHaveBeenCalledTimes(2);
+      expect(secrets.applyDisabledForCustomer).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not fail the isolir run when the notification enqueue rejects (best-effort)', async () => {
+      repo.markOverduePastDue.mockResolvedValue(1);
+      repo.customerIdsWithOverdue.mockResolvedValue(['c1']);
+      customers.findById.mockResolvedValue({
+        id: 'c1',
+        status: 'aktif',
+        phone: '0812',
+        fullName: 'Budi',
+      });
+      repo.sumUnpaidByCustomer.mockResolvedValue(300_000);
+      notifications.enqueue.mockRejectedValue(new Error('queue down'));
+
+      const result = await service.isolirOverdue();
+
+      // The isolir enforcement (status flip + router secret disable) still
+      // completes even though the notice failed to enqueue.
+      expect(result.isolated).toBe(1);
+      expect(secrets.applyDisabledForCustomer).toHaveBeenCalledWith('c1', true);
     });
   });
 

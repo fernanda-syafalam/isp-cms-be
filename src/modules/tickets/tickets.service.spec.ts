@@ -3,6 +3,7 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Ticket } from '../../infrastructure/database/schema/tickets.schema';
 import { CustomersRepository } from '../customers/customers.repository';
+import { NotificationsService } from '../notifications/notifications.service';
 import { WorkOrdersService } from '../work-orders/work-orders.service';
 import { TicketsRepository } from './tickets.repository';
 import { TicketsService } from './tickets.service';
@@ -32,8 +33,9 @@ const baseTicket: Ticket = {
 describe('TicketsService', () => {
   let service: TicketsService;
   let repo: Record<string, ReturnType<typeof vi.fn>>;
-  let customers: { findIdByFullName: ReturnType<typeof vi.fn> };
+  let customers: { findIdByFullName: ReturnType<typeof vi.fn>; findById: ReturnType<typeof vi.fn> };
   let workOrders: { createFromTicket: ReturnType<typeof vi.fn> };
+  let notifications: { enqueue: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     repo = {
@@ -47,14 +49,16 @@ describe('TicketsService', () => {
       listEvents: vi.fn(),
       markBreachedPastSla: vi.fn(),
     };
-    customers = { findIdByFullName: vi.fn() };
+    customers = { findIdByFullName: vi.fn(), findById: vi.fn() };
     workOrders = { createFromTicket: vi.fn() };
+    notifications = { enqueue: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         TicketsService,
         { provide: TicketsRepository, useValue: repo },
         { provide: CustomersRepository, useValue: customers },
         { provide: WorkOrdersService, useValue: workOrders },
+        { provide: NotificationsService, useValue: notifications },
       ],
     }).compile();
     service = moduleRef.get(TicketsService);
@@ -214,15 +218,27 @@ describe('TicketsService', () => {
           body: 'Ditugaskan ke Teknisi Budi',
         }),
       );
+      // ADR-0012: an assignee-only change has no customer-facing template —
+      // no ticket_update fires (status change is the only trigger chosen).
+      expect(notifications.enqueue).not.toHaveBeenCalled();
     });
 
     it('records a status event and keeps resolved when within the deadline', async () => {
       repo.findById.mockResolvedValue(baseTicket);
       repo.update.mockResolvedValue({ ...baseTicket, status: 'resolved' });
+      customers.findById.mockResolvedValue({ phone: '0812', fullName: 'Budi Santoso' });
+
       await service.update(baseTicket.id, { status: 'resolved' }, AUTHOR);
+
       expect(repo.update.mock.calls[0]?.[1].status).toBe('resolved');
       expect(repo.addEvent).toHaveBeenCalledWith(
         expect.objectContaining({ kind: 'status', body: 'Status → resolved' }),
+      );
+      // ADR-0012: a status transition fires ticket_update to the owning customer.
+      expect(customers.findById).toHaveBeenCalledWith(baseTicket.customerId);
+      expect(notifications.enqueue).toHaveBeenCalledWith(
+        { event: 'ticket_update', to: '0812', vars: { nama: 'Budi Santoso' } },
+        `ticket_update:${baseTicket.id}:resolved`,
       );
     });
 
@@ -240,6 +256,28 @@ describe('TicketsService', () => {
       );
     });
 
+    it('skips the ticket_update notice when the ticket has no linked customer', async () => {
+      const noCustomer = { ...baseTicket, customerId: null };
+      repo.findById.mockResolvedValue(noCustomer);
+      repo.update.mockResolvedValue({ ...noCustomer, status: 'resolved' });
+
+      await service.update(noCustomer.id, { status: 'resolved' }, AUTHOR);
+
+      expect(customers.findById).not.toHaveBeenCalled();
+      expect(notifications.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('does not fail the status update when the notification enqueue rejects (best-effort)', async () => {
+      repo.findById.mockResolvedValue(baseTicket);
+      repo.update.mockResolvedValue({ ...baseTicket, status: 'resolved' });
+      customers.findById.mockResolvedValue({ phone: '0812', fullName: 'Budi Santoso' });
+      notifications.enqueue.mockRejectedValue(new Error('queue down'));
+
+      const result = await service.update(baseTicket.id, { status: 'resolved' }, AUTHOR);
+
+      expect(result.status).toBe('resolved');
+    });
+
     it('throws 404 for a missing ticket', async () => {
       repo.findById.mockResolvedValue(null);
       await expect(service.update('missing', { subject: 'x' }, AUTHOR)).rejects.toBeInstanceOf(
@@ -252,6 +290,7 @@ describe('TicketsService', () => {
     it('resolves an open ticket and appends a workorder + status event', async () => {
       repo.findById.mockResolvedValue(baseTicket);
       repo.update.mockResolvedValue({ ...baseTicket, status: 'resolved' });
+      customers.findById.mockResolvedValue({ phone: '0812', fullName: 'Budi Santoso' });
 
       await service.resolveFromWorkOrder(baseTicket.id, 'WO-9002', AUTHOR);
 
@@ -261,6 +300,11 @@ describe('TicketsService', () => {
       expect(repo.update.mock.calls[0]?.[1].status).toBe('resolved');
       expect(repo.addEvent).toHaveBeenCalledWith(
         expect.objectContaining({ kind: 'status', body: 'Status → resolved' }),
+      );
+      // ADR-0012: the repair-loop close is also a customer-facing transition.
+      expect(notifications.enqueue).toHaveBeenCalledWith(
+        { event: 'ticket_update', to: '0812', vars: { nama: 'Budi Santoso' } },
+        `ticket_update:${baseTicket.id}:resolved`,
       );
     });
 
