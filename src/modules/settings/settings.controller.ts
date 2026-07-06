@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Patch } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
+import { AnyAuthenticatedRole } from '../../common/decorators/any-authenticated-role.decorator';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { SettingsResponseDto } from './dto/settings-response.dto';
@@ -12,6 +13,7 @@ export class SettingsController {
 
   // Any authenticated user may read settings (invoices/print need company +
   // tax data).
+  @AnyAuthenticatedRole()
   @Get()
   @ZodSerializerDto(SettingsResponseDto)
   get() {

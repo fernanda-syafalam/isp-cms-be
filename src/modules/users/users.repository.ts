@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, count, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { normalizeEmail } from '../../common/utils/normalize-email';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import { type NewUser, type User, users } from '../../infrastructure/database/schema/users.schema';
 
@@ -39,11 +40,21 @@ export class UsersRepository {
     return row ?? null;
   }
 
+  /**
+   * Case-insensitive by construction: the argument is normalized
+   * (trim + lowercase) before the comparison, matching how
+   * UsersService.create / bootstrapAdmin normalize on write. Stays a
+   * plain `eq()` against the stored column — index-friendly — rather
+   * than `lower(email) = ...`, since new rows are always stored
+   * lowercased. Pre-existing rows written before this normalization
+   * landed (if any) would need a one-off backfill, out of scope here
+   * (no DB migration in this change).
+   */
   async findByEmail(email: string): Promise<User | null> {
     const [row] = await this.db
       .select()
       .from(users)
-      .where(and(eq(users.email, email), isNull(users.deletedAt)))
+      .where(and(eq(users.email, normalizeEmail(email)), isNull(users.deletedAt)))
       .limit(1);
     return row ?? null;
   }

@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { generateInitialPassword } from '../../common/security/initial-password';
+import { normalizeEmail } from '../../common/utils/normalize-email';
 import type { User } from '../../infrastructure/database/schema/users.schema';
 import type { CreateUserInput } from './dto/create-user.dto';
 import type { UpdateUserInput } from './dto/update-user.dto';
@@ -33,7 +34,10 @@ export class UsersService {
   constructor(private readonly repo: UsersRepository) {}
 
   async create(input: CreateUserInput): Promise<User> {
-    const existing = await this.repo.findByEmail(input.email);
+    // Normalize once here so the stored row and the conflict-check are
+    // both against the canonical form — see common/utils/normalize-email.
+    const email = normalizeEmail(input.email);
+    const existing = await this.repo.findByEmail(email);
     if (existing) {
       // 409 instead of 400 — the request is well-formed, the conflict
       // is with stored state. See Pilar 2.
@@ -42,7 +46,7 @@ export class UsersService {
 
     const passwordHash = await argon2.hash(input.password, ARGON2_OPTIONS);
     const user = await this.repo.create({
-      email: input.email,
+      email,
       fullName: input.fullName,
       passwordHash,
       role: input.role,
@@ -75,7 +79,7 @@ export class UsersService {
 
     const passwordHash = await argon2.hash(input.password, ARGON2_OPTIONS);
     const user = await this.repo.createIfEmpty({
-      email: input.email,
+      email: normalizeEmail(input.email),
       fullName: input.fullName,
       passwordHash,
       role: 'admin',

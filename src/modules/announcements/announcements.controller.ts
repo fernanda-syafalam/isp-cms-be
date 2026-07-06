@@ -1,5 +1,6 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
+import { AnyAuthenticatedRole } from '../../common/decorators/any-authenticated-role.decorator';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { AnnouncementsService } from './announcements.service';
@@ -16,6 +17,7 @@ import { CreateAnnouncementDto } from './dto/create-announcement.dto';
 export class AnnouncementsController {
   constructor(private readonly announcements: AnnouncementsService) {}
 
+  @AnyAuthenticatedRole()
   @Get()
   listActive() {
     return this.announcements.listActive();
