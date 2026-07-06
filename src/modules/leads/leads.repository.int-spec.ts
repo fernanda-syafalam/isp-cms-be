@@ -36,6 +36,7 @@ describe('LeadsRepository (integration)', () => {
         est_value integer NOT NULL,
         source lead_source NOT NULL,
         note varchar(500),
+        reseller_id uuid,
         created_at timestamptz(3) NOT NULL DEFAULT now(),
         updated_at timestamptz(3) NOT NULL DEFAULT now()
       );
@@ -69,6 +70,20 @@ describe('LeadsRepository (integration)', () => {
     const lead = await repo.create(newLead());
     expect(lead.stage).toBe('new');
     expect(lead.note).toBeNull();
+  });
+
+  it('round-trips a lead created with a resellerId (P3.D.2)', async () => {
+    const resellerId = '00000000-0000-0000-0000-0000000000a1';
+    const lead = await repo.create(newLead({ resellerId }));
+    expect(lead.resellerId).toBe(resellerId);
+
+    const found = await repo.findById(lead.id);
+    expect(found?.resellerId).toBe(resellerId);
+  });
+
+  it('defaults resellerId to null when omitted', async () => {
+    const lead = await repo.create(newLead());
+    expect(lead.resellerId).toBeNull();
   });
 
   it('lists by stage with a real total and limit/offset', async () => {

@@ -13,7 +13,8 @@ import { z } from 'zod';
  * creating the customer. `ktp`/`npwp`/`consent` are the KYC + UU-PDP consent
  * captured in the wizard. `note` is an install hint with no column (not
  * persisted). `email` accepts '' as "no email" (normalised to null in the
- * service).
+ * service). `resellerId` (P3.D.2) records which reseller/mitra brought this
+ * subscriber when onboarded directly (not via a lead).
  */
 export const OnboardCustomerSchema = z
   .object({
@@ -34,6 +35,9 @@ export const OnboardCustomerSchema = z
     ktp: z.string().trim().max(32).optional(),
     npwp: z.string().trim().max(40).optional(),
     consent: z.boolean().optional(),
+    // Acquisition channel (P3.D.2): which reseller/mitra brought this
+    // subscriber. Staff-set; validated to exist in OnboardingService.
+    resellerId: z.uuid().nullable().optional(),
   })
   .strict();
 

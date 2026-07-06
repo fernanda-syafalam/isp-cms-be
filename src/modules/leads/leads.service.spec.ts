@@ -18,6 +18,7 @@ const baseLead: Lead = {
   estValue: 200_000,
   source: 'online',
   note: null,
+  resellerId: null,
   createdAt: new Date('2026-06-15T00:00:00.000Z'),
   updatedAt: new Date('2026-06-15T00:00:00.000Z'),
 };
@@ -59,7 +60,41 @@ describe('LeadsService', () => {
       estValue: 200_000,
       source: 'online',
     });
-    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ note: null }));
+    expect(repo.create).toHaveBeenCalledWith(
+      expect.objectContaining({ note: null, resellerId: null }),
+    );
+  });
+
+  it('threads a supplied resellerId through to the repository (P3.D.2)', async () => {
+    const resellerId = '00000000-0000-0000-0000-0000000000a1';
+    repo.create.mockResolvedValue({ ...baseLead, resellerId });
+    await service.create({
+      name: 'Citra Lestari',
+      phone: '081200000000',
+      address: 'Jl. Melati 3',
+      areaName: 'Jepara',
+      planName: 'Home 20',
+      estValue: 200_000,
+      source: 'reseller',
+      resellerId,
+    });
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ resellerId }));
+  });
+
+  it('surfaces resellerId on the response shape (toLeadResponse)', async () => {
+    const resellerId = '00000000-0000-0000-0000-0000000000a1';
+    repo.create.mockResolvedValue({ ...baseLead, resellerId });
+    const result = await service.create({
+      name: 'Citra Lestari',
+      phone: '081200000000',
+      address: 'Jl. Melati 3',
+      areaName: 'Jepara',
+      planName: 'Home 20',
+      estValue: 200_000,
+      source: 'reseller',
+      resellerId,
+    });
+    expect(result.resellerId).toBe(resellerId);
   });
 
   it('updates the stage', async () => {
@@ -87,9 +122,24 @@ describe('LeadsService', () => {
         address: baseLead.address,
         areaName: baseLead.areaName,
         planId: 'plan-1',
+        resellerId: null,
       });
       expect(repo.setStage).toHaveBeenCalledWith(baseLead.id, 'won');
       expect(result.stage).toBe('won');
+    });
+
+    it('propagates the lead resellerId into onboarding (P3.D.2)', async () => {
+      const resellerId = '00000000-0000-0000-0000-0000000000a1';
+      repo.findById.mockResolvedValue({ ...baseLead, resellerId });
+      plans.findByName.mockResolvedValue({ id: 'plan-1', name: 'Home 20' });
+      onboarding.onboardFromLead.mockResolvedValue({ id: 'cust-1', fullName: 'Citra Lestari' });
+      repo.setStage.mockResolvedValue({ ...baseLead, stage: 'won', resellerId });
+
+      await service.convert(baseLead.id);
+
+      expect(onboarding.onboardFromLead).toHaveBeenCalledWith(
+        expect.objectContaining({ resellerId }),
+      );
     });
 
     it('is a no-op for an already-won lead', async () => {

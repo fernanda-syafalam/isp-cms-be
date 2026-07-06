@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import type { AuthUser } from '../../common/decorators/current-user.decorator';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PlansRepository } from '../plans/plans.repository';
+import { ResellersRepository } from '../resellers/resellers.repository';
 import { SecretEnforcementService } from '../router-resources/secret-enforcement.service';
 import {
   type CustomerListFilter,
@@ -30,6 +31,9 @@ export class CustomersService {
     // RouterResourcesModule <-> CustomersModule is wired with forwardRef to
     // break the module-import cycle.
     private readonly secrets: SecretEnforcementService,
+    // Validates the resellerId FK on onboard (P3.D.2) — a bad id fails
+    // explicit (400) instead of surfacing as a DB-level 500.
+    private readonly resellers: ResellersRepository,
   ) {}
 
   async list(
@@ -94,9 +98,12 @@ export class CustomersService {
       ktp?: string | null;
       npwp?: string | null;
       consentAt?: Date | null;
+      // resellerId is already on CreateCustomerInput (P1.5) — validated by
+      // requireResellerIfProvided below (P3.D.2).
     },
   ): Promise<CustomerResponse> {
     await this.requirePlan(input.planId);
+    await this.requireResellerIfProvided(input.resellerId);
     const row = await this.repo.create({
       fullName: input.fullName,
       phone: input.phone,
@@ -114,6 +121,7 @@ export class CustomersService {
       ktp: input.ktp ?? null,
       npwp: input.npwp ?? null,
       consentAt: input.consentAt ?? null,
+      resellerId: input.resellerId ?? null,
       // Portal login linkage — provisioned by OnboardingService (P1.3),
       // never accepted from the HTTP DTO (no mass-assignment).
       userId: input.userId ?? null,
@@ -268,6 +276,20 @@ export class CustomersService {
       // The referenced plan does not exist — a bad reference in the
       // request body, not a missing customer. 400, not 404.
       throw new BadRequestException('plan not found');
+    }
+  }
+
+  /**
+   * Guard for the optional resellerId FK (P3.D.2): when a caller supplies
+   * one (direct onboarding or a converted lead), it must reference a real
+   * reseller — otherwise this fails explicit (400) here instead of at the
+   * DB as an FK-violation 500.
+   */
+  private async requireResellerIfProvided(resellerId?: string | null): Promise<void> {
+    if (!resellerId) return;
+    const reseller = await this.resellers.findById(resellerId);
+    if (!reseller) {
+      throw new BadRequestException('reseller not found');
     }
   }
 }

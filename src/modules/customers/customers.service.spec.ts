@@ -3,6 +3,7 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PlansRepository } from '../plans/plans.repository';
+import { ResellersRepository } from '../resellers/resellers.repository';
 import { SecretEnforcementService } from '../router-resources/secret-enforcement.service';
 import { type CustomerRow, CustomersRepository } from './customers.repository';
 import { CustomersService } from './customers.service';
@@ -45,6 +46,7 @@ describe('CustomersService', () => {
   let plans: { findById: ReturnType<typeof vi.fn> };
   let notifications: { send: ReturnType<typeof vi.fn> };
   let secrets: { applyDisabledForCustomer: ReturnType<typeof vi.fn> };
+  let resellers: { findById: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     repo = {
@@ -64,6 +66,7 @@ describe('CustomersService', () => {
     plans = { findById: vi.fn() };
     notifications = { send: vi.fn() };
     secrets = { applyDisabledForCustomer: vi.fn() };
+    resellers = { findById: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         CustomersService,
@@ -71,6 +74,7 @@ describe('CustomersService', () => {
         { provide: PlansRepository, useValue: plans },
         { provide: NotificationsService, useValue: notifications },
         { provide: SecretEnforcementService, useValue: secrets },
+        { provide: ResellersRepository, useValue: resellers },
       ],
     }).compile();
     service = moduleRef.get(CustomersService);
@@ -229,6 +233,60 @@ describe('CustomersService', () => {
         }),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(repo.create).not.toHaveBeenCalled();
+    });
+
+    it('threads a resellerId that exists into repo.create (P3.D.2)', async () => {
+      const resellerId = '00000000-0000-0000-0000-0000000000a1';
+      plans.findById.mockResolvedValue({ id: PLAN_ID, name: 'Home 20' });
+      resellers.findById.mockResolvedValue({ id: resellerId, name: 'Mitra A' });
+      repo.create.mockResolvedValue({ ...sampleRow, status: 'instalasi', resellerId });
+
+      await service.onboard({
+        fullName: 'Budi Santoso',
+        phone: '081234567890',
+        email: '',
+        address: 'Jl. Mawar 1',
+        areaName: 'Bangsri',
+        planId: PLAN_ID,
+        resellerId,
+      });
+
+      expect(resellers.findById).toHaveBeenCalledWith(resellerId);
+      expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ resellerId }));
+    });
+
+    it('rejects an unknown resellerId with 400 before creating (P3.D.2)', async () => {
+      plans.findById.mockResolvedValue({ id: PLAN_ID, name: 'Home 20' });
+      resellers.findById.mockResolvedValue(null);
+
+      await expect(
+        service.onboard({
+          fullName: 'Budi Santoso',
+          phone: '081234567890',
+          email: '',
+          address: 'Jl. Mawar 1',
+          areaName: 'Bangsri',
+          planId: PLAN_ID,
+          resellerId: 'missing-reseller',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(repo.create).not.toHaveBeenCalled();
+    });
+
+    it('skips the reseller check when resellerId is absent', async () => {
+      plans.findById.mockResolvedValue({ id: PLAN_ID, name: 'Home 20' });
+      repo.create.mockResolvedValue({ ...sampleRow, status: 'instalasi' });
+
+      await service.onboard({
+        fullName: 'Budi Santoso',
+        phone: '081234567890',
+        email: '',
+        address: 'Jl. Mawar 1',
+        areaName: 'Bangsri',
+        planId: PLAN_ID,
+      });
+
+      expect(resellers.findById).not.toHaveBeenCalled();
     });
   });
 

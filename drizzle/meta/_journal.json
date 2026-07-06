@@ -288,6 +288,13 @@
       "when": 1783303861232,
       "tag": "0040_round_johnny_storm",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1783306091165,
+      "tag": "0041_motionless_white_queen",
+      "breakpoints": true
     }
   ]
 }

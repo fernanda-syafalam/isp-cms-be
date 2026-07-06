@@ -13,6 +13,8 @@ export const LeadResponseSchema = z.object({
   estValue: z.number().int().nonnegative(),
   source: z.enum(['walk_in', 'referral', 'online', 'reseller']),
   note: z.string().nullable(),
+  // Acquisition channel (P3.D.2): which reseller/mitra brought this lead.
+  resellerId: z.uuid().nullable(),
   createdAt: z.iso.datetime(),
 });
 
