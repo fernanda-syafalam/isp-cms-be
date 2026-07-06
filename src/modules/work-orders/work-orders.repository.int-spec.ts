@@ -134,6 +134,73 @@ describe('WorkOrdersRepository (integration)', () => {
     expect(page.total).toBe(3);
   });
 
+  // ---------------------------------------------------------------------------
+  // list — full-set summary aggregate (T1, FE contract parity)
+  // ---------------------------------------------------------------------------
+
+  describe('list — summary aggregate', () => {
+    it('summary.byStatus counts every work order regardless of the status filter', async () => {
+      await repo.create(newWo({ status: 'scheduled' }));
+      await repo.create(newWo({ status: 'in_progress' }));
+      await repo.create(newWo({ status: 'done' }));
+      await repo.create(newWo({ status: 'done' }));
+      await repo.create(newWo({ status: 'cancelled' }));
+
+      // Filtered view: only done
+      const result = await repo.list({ status: 'done', limit: 50, offset: 0 });
+      expect(result.total).toBe(2); // filtered total
+      expect(result.items).toHaveLength(2);
+
+      // Full-set summary — must still reflect ALL 5 orders across statuses
+      expect(result.summary).toEqual({
+        total: 5,
+        byStatus: { scheduled: 1, in_progress: 1, done: 2, cancelled: 1 },
+      });
+    });
+
+    it('summary does not change when q/type/technician filters match only some orders', async () => {
+      await repo.create(
+        newWo({ status: 'scheduled', type: 'install', customerName: 'Alpha User' }),
+      );
+      await repo.create(newWo({ status: 'done', type: 'repair', customerName: 'Beta User' }));
+      await repo.create(
+        newWo({ status: 'cancelled', type: 'dismantle', technician: 'Teknisi Andi' }),
+      );
+
+      const filtered = await repo.list({ q: 'Alpha', limit: 50, offset: 0 });
+      expect(filtered.total).toBe(1); // filtered total
+
+      const all = await repo.list({ limit: 50, offset: 0 });
+
+      // Summary must be identical — q/type/technician don't affect it either
+      expect(filtered.summary).toEqual(all.summary);
+      expect(filtered.summary).toEqual({
+        total: 3,
+        byStatus: { scheduled: 1, in_progress: 0, done: 1, cancelled: 1 },
+      });
+    });
+
+    it('zero-fills every status key when the table is empty', async () => {
+      const result = await repo.list({ limit: 50, offset: 0 });
+      expect(result.summary).toEqual({
+        total: 0,
+        byStatus: { scheduled: 0, in_progress: 0, done: 0, cancelled: 0 },
+      });
+    });
+
+    it('limit/offset paging does not affect the summary', async () => {
+      await repo.create(newWo({ status: 'scheduled' }));
+      await repo.create(newWo({ status: 'done' }));
+      await repo.create(newWo({ status: 'cancelled' }));
+
+      const page1 = await repo.list({ limit: 1, offset: 0 });
+      const page2 = await repo.list({ limit: 1, offset: 1 });
+
+      expect(page1.summary).toEqual(page2.summary);
+      expect(page1.summary.total).toBe(3);
+    });
+  });
+
   it('create: round-trips ticketId when the WO is linked to a ticket (P3.B.4)', async () => {
     const ticketId = '00000000-0000-0000-0000-0000000000e1';
     const wo = await repo.create(newWo({ type: 'repair', ticketId }));

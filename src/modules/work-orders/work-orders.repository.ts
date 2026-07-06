@@ -7,6 +7,7 @@ import {
   type WorkOrder,
   workOrders,
 } from '../../infrastructure/database/schema/work-orders.schema';
+import type { WorkOrderSummary } from './dto/work-order-response.dto';
 
 export interface WorkOrderListFilter {
   q?: string;
@@ -65,7 +66,9 @@ export class WorkOrdersRepository {
     return this.drizzle.db;
   }
 
-  async list(filter: WorkOrderListFilter): Promise<{ items: WorkOrder[]; total: number }> {
+  async list(
+    filter: WorkOrderListFilter,
+  ): Promise<{ items: WorkOrder[]; total: number; summary: WorkOrderSummary }> {
     const where = and(
       filter.status ? eq(workOrders.status, filter.status) : undefined,
       filter.type ? eq(workOrders.type, filter.type) : undefined,
@@ -94,7 +97,33 @@ export class WorkOrdersRepository {
       .limit(filter.limit)
       .offset(filter.offset);
     const [totals] = await this.db.select({ value: count() }).from(workOrders).where(where);
-    return { items, total: totals?.value ?? 0 };
+
+    // Full-set status-count rollup — computed over ALL work orders, ignoring
+    // status/type/q/technician/paging (mirrors the invoices summary
+    // aggregate). A single grouped-filter aggregate avoids 4 separate
+    // COUNT queries; missing statuses are zero-filled below since a fresh
+    // table may have zero rows for a given status.
+    const [summaryRow] = await this.db
+      .select({
+        total: count(),
+        scheduled: sql<number>`count(*) filter (where ${workOrders.status} = 'scheduled')`,
+        inProgress: sql<number>`count(*) filter (where ${workOrders.status} = 'in_progress')`,
+        done: sql<number>`count(*) filter (where ${workOrders.status} = 'done')`,
+        cancelled: sql<number>`count(*) filter (where ${workOrders.status} = 'cancelled')`,
+      })
+      .from(workOrders);
+
+    const summary: WorkOrderSummary = {
+      total: summaryRow?.total ?? 0,
+      byStatus: {
+        scheduled: Number(summaryRow?.scheduled ?? 0),
+        in_progress: Number(summaryRow?.inProgress ?? 0),
+        done: Number(summaryRow?.done ?? 0),
+        cancelled: Number(summaryRow?.cancelled ?? 0),
+      },
+    };
+
+    return { items, total: totals?.value ?? 0, summary };
   }
 
   async findById(id: string): Promise<WorkOrder | null> {

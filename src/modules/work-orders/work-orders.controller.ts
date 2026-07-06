@@ -7,7 +7,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { AssignWorkOrderDto } from './dto/assign-work-order.dto';
 import { CompleteWorkOrderDto } from './dto/complete-work-order.dto';
 import { RescheduleWorkOrderDto } from './dto/reschedule-work-order.dto';
-import { WorkOrderResponseDto } from './dto/work-order-response.dto';
+import { WorkOrderListResponseDto, WorkOrderResponseDto } from './dto/work-order-response.dto';
 import { WorkOrdersService } from './work-orders.service';
 
 const ListQuerySchema = z.object({
@@ -28,6 +28,7 @@ export class WorkOrdersController {
   constructor(private readonly workOrders: WorkOrdersService) {}
 
   @Get()
+  @ZodSerializerDto(WorkOrderListResponseDto)
   list(@Query() query: unknown) {
     return this.workOrders.list(ListQuerySchema.parse(query));
   }

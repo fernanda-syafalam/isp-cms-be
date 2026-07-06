@@ -33,3 +33,39 @@ export const WorkOrderResponseSchema = z.object({
 export type WorkOrderResponse = z.infer<typeof WorkOrderResponseSchema>;
 
 export class WorkOrderResponseDto extends createZodDto(WorkOrderResponseSchema) {}
+
+/**
+ * Full-set status-count rollup for the work-orders list. Computed over ALL
+ * work orders — NEVER affected by status/type/q/technician/paging (mirrors
+ * the invoices summary aggregate, ADR-0009 style). Drives the FE KPI cards
+ * and status filter tabs, which must stay stable while the page filter
+ * changes. Every status key is always present (zero-filled).
+ */
+export const WorkOrderSummarySchema = z.object({
+  total: z.number().int().nonnegative(),
+  byStatus: z.object({
+    scheduled: z.number().int().nonnegative(),
+    in_progress: z.number().int().nonnegative(),
+    done: z.number().int().nonnegative(),
+    cancelled: z.number().int().nonnegative(),
+  }),
+});
+
+export type WorkOrderSummary = z.infer<typeof WorkOrderSummarySchema>;
+
+/**
+ * Paginated list response for GET /v1/work-orders.
+ *
+ * - `items`   – current page (after q/status/type/technician filter, sort, limit/offset).
+ * - `total`   – count matching the current filter BEFORE paging (drives page count).
+ * - `summary` – full-set aggregate; NEVER affected by any filter or paging.
+ */
+export const WorkOrderListResponseSchema = z.object({
+  items: z.array(WorkOrderResponseSchema),
+  total: z.number().int().nonnegative(),
+  summary: WorkOrderSummarySchema,
+});
+
+export type WorkOrderListResponse = z.infer<typeof WorkOrderListResponseSchema>;
+
+export class WorkOrderListResponseDto extends createZodDto(WorkOrderListResponseSchema) {}
