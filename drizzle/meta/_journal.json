@@ -295,6 +295,13 @@
       "when": 1783306091165,
       "tag": "0041_motionless_white_queen",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1783307085461,
+      "tag": "0042_nice_grandmaster",
+      "breakpoints": true
     }
   ]
 }
