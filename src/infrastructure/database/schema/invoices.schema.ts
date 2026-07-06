@@ -12,6 +12,7 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 import { customers } from './customers.schema';
+import { vouchers } from './vouchers.schema';
 
 // draft (not issued) -> pending (issued, not due) -> partial (part-paid) ->
 // overdue (past due) -> paid. Values are the API enum; the UI maps them to
@@ -32,6 +33,10 @@ export const paymentMethod = pgEnum('payment_method', [
   'transfer',
   'cash',
 ]);
+
+// What a payment settles: a billed invoice (the default, the vast majority
+// of rows) or a loket voucher sale (P3.D.3) that has no invoice at all.
+export const paymentSource = pgEnum('payment_source', ['invoice', 'voucher']);
 
 // Invoice number: INV-2026-100, INV-2026-101, ... The year comes from the
 // DB clock at insert time; the running number from a sequence so parallel
@@ -91,15 +96,24 @@ export const payments = pgTable(
   'payments',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    invoiceId: uuid('invoice_id')
-      .notNull()
-      .references(() => invoices.id),
-    // Denormalized snapshots so the ledger reads without joins.
-    invoiceNo: varchar('invoice_no', { length: 32 }).notNull(),
-    customerId: uuid('customer_id').notNull(),
-    customerName: varchar('customer_name', { length: 120 }).notNull(),
+    // Nullable (P3.D.3): a voucher sale (source = 'voucher') settles a
+    // voucher, not an invoice, and has neither. Still an FK when present —
+    // every invoice-sourced payment must point at a real invoice.
+    invoiceId: uuid('invoice_id').references(() => invoices.id),
+    // Denormalized snapshot so the ledger reads without joins; null alongside
+    // invoiceId for voucher-sourced rows.
+    invoiceNo: varchar('invoice_no', { length: 32 }),
+    // Nullable: an anonymous hotspot voucher redemption (P3.D.3) has no
+    // subscriber to snapshot.
+    customerId: uuid('customer_id'),
+    customerName: varchar('customer_name', { length: 120 }),
     amount: integer('amount').notNull(),
     method: paymentMethod('method').notNull(),
+    // What this payment settles — an invoice (default) or a voucher sale
+    // (P3.D.3). Drives which of invoiceId/voucherId is populated.
+    source: paymentSource('source').notNull().default('invoice'),
+    // Set only for source = 'voucher' — the voucher this payment sold/redeemed.
+    voucherId: uuid('voucher_id').references(() => vouchers.id),
     // Loket cash drawer (P3.A.4): cash tendered by the customer and the change
     // given back. Null for non-cash rails. changeAmount = tendered - amount.
     tenderedAmount: integer('tendered_amount'),
@@ -110,6 +124,7 @@ export const payments = pgTable(
   (t) => [
     index('payments_invoice_id_idx').on(t.invoiceId),
     index('payments_customer_id_idx').on(t.customerId),
+    index('payments_voucher_id_idx').on(t.voucherId),
   ],
 );
 

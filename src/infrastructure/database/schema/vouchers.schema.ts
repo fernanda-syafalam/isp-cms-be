@@ -1,4 +1,5 @@
 import { index, integer, pgEnum, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import { resellers } from './resellers.schema';
 
 // unused -> used (redeemed); expired when past its validity window.
 export const voucherStatus = pgEnum('voucher_status', ['unused', 'used', 'expired']);
@@ -24,6 +25,10 @@ export const vouchers = pgTable(
     // is a denormalized link rather than a hard FK (matches the other
     // service-resolved customer references).
     redeemedCustomerId: uuid('redeemed_customer_id'),
+    // Attributes the batch to the mitra that sells it (P3.D.3, ADR-0010).
+    // Null for house-minted / walk-in stock. Settlement uses this as the
+    // default commission target when the redeem call does not override it.
+    resellerId: uuid('reseller_id').references(() => resellers.id),
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },
@@ -31,6 +36,7 @@ export const vouchers = pgTable(
     index('vouchers_status_idx').on(t.status),
     index('vouchers_batch_id_idx').on(t.batchId),
     index('vouchers_created_at_idx').on(t.createdAt),
+    index('vouchers_reseller_id_idx').on(t.resellerId),
   ],
 );
 

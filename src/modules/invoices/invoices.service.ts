@@ -389,6 +389,8 @@ function toPaymentResponse(row: Payment): PaymentResponse {
     customerName: row.customerName,
     amount: row.amount,
     method: row.method,
+    source: row.source,
+    voucherId: row.voucherId,
     tenderedAmount: row.tenderedAmount,
     changeAmount: row.changeAmount,
     paidAt: row.paidAt.toISOString(),
