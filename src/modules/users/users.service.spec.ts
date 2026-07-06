@@ -24,6 +24,8 @@ describe('UsersService', () => {
     findById: ReturnType<typeof vi.fn>;
     findByEmail: ReturnType<typeof vi.fn>;
     create: ReturnType<typeof vi.fn>;
+    countAll: ReturnType<typeof vi.fn>;
+    createIfEmpty: ReturnType<typeof vi.fn>;
     listPage: ReturnType<typeof vi.fn>;
     update: ReturnType<typeof vi.fn>;
     softDelete: ReturnType<typeof vi.fn>;
@@ -35,6 +37,8 @@ describe('UsersService', () => {
       findById: vi.fn(),
       findByEmail: vi.fn(),
       create: vi.fn(),
+      countAll: vi.fn(),
+      createIfEmpty: vi.fn(),
       listPage: vi.fn(),
       update: vi.fn(),
       softDelete: vi.fn(),
@@ -77,6 +81,52 @@ describe('UsersService', () => {
         }),
       ).rejects.toBeInstanceOf(ConflictException);
       expect(repo.create).not.toHaveBeenCalled();
+    });
+
+    it('normalizes email (trim + lowercase) before the conflict check and the insert', async () => {
+      repo.findByEmail.mockResolvedValue(null);
+      repo.create.mockResolvedValue(sampleUser);
+
+      await service.create({
+        email: '  Bob@X.com  ',
+        fullName: 'Bob',
+        password: 'correct horse battery staple',
+        role: 'customer',
+      });
+
+      expect(repo.findByEmail).toHaveBeenCalledWith('bob@x.com');
+      const call = repo.create.mock.calls[0]?.[0];
+      expect(call?.email).toBe('bob@x.com');
+    });
+  });
+
+  describe('bootstrapAdmin', () => {
+    it('normalizes email (trim + lowercase) before the first-admin insert', async () => {
+      repo.countAll.mockResolvedValue(0);
+      repo.createIfEmpty.mockResolvedValue({ ...sampleUser, role: 'admin' });
+
+      await service.bootstrapAdmin({
+        email: '  Root@Admin.test  ',
+        fullName: 'Root',
+        password: 'correct horse battery staple',
+      });
+
+      const call = repo.createIfEmpty.mock.calls[0]?.[0];
+      expect(call?.email).toBe('root@admin.test');
+      expect(call?.role).toBe('admin');
+    });
+
+    it('returns null without hashing when a user already exists', async () => {
+      repo.countAll.mockResolvedValue(1);
+
+      const result = await service.bootstrapAdmin({
+        email: 'root@admin.test',
+        fullName: 'Root',
+        password: 'correct horse battery staple',
+      });
+
+      expect(result).toBeNull();
+      expect(repo.createIfEmpty).not.toHaveBeenCalled();
     });
   });
 

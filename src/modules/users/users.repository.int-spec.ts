@@ -72,6 +72,25 @@ describe('UsersRepository (integration)', () => {
     expect(byEmail?.id).toBe(created.id);
   });
 
+  it('findByEmail normalizes the lookup argument (case + whitespace insensitive)', async () => {
+    // UsersService.create/bootstrapAdmin normalize the email before it
+    // ever reaches the repository, so a real "mixed-case registration"
+    // is always stored lowercased (see users.service.spec.ts for that
+    // half). What this repository must guarantee independently is the
+    // read side: whatever casing/whitespace the caller passes in, the
+    // lookup still finds the (normalized-on-write) stored row.
+    const created = await repo.create({
+      email: 'alice@x.test',
+      fullName: 'Alice',
+      passwordHash: 'hash',
+    });
+
+    expect((await repo.findByEmail('Alice@X.test'))?.id).toBe(created.id);
+    expect((await repo.findByEmail('ALICE@X.TEST'))?.id).toBe(created.id);
+    expect((await repo.findByEmail('  alice@x.test  '))?.id).toBe(created.id);
+    expect(await repo.findByEmail('nobody@x.test')).toBeNull();
+  });
+
   it('countAll counts rows including soft-deleted ones', async () => {
     expect(await repo.countAll()).toBe(0);
     const a = await repo.create({ email: 'c1@b.test', fullName: 'C1', passwordHash: 'h' });

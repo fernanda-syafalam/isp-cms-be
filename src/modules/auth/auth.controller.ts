@@ -10,6 +10,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { AnyAuthenticatedRole } from '../../common/decorators/any-authenticated-role.decorator';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { type AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
@@ -122,6 +123,7 @@ export class AuthController {
    * a known user. Useful as a smoke test for clients and as a working
    * example of the `@CurrentUser` decorator.
    */
+  @AnyAuthenticatedRole()
   @Get('me')
   me(@CurrentUser() user: AuthUser): AuthUser {
     return user;
@@ -133,6 +135,7 @@ export class AuthController {
    * the credential. Existing refresh tokens stay valid until their own
    * rotation/TTL (single-use); a compromised session is cut by logout.
    */
+  @AnyAuthenticatedRole()
   @Audit('auth.change_password')
   @Post('change-password')
   @HttpCode(HttpStatus.NO_CONTENT)

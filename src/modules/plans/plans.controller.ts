@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { z } from 'zod';
+import { AnyAuthenticatedRole } from '../../common/decorators/any-authenticated-role.decorator';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CreatePlanDto } from './dto/create-plan.dto';
@@ -30,6 +31,11 @@ const ListQuerySchema = z.object({
 export class PlansController {
   constructor(private readonly plans: PlansService) {}
 
+  // Plan catalog contains no sensitive fields (name/speed/price/status) —
+  // any authenticated role, including customer, may browse it (e.g. a
+  // self-service upgrade flow). Flagged by the route-guardrail test as
+  // previously undocumented; recorded explicitly here.
+  @AnyAuthenticatedRole()
   @Get()
   list(@Query() query: unknown) {
     return this.plans.list(ListQuerySchema.parse(query));
