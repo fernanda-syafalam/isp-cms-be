@@ -8,6 +8,7 @@ import * as schema from '../../infrastructure/database/schema';
 import {
   type ResellerLedgerEntry,
   resellerLedger,
+  resellerPayouts,
   resellers,
 } from '../../infrastructure/database/schema/resellers.schema';
 import { ResellersRepository } from './resellers.repository';
@@ -52,6 +53,22 @@ describe('ResellersRepository (integration)', () => {
       );
       CREATE UNIQUE INDEX reseller_ledger_reseller_type_ref_idx
         ON reseller_ledger (reseller_id, type, ref) WHERE ref IS NOT NULL;
+      CREATE TYPE reseller_payout_status AS ENUM ('requested', 'approved', 'rejected', 'paid');
+      CREATE TABLE reseller_payouts (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        reseller_id uuid NOT NULL REFERENCES resellers(id),
+        amount integer NOT NULL,
+        status reseller_payout_status NOT NULL DEFAULT 'requested',
+        note varchar(200) NOT NULL DEFAULT '',
+        requested_by uuid,
+        decided_by uuid,
+        ledger_entry_id uuid REFERENCES reseller_ledger(id),
+        created_at timestamptz(3) NOT NULL DEFAULT now(),
+        updated_at timestamptz(3) NOT NULL DEFAULT now(),
+        decided_at timestamptz(3)
+      );
+      CREATE INDEX reseller_payouts_reseller_id_idx ON reseller_payouts (reseller_id);
+      CREATE INDEX reseller_payouts_status_idx ON reseller_payouts (status);
     `);
 
     repo = new ResellersRepository({ db } as unknown as DrizzleService);
@@ -63,6 +80,7 @@ describe('ResellersRepository (integration)', () => {
   });
 
   beforeEach(async () => {
+    await db.delete(resellerPayouts);
     await db.delete(resellerLedger);
     await db.delete(resellers);
   });
@@ -497,6 +515,145 @@ describe('ResellersRepository (integration)', () => {
       expect(result.total).toBe(3);
       expect(result.items).toHaveLength(2);
       expect(result.items[0]?.note).toBe('second');
+    });
+  });
+
+  it('create() inserts a reseller with a zero starting balance', async () => {
+    const created = await repo.create({
+      name: 'Loket Baru',
+      area: 'Demak',
+      commissionPct: 0.03,
+      status: 'active',
+    });
+    expect(created.id).toBeTruthy();
+    expect(created.balance).toBe(0);
+    expect((await repo.findById(created.id))?.name).toBe('Loket Baru');
+  });
+
+  describe('payout lifecycle (P3.D.4)', () => {
+    const requester = '00000000-0000-0000-0000-0000000a0aaa';
+    const decider = '00000000-0000-0000-0000-0000000a0bbb';
+
+    it('request -> approve -> disburse: debits the balance and links the withdrawal ledger row', async () => {
+      const r = await seed({ balance: 1_000_000 });
+      const payout = await repo.createPayout(r.id, {
+        amount: 400_000,
+        note: 'Cair mingguan',
+        requestedBy: requester,
+      });
+      expect(payout.status).toBe('requested');
+      // Requesting a payout must NOT touch the balance.
+      expect((await repo.findById(r.id))?.balance).toBe(1_000_000);
+
+      const approved = await repo.approvePayout(payout.id, decider);
+      expect(approved.status).toBe('approved');
+      expect((await repo.findById(r.id))?.balance).toBe(1_000_000);
+
+      const paid = await repo.disbursePayout(payout.id);
+      expect(paid.status).toBe('paid');
+      expect(paid.ledgerEntryId).toBeTruthy();
+
+      const finalReseller = await repo.findById(r.id);
+      expect(finalReseller?.balance).toBe(600_000);
+
+      const ledger = await repo.listLedger(r.id, { limit: 50, offset: 0 });
+      const withdrawalRow = ledger.items.find((i) => i.type === 'withdrawal');
+      expect(withdrawalRow).toBeDefined();
+      expect(withdrawalRow?.id).toBe(paid.ledgerEntryId);
+      expect(withdrawalRow?.amount).toBe(-400_000);
+      expect(withdrawalRow?.balanceAfter).toBe(600_000);
+    });
+
+    it('reject: requested -> rejected, balance untouched', async () => {
+      const r = await seed({ balance: 500_000 });
+      const payout = await repo.createPayout(r.id, {
+        amount: 100_000,
+        note: '',
+        requestedBy: requester,
+      });
+      const rejected = await repo.rejectPayout(payout.id, decider);
+      expect(rejected.status).toBe('rejected');
+      expect((await repo.findById(r.id))?.balance).toBe(500_000);
+    });
+
+    it('disburse fails with 422 when the balance is insufficient, and leaves state untouched', async () => {
+      const r = await seed({ balance: 50_000 });
+      const payout = await repo.createPayout(r.id, {
+        amount: 100_000,
+        note: '',
+        requestedBy: requester,
+      });
+      await repo.approvePayout(payout.id, decider);
+
+      await expect(repo.disbursePayout(payout.id)).rejects.toThrow();
+
+      expect((await repo.findById(r.id))?.balance).toBe(50_000);
+      const reloaded = await repo.findPayoutById(payout.id);
+      expect(reloaded?.status).toBe('approved');
+      expect(reloaded?.ledgerEntryId).toBeNull();
+    });
+
+    it('a second disburse on an already-paid payout throws 422 and does not double-debit', async () => {
+      const r = await seed({ balance: 1_000_000 });
+      const payout = await repo.createPayout(r.id, {
+        amount: 200_000,
+        note: '',
+        requestedBy: requester,
+      });
+      await repo.approvePayout(payout.id, decider);
+      await repo.disbursePayout(payout.id);
+
+      await expect(repo.disbursePayout(payout.id)).rejects.toThrow();
+
+      expect((await repo.findById(r.id))?.balance).toBe(800_000);
+      const ledger = await repo.listLedger(r.id, { limit: 50, offset: 0 });
+      expect(ledger.items.filter((i) => i.type === 'withdrawal')).toHaveLength(1);
+    });
+
+    it('illegal transitions throw: cannot approve/reject/disburse out of order', async () => {
+      const r = await seed({ balance: 1_000_000 });
+      const payout = await repo.createPayout(r.id, {
+        amount: 100_000,
+        note: '',
+        requestedBy: requester,
+      });
+
+      // Cannot disburse before it is approved.
+      await expect(repo.disbursePayout(payout.id)).rejects.toThrow();
+
+      await repo.rejectPayout(payout.id, decider);
+      // Cannot approve a rejected payout.
+      await expect(repo.approvePayout(payout.id, decider)).rejects.toThrow();
+      // Cannot reject it again either.
+      await expect(repo.rejectPayout(payout.id, decider)).rejects.toThrow();
+    });
+
+    it('createPayout rejects a non-positive amount', async () => {
+      const r = await seed({ balance: 1_000_000 });
+      await expect(
+        repo.createPayout(r.id, { amount: 0, note: '', requestedBy: requester }),
+      ).rejects.toThrow();
+      await expect(
+        repo.createPayout(r.id, { amount: -1, note: '', requestedBy: requester }),
+      ).rejects.toThrow();
+    });
+
+    it('listPayouts filters by status and paginates', async () => {
+      const r = await seed({ balance: 1_000_000 });
+      const p1 = await repo.createPayout(r.id, {
+        amount: 100_000,
+        note: 'A',
+        requestedBy: requester,
+      });
+      await repo.createPayout(r.id, { amount: 200_000, note: 'B', requestedBy: requester });
+      await repo.approvePayout(p1.id, decider);
+
+      const approved = await repo.listPayouts(r.id, { status: 'approved', limit: 50, offset: 0 });
+      expect(approved.total).toBe(1);
+      expect(approved.items[0]?.id).toBe(p1.id);
+
+      const all = await repo.listPayouts(r.id, { limit: 50, offset: 0 });
+      expect(all.total).toBe(2);
     });
   });
 });

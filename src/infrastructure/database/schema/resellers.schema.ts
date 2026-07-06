@@ -65,8 +65,46 @@ export const resellerLedger = pgTable(
   ],
 );
 
+// Payout lifecycle (P3.D.4): a mitra requests a withdrawal, staff/admin
+// approve or reject it, and an approved payout is disbursed — which is the
+// ONLY path that may post a `withdrawal` reseller_ledger entry (see
+// ResellersRepository.disbursePayout). requested -> approved -> paid, or
+// requested -> rejected. No other transition is legal.
+export const resellerPayoutStatus = pgEnum('reseller_payout_status', [
+  'requested',
+  'approved',
+  'rejected',
+  'paid',
+]);
+
+export const resellerPayouts = pgTable(
+  'reseller_payouts',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    resellerId: uuid('reseller_id')
+      .notNull()
+      .references(() => resellers.id),
+    amount: integer('amount').notNull(), // always positive; whole IDR
+    status: resellerPayoutStatus('status').notNull().default('requested'),
+    note: varchar('note', { length: 200 }).notNull().default(''),
+    requestedBy: uuid('requested_by'),
+    decidedBy: uuid('decided_by'),
+    // Set only on disbursement — the withdrawal ledger row this payout posted.
+    ledgerEntryId: uuid('ledger_entry_id').references(() => resellerLedger.id),
+    createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
+    decidedAt: timestamp('decided_at', { withTimezone: true, precision: 3 }),
+  },
+  (t) => [
+    index('reseller_payouts_reseller_id_idx').on(t.resellerId),
+    index('reseller_payouts_status_idx').on(t.status),
+  ],
+);
+
 // Domain types derived from the schema — never hand-written (Pilar 3).
 export type Reseller = typeof resellers.$inferSelect;
 export type NewReseller = typeof resellers.$inferInsert;
 export type ResellerLedgerEntry = typeof resellerLedger.$inferSelect;
 export type NewResellerLedgerEntry = typeof resellerLedger.$inferInsert;
+export type ResellerPayout = typeof resellerPayouts.$inferSelect;
+export type NewResellerPayout = typeof resellerPayouts.$inferInsert;
