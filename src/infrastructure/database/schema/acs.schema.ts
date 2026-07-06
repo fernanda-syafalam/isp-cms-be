@@ -12,6 +12,10 @@ export const acsDevices = pgTable(
     customerName: varchar('customer_name', { length: 120 }).notNull(),
     model: varchar('model', { length: 80 }).notNull(),
     firmware: varchar('firmware', { length: 40 }).notNull(),
+    // Current WiFi SSID pushed to the CPE (portal self-care seam, P3.C.4).
+    // Null until the first `setWifi` call — the CPE ships with a vendor
+    // default SSID that this table never mirrors on seed.
+    ssid: varchar('ssid', { length: 32 }),
     rxPowerDbm: real('rx_power_dbm'),
     status: acsStatus('status').notNull().default('online'),
     lastInform: timestamp('last_inform', { withTimezone: true, precision: 3 })

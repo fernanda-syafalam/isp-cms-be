@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CustomersRepository } from '../customers/customers.repository';
@@ -223,6 +224,36 @@ describe('UsageService', () => {
       const expectedThrottled = result.items.filter((r) => r.fupThrottled).length;
       // summary.throttled is full-set; since no q filter, items IS the full set here
       expect(result.summary.throttled).toBe(expectedThrottled);
+    });
+  });
+
+  // --- forCustomer (portal self-care, P3.C.4) ---
+
+  describe('forCustomer', () => {
+    it('returns exactly the same row a staff list() call would compute for that customer', async () => {
+      customers.findForUsage.mockResolvedValue(THREE_SUBSCRIBERS);
+      const list = await service.list({ limit: 100, offset: 0 });
+      const staffRow = list.items.find(
+        (r) => r.customerId === '00000000-0000-0000-0000-0000000000c2',
+      );
+
+      const portalRow = await service.forCustomer('00000000-0000-0000-0000-0000000000c2');
+
+      expect(portalRow).toEqual(staffRow);
+    });
+
+    it('404s when the customer id is not in the provisioned set', async () => {
+      customers.findForUsage.mockResolvedValue(THREE_SUBSCRIBERS);
+      await expect(
+        service.forCustomer('00000000-0000-0000-0000-000000000000'),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('404s when there are no provisioned subscribers at all', async () => {
+      customers.findForUsage.mockResolvedValue([]);
+      await expect(
+        service.forCustomer('00000000-0000-0000-0000-0000000000c1'),
+      ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 });

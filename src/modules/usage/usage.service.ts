@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { CustomersRepository } from '../customers/customers.repository';
 import type { UsageResponse, UsageSummary } from './dto/usage-response.dto';
 
@@ -47,20 +47,7 @@ export class UsageService {
   ): Promise<{ items: UsageResponse[]; total: number; summary: UsageSummary }> {
     // Step 1: build the full computed set (deterministic, ordered by customerName asc
     // from the repo — the natural order of findForUsage).
-    const base = await this.customers.findForUsage();
-    const all: UsageResponse[] = base.map((c, i) => {
-      const quotaGb = quotaForSpeed(c.planSpeedMbps);
-      const usedGb = quotaGb === 0 ? 300 + i * 40 : Math.round(quotaGb * (0.4 + (i % 7) * 0.12));
-      return {
-        customerId: c.id,
-        customerName: c.fullName,
-        planName: c.planName,
-        quotaGb,
-        usedGb,
-        fupThrottled: quotaGb > 0 && usedGb >= quotaGb,
-        trend: Array.from({ length: 7 }, (_, d) => 5 + ((i + d) % 9) * 3),
-      };
-    });
+    const all = await this.buildAll();
 
     // Step 2: full-set summary — computed over ALL rows, BEFORE any q/paging filter.
     // This is the invariant: the summary never changes regardless of search or paging.
@@ -91,5 +78,39 @@ export class UsageService {
     const items = sorted.slice(filter.offset, filter.offset + filter.limit);
 
     return { items, total: filtered.length, summary };
+  }
+
+  /**
+   * A single subscriber's own usage row (portal self-care, P3.C.4). Built
+   * from the exact same full computed set as list() — via the shared
+   * buildAll() helper — so the number a customer sees on their portal
+   * always matches the staff usage table exactly. 404s when the customer
+   * id is not in the provisioned set (aktif/isolir).
+   */
+  async forCustomer(customerId: string): Promise<UsageResponse> {
+    const all = await this.buildAll();
+    const row = all.find((r) => r.customerId === customerId);
+    if (!row) throw new NotFoundException('data pemakaian tidak ditemukan untuk pelanggan ini');
+    return row;
+  }
+
+  // Builds the full computed usage set, ordered by customerName asc — the
+  // natural order of findForUsage(). Shared by list() and forCustomer() so
+  // the usedGb/trend synthesis can never drift between the two callers.
+  private async buildAll(): Promise<UsageResponse[]> {
+    const base = await this.customers.findForUsage();
+    return base.map((c, i) => {
+      const quotaGb = quotaForSpeed(c.planSpeedMbps);
+      const usedGb = quotaGb === 0 ? 300 + i * 40 : Math.round(quotaGb * (0.4 + (i % 7) * 0.12));
+      return {
+        customerId: c.id,
+        customerName: c.fullName,
+        planName: c.planName,
+        quotaGb,
+        usedGb,
+        fupThrottled: quotaGb > 0 && usedGb >= quotaGb,
+        trend: Array.from({ length: 7 }, (_, d) => 5 + ((i + d) % 9) * 3),
+      };
+    });
   }
 }
