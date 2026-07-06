@@ -17,3 +17,30 @@ process.env.REDIS_URL = process.env.REDIS_URL ?? 'redis://localhost:6379';
 // Effectively disable rate limiting during tests; limit cases are
 // covered by unit tests, not by exhausting the real throttler.
 process.env.THROTTLER_LIMIT = process.env.THROTTLER_LIMIT ?? '1000000';
+
+// e2e specs boot the full AppModule, which wires BullMQ. In the unit+e2e CI
+// job there is no Redis, so the BullMQ client's background connection retries
+// emit ECONNREFUSED :6379 — benign noise the app already tolerates (the
+// scheduler registration is wrapped in try/catch). Occasionally one of these
+// surfaces as an unhandled rejection and fails an unrelated test file. Swallow
+// ONLY that specific Redis-connection noise so real unhandled errors still fail.
+function isRedisConnError(reason: unknown): boolean {
+  if (reason == null || typeof reason !== 'object') {
+    return typeof reason === 'string' && reason.includes('ECONNREFUSED') && reason.includes('6379');
+  }
+  const e = reason as { code?: string; port?: number; message?: string; errors?: unknown[] };
+  if (e.code === 'ECONNREFUSED' && e.port === 6379) return true;
+  if (
+    typeof e.message === 'string' &&
+    e.message.includes('ECONNREFUSED') &&
+    e.message.includes('6379')
+  )
+    return true;
+  // ioredis surfaces retries as an AggregateError of per-address connect errors.
+  if (Array.isArray(e.errors)) return e.errors.some(isRedisConnError);
+  return false;
+}
+process.on('unhandledRejection', (reason) => {
+  if (isRedisConnError(reason)) return;
+  throw reason;
+});
