@@ -274,6 +274,13 @@
       "when": 1783284294106,
       "tag": "0038_gray_blade",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1783302511977,
+      "tag": "0039_far_spitfire",
+      "breakpoints": true
     }
   ]
 }

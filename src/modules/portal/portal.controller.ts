@@ -5,8 +5,12 @@ import { type AuthUser, CurrentUser } from '../../common/decorators/current-user
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CreatePaymentIntentDto } from '../invoices/dto/create-payment-intent.dto';
 import { PaymentIntentResponseDto } from '../invoices/dto/payment-intent-response.dto';
+import { AddCommentDto } from '../tickets/dto/add-comment.dto';
+import { TicketResponseDto } from '../tickets/dto/ticket-response.dto';
 import { PortalMeResponseDto } from './dto/portal-me-response.dto';
+import { PortalTicketDetailResponseDto } from './dto/portal-ticket-detail-response.dto';
 import { ReportIssueDto } from './dto/report-issue.dto';
+import { SubmitCsatDto } from './dto/submit-csat.dto';
 import { PortalService } from './portal.service';
 
 /**
@@ -32,6 +36,34 @@ export class PortalController {
   @HttpCode(HttpStatus.NO_CONTENT)
   report(@CurrentUser() user: AuthUser, @Body() body: ReportIssueDto): Promise<void> {
     return this.portal.reportIssue(user, body);
+  }
+
+  // Ticket detail + full comment/status timeline, scoped to the caller.
+  @Audit('portal.ticket.detail')
+  @Get('tickets/:id')
+  @ZodSerializerDto(PortalTicketDetailResponseDto)
+  ticketDetail(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.portal.getTicketDetail(user, id);
+  }
+
+  @Audit('portal.ticket.comment')
+  @Post('tickets/:id/comments')
+  @HttpCode(HttpStatus.CREATED)
+  addComment(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body() body: AddCommentDto,
+  ): Promise<void> {
+    return this.portal.addTicketComment(user, id, body);
+  }
+
+  // Post-resolution CSAT (P3.C.2) — only allowed on a resolved/breached
+  // ticket owned by the caller; the service enforces both.
+  @Audit('portal.ticket.csat')
+  @Post('tickets/:id/csat')
+  @ZodSerializerDto(TicketResponseDto)
+  submitCsat(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() body: SubmitCsatDto) {
+    return this.portal.submitTicketCsat(user, id, body);
   }
 
   // Customer-scoped gateway charge (P0.4): staff use /v1/payments/intent to
