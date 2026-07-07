@@ -13,6 +13,15 @@ import {
  * The only place that talks to the `user_security` and `user_sessions`
  * tables. Returns domain rows (Pilar 3). All reads/writes are scoped to a
  * single user id — there is no cross-user query here.
+ *
+ * SEC-2: `SecurityService` no longer reads/writes `user_sessions` through
+ * this repository — the reviewable session list + revocation are now
+ * backed by the real refresh-token store (`RefreshTokenService`, Redis).
+ * The `*Session*` methods below and the `user_sessions` table itself are
+ * dead code kept intentionally (not dropped here — removing a table is
+ * its own migration decision); a follow-up PR should drop both once
+ * confirmed there is no other consumer. `user_security` (the 2FA state)
+ * is still live and still goes through this repository.
  */
 @Injectable()
 export class SecurityRepository {

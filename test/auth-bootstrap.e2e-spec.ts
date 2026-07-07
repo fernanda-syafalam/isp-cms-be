@@ -8,6 +8,7 @@ import { DrizzleService } from '../src/infrastructure/database/drizzle.service';
 import type { NewUser, User } from '../src/infrastructure/database/schema/users.schema';
 import { RedisService } from '../src/infrastructure/redis/redis.service';
 import { UsersRepository } from '../src/modules/users/users.repository';
+import { createFakeRedisClient } from '../src/test-utils/fake-redis-client';
 
 /**
  * E2E for the first-run bootstrap flow (P3.E.1) against a stateful in-memory
@@ -56,24 +57,7 @@ describe('Auth bootstrap (e2e)', () => {
       })
       .overrideProvider(RedisService)
       .useValue({
-        client: (() => {
-          const kv = new Map<string, string>();
-          return {
-            call: async () => null,
-            get: async (k: string) => kv.get(k) ?? null,
-            set: async (k: string, v: string) => {
-              kv.set(k, v);
-              return 'OK';
-            },
-            getdel: async (k: string) => {
-              const v = kv.get(k);
-              if (v === undefined) return null;
-              kv.delete(k);
-              return v;
-            },
-            del: async (k: string) => (kv.delete(k) ? 1 : 0),
-          };
-        })(),
+        client: createFakeRedisClient(),
         ping: async () => true,
         onModuleInit: () => Promise.resolve(),
         onModuleDestroy: () => Promise.resolve(),

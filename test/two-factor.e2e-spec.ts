@@ -11,6 +11,7 @@ import type { User } from '../src/infrastructure/database/schema/users.schema';
 import { RedisService } from '../src/infrastructure/redis/redis.service';
 import { SecurityRepository } from '../src/modules/security/security.repository';
 import { UsersRepository } from '../src/modules/users/users.repository';
+import { createFakeRedisClient } from '../src/test-utils/fake-redis-client';
 
 const PASSWORD = 'correct-horse-battery-staple';
 
@@ -93,32 +94,11 @@ describe('Two-factor authentication (e2e)', () => {
       })
       .overrideProvider(RedisService)
       .useValue({
-        client: (() => {
-          const store = new Map<string, string>();
-          return {
-            call: async () => null,
-            get: async (k: string) => store.get(k) ?? null,
-            set: async (k: string, v: string) => {
-              store.set(k, v);
-              return 'OK';
-            },
-            getdel: async (k: string) => {
-              const v = store.get(k);
-              if (v === undefined) return null;
-              store.delete(k);
-              return v;
-            },
-            del: async (k: string) => (store.delete(k) ? 1 : 0),
-            // TotpLockoutService (F1) — incr/expire back the per-user
-            // failed-attempt counter.
-            incr: async (k: string) => {
-              const v = Number(store.get(k) ?? '0') + 1;
-              store.set(k, String(v));
-              return v;
-            },
-            expire: async () => 1,
-          };
-        })(),
+        // Shared fake — real Map-backed get/set/getdel/del + sadd/srem/
+        // smembers (SEC-2 session index) + incr/expire (F1 lockout
+        // counter) + the atomic revoke/rotate-commit `eval` scripts
+        // RefreshTokenService uses.
+        client: createFakeRedisClient(),
         ping: async () => true,
         onModuleInit: () => Promise.resolve(),
         onModuleDestroy: () => Promise.resolve(),

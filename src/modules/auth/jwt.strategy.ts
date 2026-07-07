@@ -9,6 +9,11 @@ import { UsersRepository } from '../users/users.repository';
 interface JwtPayload {
   sub: string;
   role: AuthUser['role'];
+  // SEC-2: the session id this access token was minted for. Optional —
+  // an access token signed before this claim existed simply lacks it;
+  // `validate` below must degrade gracefully (sessionId stays undefined)
+  // rather than reject the token.
+  sid?: string;
   iat: number;
   exp: number;
 }
@@ -42,6 +47,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       fullName: user.fullName,
       role: user.role,
       resellerId: user.resellerId,
+      sessionId: payload.sid,
     };
   }
 }

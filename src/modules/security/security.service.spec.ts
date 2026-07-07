@@ -2,8 +2,9 @@ import { BadRequestException, NotFoundException, UnauthorizedException } from '@
 import { Test, type TestingModule } from '@nestjs/testing';
 import { authenticator } from 'otplib';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { UserSession } from '../../infrastructure/database/schema/security.schema';
 import type { RedisService } from '../../infrastructure/redis/redis.service';
+import type { SessionSummary } from '../sessions/refresh-token.service';
+import { RefreshTokenService } from '../sessions/refresh-token.service';
 import { SecurityRepository } from './security.repository';
 import { SecurityService } from './security.service';
 import { TotpLockoutService } from './totp-lockout.service';
@@ -25,20 +26,27 @@ function fakeRedisClient() {
 
 const userId = '00000000-0000-0000-0000-0000000000a1';
 
-const currentSession: UserSession = {
+const currentSession: SessionSummary = {
   id: '00000000-0000-0000-0000-0000000000s1',
-  userId,
-  device: 'Chrome di Windows',
+  createdAt: '2026-06-01T00:00:00.000Z',
+  lastUsedAt: '2026-06-16T00:00:00.000Z',
+  userAgent: 'Chrome on Windows',
   ip: '103.28.12.4',
-  lastActiveAt: new Date('2026-06-16T00:00:00.000Z'),
-  isCurrent: true,
-  createdAt: new Date('2026-06-01T00:00:00.000Z'),
+};
+
+const otherSession: SessionSummary = {
+  id: '00000000-0000-0000-0000-0000000000s2',
+  createdAt: '2026-06-02T00:00:00.000Z',
+  lastUsedAt: '2026-06-10T00:00:00.000Z',
+  userAgent: 'Safari on iPhone',
+  ip: '103.28.12.9',
 };
 
 describe('SecurityService', () => {
   let service: SecurityService;
   let repo: Record<string, ReturnType<typeof vi.fn>>;
   let lockout: Record<string, ReturnType<typeof vi.fn>>;
+  let sessions: Record<string, ReturnType<typeof vi.fn>>;
 
   beforeEach(async () => {
     repo = {
@@ -47,11 +55,6 @@ describe('SecurityService', () => {
       saveTwoFactorSecret: vi.fn(),
       confirmTwoFactor: vi.fn(),
       clearTwoFactor: vi.fn(),
-      countSessions: vi.fn(),
-      seedSessions: vi.fn(),
-      listSessions: vi.fn(),
-      deleteSession: vi.fn(),
-      deleteOtherSessions: vi.fn(),
     };
     // Default: never locked — matches every pre-existing test that
     // doesn't care about F1. The dedicated 'F1 brute-force lockout'
@@ -61,51 +64,56 @@ describe('SecurityService', () => {
       recordFailure: vi.fn(),
       recordSuccess: vi.fn(),
     };
+    sessions = {
+      listSessions: vi.fn().mockResolvedValue([currentSession]),
+      revokeSession: vi.fn(),
+      revokeOtherSessions: vi.fn().mockResolvedValue(0),
+    };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         SecurityService,
         { provide: SecurityRepository, useValue: repo },
         { provide: TotpLockoutService, useValue: lockout },
+        { provide: RefreshTokenService, useValue: sessions },
       ],
     }).compile();
     service = moduleRef.get(SecurityService);
   });
 
   describe('getState', () => {
-    it('seeds sessions on first access and maps isCurrent -> current with ISO dates', async () => {
-      repo.countSessions.mockResolvedValue(0);
+    it("returns the real active sessions, marking the caller's own as current", async () => {
       repo.findState.mockResolvedValue({ userId, twoFactorEnabled: false });
-      repo.listSessions.mockResolvedValue([currentSession]);
+      sessions.listSessions.mockResolvedValue([currentSession, otherSession]);
 
-      const state = await service.getState(userId);
+      const state = await service.getState(userId, currentSession.id);
 
       expect(repo.ensureState).toHaveBeenCalledWith(userId);
-      expect(repo.seedSessions).toHaveBeenCalledTimes(1);
+      expect(sessions.listSessions).toHaveBeenCalledWith(userId);
       expect(state.twoFactorEnabled).toBe(false);
-      expect(state.sessions[0]).toMatchObject({
-        id: currentSession.id,
-        device: 'Chrome di Windows',
-        current: true,
+      expect(state.sessions).toHaveLength(2);
+      expect(state.sessions.find((s) => s.id === currentSession.id)).toMatchObject({
+        device: 'Chrome on Windows',
+        ip: '103.28.12.4',
         lastActiveAt: '2026-06-16T00:00:00.000Z',
+        current: true,
+      });
+      expect(state.sessions.find((s) => s.id === otherSession.id)).toMatchObject({
+        current: false,
       });
     });
 
-    it('does not re-seed when sessions already exist', async () => {
-      repo.countSessions.mockResolvedValue(2);
+    it('marks no session as current when the caller has no session id (pre-SEC-2 access token)', async () => {
       repo.findState.mockResolvedValue({ userId, twoFactorEnabled: true });
-      repo.listSessions.mockResolvedValue([currentSession]);
+      sessions.listSessions.mockResolvedValue([currentSession]);
 
-      const state = await service.getState(userId);
+      const state = await service.getState(userId, undefined);
 
-      expect(repo.seedSessions).not.toHaveBeenCalled();
-      expect(state.twoFactorEnabled).toBe(true);
+      expect(state.sessions[0]?.current).toBe(false);
     });
   });
 
   describe('beginEnroll', () => {
     it('generates a secret, persists it, and returns the QR payload', async () => {
-      repo.countSessions.mockResolvedValue(1);
-
       const out = await service.beginEnroll(userId, 'user@example.test');
 
       expect(repo.saveTwoFactorSecret).toHaveBeenCalledWith(userId, out.twoFactorSecret);
@@ -118,13 +126,11 @@ describe('SecurityService', () => {
   describe('confirmEnroll', () => {
     it('flips enabled to true when the code matches the stored secret', async () => {
       const secret = authenticator.generateSecret();
-      repo.countSessions.mockResolvedValue(1);
       repo.findState.mockResolvedValue({
         userId,
         twoFactorEnabled: false,
         twoFactorSecret: secret,
       });
-      repo.listSessions.mockResolvedValue([currentSession]);
       // Refresh after confirm reflects the flipped flag.
       repo.confirmTwoFactor.mockImplementation(async () => {
         repo.findState.mockResolvedValue({
@@ -135,7 +141,7 @@ describe('SecurityService', () => {
       });
 
       const code = authenticator.generate(secret);
-      const state = await service.confirmEnroll(userId, code);
+      const state = await service.confirmEnroll(userId, code, currentSession.id);
 
       expect(repo.confirmTwoFactor).toHaveBeenCalledWith(userId);
       expect(state.twoFactorEnabled).toBe(true);
@@ -143,24 +149,42 @@ describe('SecurityService', () => {
       expect(lockout.recordFailure).not.toHaveBeenCalled();
     });
 
-    it('rejects a wrong code and does not enable 2FA', async () => {
+    it("F3: revokes every other active session, keeping only the caller's own", async () => {
       const secret = authenticator.generateSecret();
-      repo.countSessions.mockResolvedValue(1);
+      repo.findState.mockResolvedValue({
+        userId,
+        twoFactorEnabled: false,
+        twoFactorSecret: secret,
+      });
+      sessions.revokeOtherSessions.mockResolvedValue(2);
+
+      const code = authenticator.generate(secret);
+      await service.confirmEnroll(userId, code, currentSession.id);
+
+      expect(sessions.revokeOtherSessions).toHaveBeenCalledWith(userId, currentSession.id);
+      // Revoke must happen AFTER the flag actually flips, not before.
+      const confirmOrder = repo.confirmTwoFactor.mock.invocationCallOrder[0];
+      const revokeOrder = sessions.revokeOtherSessions.mock.invocationCallOrder[0];
+      expect(confirmOrder).toBeLessThan(revokeOrder as number);
+    });
+
+    it('rejects a wrong code and does not enable 2FA or touch sessions', async () => {
+      const secret = authenticator.generateSecret();
       repo.findState.mockResolvedValue({
         userId,
         twoFactorEnabled: false,
         twoFactorSecret: secret,
       });
 
-      await expect(service.confirmEnroll(userId, '000000')).rejects.toBeInstanceOf(
-        UnauthorizedException,
-      );
+      await expect(
+        service.confirmEnroll(userId, '000000', currentSession.id),
+      ).rejects.toBeInstanceOf(UnauthorizedException);
       expect(repo.confirmTwoFactor).not.toHaveBeenCalled();
+      expect(sessions.revokeOtherSessions).not.toHaveBeenCalled();
       expect(lockout.recordFailure).toHaveBeenCalledWith(userId);
     });
 
     it('rejects when enrollment was never started (no stored secret)', async () => {
-      repo.countSessions.mockResolvedValue(1);
       repo.findState.mockResolvedValue({ userId, twoFactorEnabled: false, twoFactorSecret: null });
 
       await expect(service.confirmEnroll(userId, '123456')).rejects.toBeInstanceOf(
@@ -173,7 +197,6 @@ describe('SecurityService', () => {
 
     it('rejects with totp_locked (and does not verify the code) when the account is locked out', async () => {
       lockout.isLocked.mockResolvedValue(true);
-      repo.countSessions.mockResolvedValue(1);
       repo.findState.mockResolvedValue({
         userId,
         twoFactorEnabled: false,
@@ -191,9 +214,7 @@ describe('SecurityService', () => {
   describe('disableTwoFactor', () => {
     it('clears the secret + flag when the current code is valid', async () => {
       const secret = authenticator.generateSecret();
-      repo.countSessions.mockResolvedValue(1);
       repo.findState.mockResolvedValue({ userId, twoFactorEnabled: true, twoFactorSecret: secret });
-      repo.listSessions.mockResolvedValue([currentSession]);
       repo.clearTwoFactor.mockImplementation(async () => {
         repo.findState.mockResolvedValue({
           userId,
@@ -212,7 +233,6 @@ describe('SecurityService', () => {
 
     it('rejects disabling an enabled account with a missing/wrong code', async () => {
       const secret = authenticator.generateSecret();
-      repo.countSessions.mockResolvedValue(1);
       repo.findState.mockResolvedValue({ userId, twoFactorEnabled: true, twoFactorSecret: secret });
 
       await expect(service.disableTwoFactor(userId, undefined)).rejects.toBeInstanceOf(
@@ -228,7 +248,6 @@ describe('SecurityService', () => {
     it('rejects with totp_locked when the account is locked out, without touching the repo', async () => {
       lockout.isLocked.mockResolvedValue(true);
       const secret = authenticator.generateSecret();
-      repo.countSessions.mockResolvedValue(1);
       repo.findState.mockResolvedValue({ userId, twoFactorEnabled: true, twoFactorSecret: secret });
 
       const code = authenticator.generate(secret); // even the correct code
@@ -240,13 +259,11 @@ describe('SecurityService', () => {
 
     it('allows cancelling an unconfirmed enrollment without a code, even while locked', async () => {
       lockout.isLocked.mockResolvedValue(true);
-      repo.countSessions.mockResolvedValue(1);
       repo.findState.mockResolvedValue({
         userId,
         twoFactorEnabled: false,
         twoFactorSecret: 'SOMEUNCONFIRMEDSECRET',
       });
-      repo.listSessions.mockResolvedValue([currentSession]);
 
       const state = await service.disableTwoFactor(userId);
 
@@ -323,7 +340,11 @@ describe('SecurityService', () => {
     beforeEach(async () => {
       const fakeRedis = { client: fakeRedisClient() } as unknown as RedisService;
       const realLockout = new TotpLockoutService(fakeRedis);
-      realService = new SecurityService(repo as unknown as SecurityRepository, realLockout);
+      realService = new SecurityService(
+        repo as unknown as SecurityRepository,
+        realLockout,
+        sessions as unknown as RefreshTokenService,
+      );
     });
 
     it('locks the account out after 5 consecutive failures and blocks even a correct code, until the counter resets', async () => {
@@ -383,14 +404,14 @@ describe('SecurityService', () => {
   });
 
   describe('revokeSession', () => {
-    it('deletes the session scoped to the user', async () => {
-      repo.deleteSession.mockResolvedValue(true);
+    it('delegates to the real session store, scoped to the user', async () => {
+      sessions.revokeSession.mockResolvedValue(true);
       await service.revokeSession(userId, 'sess-1');
-      expect(repo.deleteSession).toHaveBeenCalledWith('sess-1', userId);
+      expect(sessions.revokeSession).toHaveBeenCalledWith(userId, 'sess-1');
     });
 
     it('throws 404 when no session matched', async () => {
-      repo.deleteSession.mockResolvedValue(false);
+      sessions.revokeSession.mockResolvedValue(false);
       await expect(service.revokeSession(userId, 'missing')).rejects.toBeInstanceOf(
         NotFoundException,
       );
@@ -398,9 +419,9 @@ describe('SecurityService', () => {
   });
 
   describe('revokeOtherSessions', () => {
-    it('delegates to the repo', async () => {
-      await service.revokeOtherSessions(userId);
-      expect(repo.deleteOtherSessions).toHaveBeenCalledWith(userId);
+    it("delegates to the real session store, keeping the caller's own session", async () => {
+      await service.revokeOtherSessions(userId, currentSession.id);
+      expect(sessions.revokeOtherSessions).toHaveBeenCalledWith(userId, currentSession.id);
     });
   });
 });

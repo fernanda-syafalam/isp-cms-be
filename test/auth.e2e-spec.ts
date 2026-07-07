@@ -11,6 +11,7 @@ import type { User } from '../src/infrastructure/database/schema/users.schema';
 import { RedisService } from '../src/infrastructure/redis/redis.service';
 import { SecurityRepository } from '../src/modules/security/security.repository';
 import { UsersRepository } from '../src/modules/users/users.repository';
+import { createFakeRedisClient } from '../src/test-utils/fake-redis-client';
 
 /**
  * E2E coverage for the auth flow without a real Postgres. The
@@ -57,29 +58,13 @@ describe('Auth (e2e)', () => {
       })
       .overrideProvider(RedisService)
       .useValue({
-        // Minimal in-memory ioredis stand-in covering the calls
-        // RefreshTokenService + the throttler stub make. Refresh token
-        // rotation is a state machine across two POSTs, so a no-op
-        // stub would let rotated tokens "still work" — use a real Map
-        // so the test catches actual rotation semantics.
-        client: (() => {
-          const store = new Map<string, string>();
-          return {
-            call: async () => null,
-            get: async (k: string) => store.get(k) ?? null,
-            set: async (k: string, v: string) => {
-              store.set(k, v);
-              return 'OK';
-            },
-            getdel: async (k: string) => {
-              const v = store.get(k);
-              if (v === undefined) return null;
-              store.delete(k);
-              return v;
-            },
-            del: async (k: string) => (store.delete(k) ? 1 : 0),
-          };
-        })(),
+        // In-memory ioredis stand-in covering the calls RefreshTokenService
+        // + the throttler stub make. Refresh token rotation is a state
+        // machine across two POSTs (plus SEC-2's atomic revoke/rotate-commit
+        // Lua scripts), so a no-op stub would let rotated tokens "still
+        // work" — use the shared fake so the test catches actual rotation
+        // semantics.
+        client: createFakeRedisClient(),
         ping: async () => true,
         onModuleInit: () => Promise.resolve(),
         onModuleDestroy: () => Promise.resolve(),

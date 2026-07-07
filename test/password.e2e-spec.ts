@@ -10,6 +10,7 @@ import type { User } from '../src/infrastructure/database/schema/users.schema';
 import { RedisService } from '../src/infrastructure/redis/redis.service';
 import { SecurityRepository } from '../src/modules/security/security.repository';
 import { UsersRepository } from '../src/modules/users/users.repository';
+import { createFakeRedisClient } from '../src/test-utils/fake-redis-client';
 
 const OLD_PASSWORD = 'correct-horse-battery-staple';
 const NEW_PASSWORD = 'brand-new-password-42';
@@ -65,24 +66,7 @@ describe('Password lifecycle (e2e)', () => {
       })
       .overrideProvider(RedisService)
       .useValue({
-        client: (() => {
-          const store = new Map<string, string>();
-          return {
-            call: async () => null,
-            get: async (k: string) => store.get(k) ?? null,
-            set: async (k: string, v: string) => {
-              store.set(k, v);
-              return 'OK';
-            },
-            getdel: async (k: string) => {
-              const v = store.get(k);
-              if (v === undefined) return null;
-              store.delete(k);
-              return v;
-            },
-            del: async (k: string) => (store.delete(k) ? 1 : 0),
-          };
-        })(),
+        client: createFakeRedisClient(),
         ping: async () => true,
         onModuleInit: () => Promise.resolve(),
         onModuleDestroy: () => Promise.resolve(),
