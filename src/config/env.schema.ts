@@ -1,5 +1,19 @@
 import { z } from 'zod';
 
+const TWOFA_ENC_KEY_BYTES = 32;
+
+/** `TWOFA_ENC_KEY` must decode (base64) to exactly 32 raw bytes — an AES-256 key. */
+function isValidTwoFaEncKey(value: string): boolean {
+  try {
+    // Buffer.from(..., 'base64') never throws on invalid input, it just
+    // decodes what it can — the length check is what actually catches a
+    // malformed/short/placeholder value.
+    return Buffer.from(value, 'base64').length === TWOFA_ENC_KEY_BYTES;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Environment variable schema. Single source of truth — every env var
  * the app reads must be declared here. Validation runs at startup so
@@ -38,6 +52,18 @@ export const envSchema = z.object({
     .int()
     .positive()
     .default(7 * 24 * 60 * 60),
+
+  // F2: AES-256-GCM key encrypting the TOTP secret at rest (see
+  // `TotpSecretCipherService`). Must be exactly 32 raw bytes, base64
+  // encoded — generate with `openssl rand -base64 32`. Deliberately a
+  // separate secret from `JWT_SECRET`/`DATABASE_URL`: rotating it never
+  // requires touching the DB connection or re-issuing JWTs, and a DB-only
+  // dump does not also leak it. Always required (like `JWT_SECRET`
+  // above) — dev/test supply their own fixed real value (`.env`,
+  // `test/setup.ts`) rather than the schema special-casing `NODE_ENV`.
+  TWOFA_ENC_KEY: z.string().min(1).refine(isValidTwoFaEncKey, {
+    message: 'TWOFA_ENC_KEY must be a base64-encoded 32-byte (256-bit) key',
+  }),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 

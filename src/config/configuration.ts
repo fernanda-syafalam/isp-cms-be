@@ -28,6 +28,9 @@ export const appConfig = registerAs('app', () => {
       expiresIn: env.JWT_EXPIRES_IN,
       refreshTokenTtlSeconds: env.REFRESH_TOKEN_TTL_SECONDS,
     },
+    twoFactor: {
+      encKey: env.TWOFA_ENC_KEY,
+    },
     logLevel: env.LOG_LEVEL,
     cors: {
       // Split here so downstream code gets a ready-to-use string array.

@@ -9,7 +9,7 @@ import { SecurityRepository } from './security.repository';
 
 /**
  * Real Postgres integration test for SecurityRepository. Requires Docker.
- * Schema applied by hand (mirroring migration 0023 + 0044).
+ * Schema applied by hand (mirroring migration 0023 + 0044 + 0046).
  */
 describe('SecurityRepository (integration)', () => {
   let container: StartedPostgreSqlContainer;
@@ -29,7 +29,7 @@ describe('SecurityRepository (integration)', () => {
       CREATE TABLE user_security (
         user_id uuid PRIMARY KEY,
         two_factor_enabled boolean NOT NULL DEFAULT false,
-        two_factor_secret varchar(64),
+        two_factor_secret text,
         created_at timestamptz(3) NOT NULL DEFAULT now(),
         updated_at timestamptz(3) NOT NULL DEFAULT now()
       );

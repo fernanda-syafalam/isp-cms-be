@@ -30,13 +30,30 @@ interface FakeSecurityRow {
  * real, not just mocked at the service layer (see security.service.spec.ts
  * for the service-level unit tests, and auth.service.spec.ts for the
  * login-challenge unit tests).
+ *
+ * F5: `RedisService` is faked but `TotpReplayGuardService` itself is the
+ * REAL provider (not overridden), so it actively rejects a TOTP step
+ * already accepted for this user — including across successive
+ * `it()` blocks, since they all share the same `storedUser.id` and the
+ * same fake Redis-backed store for the whole file. `Date` (only) is
+ * faked with `vi.useFakeTimers({ toFake: ['Date'] })` so every place a
+ * code is generated a second time after a previous one was already
+ * accepted can be pinned to a later TOTP step on purpose, instead of
+ * racing the real 30s window.
  */
 describe('Two-factor authentication (e2e)', () => {
   let app: NestFastifyApplication;
   let storedUser: User;
   const securityState = new Map<string, FakeSecurityRow>();
 
+  /** Move the faked clock forward by at least one TOTP step (30s). */
+  function advanceOneStep() {
+    vi.setSystemTime(new Date(Date.now() + 31_000));
+  }
+
   beforeAll(async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     storedUser = {
       id: '00000000-0000-0000-0000-000000000002',
       email: 'staff@b.test',
@@ -118,6 +135,7 @@ describe('Two-factor authentication (e2e)', () => {
 
   afterAll(async () => {
     await app.close();
+    vi.useRealTimers();
   });
 
   async function login(totpCode?: string) {
@@ -189,7 +207,9 @@ describe('Two-factor authentication (e2e)', () => {
     expect(invalidRes.statusCode).toBe(401);
     expect(invalidRes.json()).toMatchObject({ code: 'totp_invalid' });
 
-    // The right code logs in.
+    // The right code logs in. F5: a fresh code at a later step — the
+    // step the `confirm` call above already accepted must not be reused.
+    advanceOneStep();
     const okRes = await login(authenticator.generate(twoFactorSecret));
     expect(okRes.statusCode).toBe(200);
     expect(typeof (okRes.json() as { accessToken: string }).accessToken).toBe('string');
@@ -203,6 +223,9 @@ describe('Two-factor authentication (e2e)', () => {
     });
     expect(badDisable.statusCode).toBe(401);
 
+    // F5: another fresh step — the login above already accepted the
+    // previous one.
+    advanceOneStep();
     const disable = await app.inject({
       method: 'POST',
       url: '/v1/security/2fa/disable',

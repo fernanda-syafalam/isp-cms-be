@@ -1,27 +1,50 @@
 import { BadRequestException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import type { ConfigService } from '@nestjs/config';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { authenticator } from 'otplib';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AppConfig } from '../../config/configuration';
 import type { RedisService } from '../../infrastructure/redis/redis.service';
 import type { SessionSummary } from '../sessions/refresh-token.service';
 import { RefreshTokenService } from '../sessions/refresh-token.service';
 import { SecurityRepository } from './security.repository';
 import { SecurityService } from './security.service';
 import { TotpLockoutService } from './totp-lockout.service';
+import { TotpReplayGuardService } from './totp-replay-guard.service';
+import { TotpSecretCipherService } from './totp-secret-cipher.service';
 
-/** Minimal in-memory stand-in for `RedisService.client`'s get/incr/expire/del. */
+/** Minimal in-memory stand-in for `RedisService.client`'s get/set/incr/expire/del. */
 function fakeRedisClient() {
-  const store = new Map<string, number>();
+  const store = new Map<string, string>();
   return {
     get: async (k: string) => (store.has(k) ? String(store.get(k)) : null),
-    incr: async (k: string) => {
-      const v = (store.get(k) ?? 0) + 1;
+    set: async (k: string, v: string) => {
       store.set(k, v);
+      return 'OK' as const;
+    },
+    incr: async (k: string) => {
+      const v = Number(store.get(k) ?? '0') + 1;
+      store.set(k, String(v));
       return v;
     },
     expire: async () => 1,
     del: async (k: string) => (store.delete(k) ? 1 : 0),
   };
+}
+
+// F2: a fixed 32-byte (base64) key so `TotpSecretCipherService` can
+// actually encrypt/decrypt in these unit tests — same value as
+// `test/setup.ts`'s `TWOFA_ENC_KEY` default, but constructed directly
+// here rather than read from `process.env` (this is a plain `new`, not
+// DI-resolved, same as the real `TotpLockoutService` further down).
+const TEST_ENC_KEY = 'vnteJd7CUd7akqlbonvugRw6MNVSqV88K3ijn82XeoM=';
+
+function makeCipher(): TotpSecretCipherService {
+  const configStub = { get: () => TEST_ENC_KEY } as unknown as ConfigService<
+    { app: AppConfig },
+    true
+  >;
+  return new TotpSecretCipherService(configStub);
 }
 
 const userId = '00000000-0000-0000-0000-0000000000a1';
@@ -47,6 +70,8 @@ describe('SecurityService', () => {
   let repo: Record<string, ReturnType<typeof vi.fn>>;
   let lockout: Record<string, ReturnType<typeof vi.fn>>;
   let sessions: Record<string, ReturnType<typeof vi.fn>>;
+  let cipher: TotpSecretCipherService;
+  let replayGuard: Record<string, ReturnType<typeof vi.fn>>;
 
   beforeEach(async () => {
     repo = {
@@ -69,12 +94,24 @@ describe('SecurityService', () => {
       revokeSession: vi.fn(),
       revokeOtherSessions: vi.fn().mockResolvedValue(0),
     };
+    // F2: real cipher (not mocked) — these tests need actual
+    // encrypt/decrypt round-tripping, not just "was it called".
+    cipher = makeCipher();
+    // F5: default — never a replay, matches every pre-existing test that
+    // doesn't care about F5. The dedicated 'F5 replay protection'
+    // describe block below wires a real TotpReplayGuardService instead.
+    replayGuard = {
+      getLastAcceptedStep: vi.fn().mockResolvedValue(null),
+      recordAcceptedStep: vi.fn(),
+    };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         SecurityService,
         { provide: SecurityRepository, useValue: repo },
         { provide: TotpLockoutService, useValue: lockout },
         { provide: RefreshTokenService, useValue: sessions },
+        { provide: TotpSecretCipherService, useValue: cipher },
+        { provide: TotpReplayGuardService, useValue: replayGuard },
       ],
     }).compile();
     service = moduleRef.get(SecurityService);
@@ -116,10 +153,17 @@ describe('SecurityService', () => {
     it('generates a secret, persists it, and returns the QR payload', async () => {
       const out = await service.beginEnroll(userId, 'user@example.test');
 
-      expect(repo.saveTwoFactorSecret).toHaveBeenCalledWith(userId, out.twoFactorSecret);
       expect(out.twoFactorSecret).toMatch(/^[A-Z2-7]+$/); // base32
       expect(out.otpauthUri).toContain('otpauth://totp/');
       expect(out.otpauthUri).toContain(encodeURIComponent('user@example.test'));
+
+      // F2: the DB never sees the plaintext secret — only an encrypted
+      // blob that decrypts back to the same value returned to the caller.
+      expect(repo.saveTwoFactorSecret).toHaveBeenCalledWith(userId, expect.any(String));
+      const stored = repo.saveTwoFactorSecret.mock.calls[0]?.[1] as string;
+      expect(stored).not.toBe(out.twoFactorSecret);
+      expect(stored).not.toMatch(/^[A-Z2-7]+$/); // not plain base32
+      expect(cipher.decrypt(stored)).toBe(out.twoFactorSecret);
     });
   });
 
@@ -129,14 +173,14 @@ describe('SecurityService', () => {
       repo.findState.mockResolvedValue({
         userId,
         twoFactorEnabled: false,
-        twoFactorSecret: secret,
+        twoFactorSecret: cipher.encrypt(secret),
       });
       // Refresh after confirm reflects the flipped flag.
       repo.confirmTwoFactor.mockImplementation(async () => {
         repo.findState.mockResolvedValue({
           userId,
           twoFactorEnabled: true,
-          twoFactorSecret: secret,
+          twoFactorSecret: cipher.encrypt(secret),
         });
       });
 
@@ -154,7 +198,7 @@ describe('SecurityService', () => {
       repo.findState.mockResolvedValue({
         userId,
         twoFactorEnabled: false,
-        twoFactorSecret: secret,
+        twoFactorSecret: cipher.encrypt(secret),
       });
       sessions.revokeOtherSessions.mockResolvedValue(2);
 
@@ -173,7 +217,7 @@ describe('SecurityService', () => {
       repo.findState.mockResolvedValue({
         userId,
         twoFactorEnabled: false,
-        twoFactorSecret: secret,
+        twoFactorSecret: cipher.encrypt(secret),
       });
 
       await expect(
@@ -209,12 +253,36 @@ describe('SecurityService', () => {
       expect(repo.confirmTwoFactor).not.toHaveBeenCalled();
       expect(lockout.recordFailure).not.toHaveBeenCalled();
     });
+
+    // F2: defensive handling for a legacy plaintext secret (or any other
+    // corrupted value) stored before encryption-at-rest shipped — must
+    // fail the challenge safely, never crash, never let it through.
+    it('fails safely (not a crash, not a pass) when the stored secret is a legacy plaintext value', async () => {
+      const secret = authenticator.generateSecret();
+      repo.findState.mockResolvedValue({
+        userId,
+        twoFactorEnabled: false,
+        twoFactorSecret: secret, // plaintext, not `iv:authTag:ciphertext`
+      });
+
+      const code = authenticator.generate(secret); // objectively correct code
+      await expect(service.confirmEnroll(userId, code)).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      expect(repo.confirmTwoFactor).not.toHaveBeenCalled();
+      // An anomaly outside the user's control — does not burn a lockout attempt.
+      expect(lockout.recordFailure).not.toHaveBeenCalled();
+    });
   });
 
   describe('disableTwoFactor', () => {
     it('clears the secret + flag when the current code is valid', async () => {
       const secret = authenticator.generateSecret();
-      repo.findState.mockResolvedValue({ userId, twoFactorEnabled: true, twoFactorSecret: secret });
+      repo.findState.mockResolvedValue({
+        userId,
+        twoFactorEnabled: true,
+        twoFactorSecret: cipher.encrypt(secret),
+      });
       repo.clearTwoFactor.mockImplementation(async () => {
         repo.findState.mockResolvedValue({
           userId,
@@ -233,7 +301,11 @@ describe('SecurityService', () => {
 
     it('rejects disabling an enabled account with a missing/wrong code', async () => {
       const secret = authenticator.generateSecret();
-      repo.findState.mockResolvedValue({ userId, twoFactorEnabled: true, twoFactorSecret: secret });
+      repo.findState.mockResolvedValue({
+        userId,
+        twoFactorEnabled: true,
+        twoFactorSecret: cipher.encrypt(secret),
+      });
 
       await expect(service.disableTwoFactor(userId, undefined)).rejects.toBeInstanceOf(
         UnauthorizedException,
@@ -254,6 +326,23 @@ describe('SecurityService', () => {
       const err = await service.disableTwoFactor(userId, code).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(UnauthorizedException);
       expect((err as UnauthorizedException).getResponse()).toMatchObject({ code: 'totp_locked' });
+      expect(repo.clearTwoFactor).not.toHaveBeenCalled();
+    });
+
+    // F2: same defensive handling as confirmEnroll — a legacy plaintext
+    // (or otherwise corrupted) secret must fail closed, not crash.
+    it('fails safely when the stored secret is a legacy plaintext value', async () => {
+      const secret = authenticator.generateSecret();
+      repo.findState.mockResolvedValue({
+        userId,
+        twoFactorEnabled: true,
+        twoFactorSecret: secret, // plaintext, not `iv:authTag:ciphertext`
+      });
+
+      const code = authenticator.generate(secret); // objectively correct code
+      await expect(service.disableTwoFactor(userId, code)).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
       expect(repo.clearTwoFactor).not.toHaveBeenCalled();
     });
 
@@ -287,17 +376,40 @@ describe('SecurityService', () => {
 
     it('returns invalid when 2FA is enabled and the code is wrong', async () => {
       const secret = authenticator.generateSecret();
-      repo.findState.mockResolvedValue({ userId, twoFactorEnabled: true, twoFactorSecret: secret });
+      repo.findState.mockResolvedValue({
+        userId,
+        twoFactorEnabled: true,
+        twoFactorSecret: cipher.encrypt(secret),
+      });
       await expect(service.verifyLoginChallenge(userId, '000000')).resolves.toBe('invalid');
       expect(lockout.recordFailure).toHaveBeenCalledWith(userId);
     });
 
     it('returns ok when 2FA is enabled and the code is correct', async () => {
       const secret = authenticator.generateSecret();
-      repo.findState.mockResolvedValue({ userId, twoFactorEnabled: true, twoFactorSecret: secret });
+      repo.findState.mockResolvedValue({
+        userId,
+        twoFactorEnabled: true,
+        twoFactorSecret: cipher.encrypt(secret),
+      });
       const code = authenticator.generate(secret);
       await expect(service.verifyLoginChallenge(userId, code)).resolves.toBe('ok');
       expect(lockout.recordSuccess).toHaveBeenCalledWith(userId);
+    });
+
+    // F2: a legacy plaintext (or otherwise corrupted) secret must fail the
+    // challenge safely — never crash, never let it through as 'ok' — and
+    // must not burn a lockout attempt (it's not the user's fault).
+    it("fails safely ('invalid', no crash) when the stored secret is a legacy plaintext value", async () => {
+      const secret = authenticator.generateSecret();
+      repo.findState.mockResolvedValue({
+        userId,
+        twoFactorEnabled: true,
+        twoFactorSecret: secret, // plaintext, not `iv:authTag:ciphertext`
+      });
+      const code = authenticator.generate(secret); // objectively correct code
+      await expect(service.verifyLoginChallenge(userId, code)).resolves.toBe('invalid');
+      expect(lockout.recordFailure).not.toHaveBeenCalled();
     });
 
     it('returns locked (and never verifies the code) when the account is locked out', async () => {
@@ -344,12 +456,23 @@ describe('SecurityService', () => {
         repo as unknown as SecurityRepository,
         realLockout,
         sessions as unknown as RefreshTokenService,
+        cipher,
+        // F5 is exercised in its own describe block below — the mocked,
+        // never-a-replay `replayGuard` here keeps this block focused on
+        // F1 only (in particular, reusing the same `rightCode` value
+        // across assertions within a test must not itself look like a
+        // replay).
+        replayGuard as unknown as TotpReplayGuardService,
       );
     });
 
     it('locks the account out after 5 consecutive failures and blocks even a correct code, until the counter resets', async () => {
       const secret = authenticator.generateSecret();
-      repo.findState.mockResolvedValue({ userId, twoFactorEnabled: true, twoFactorSecret: secret });
+      repo.findState.mockResolvedValue({
+        userId,
+        twoFactorEnabled: true,
+        twoFactorSecret: cipher.encrypt(secret),
+      });
 
       for (let i = 0; i < TotpLockoutService.MAX_ATTEMPTS; i++) {
         await expect(realService.verifyLoginChallenge(userId, '000000')).resolves.toBe('invalid');
@@ -362,7 +485,11 @@ describe('SecurityService', () => {
 
     it('resets the counter on a successful verification, so a later run needs the full threshold again', async () => {
       const secret = authenticator.generateSecret();
-      repo.findState.mockResolvedValue({ userId, twoFactorEnabled: true, twoFactorSecret: secret });
+      repo.findState.mockResolvedValue({
+        userId,
+        twoFactorEnabled: true,
+        twoFactorSecret: cipher.encrypt(secret),
+      });
 
       // A few failures, short of the threshold...
       await realService.verifyLoginChallenge(userId, '000000');
@@ -387,7 +514,7 @@ describe('SecurityService', () => {
       repo.findState.mockImplementation(async (id: string) => ({
         userId: id,
         twoFactorEnabled: true,
-        twoFactorSecret: secretA,
+        twoFactorSecret: cipher.encrypt(secretA),
       }));
 
       for (let i = 0; i < TotpLockoutService.MAX_ATTEMPTS; i++) {
@@ -400,6 +527,91 @@ describe('SecurityService', () => {
       await expect(
         realService.verifyLoginChallenge(userB, authenticator.generate(secretA)),
       ).resolves.toBe('ok');
+    });
+  });
+
+  // Real TotpReplayGuardService (backed by an in-memory fake redis client)
+  // instead of the mocked `replayGuard` used everywhere above — proves the
+  // actual step-tracking/replay-rejection behavior, not just that
+  // SecurityService calls the right methods. Time is faked (`Date` only,
+  // via `toFake: ['Date']`) so each test controls exactly which TOTP step
+  // a generated code lands on, instead of racing the real clock.
+  describe('F5 TOTP replay protection (real TotpReplayGuardService)', () => {
+    let realService: SecurityService;
+
+    beforeEach(async () => {
+      const fakeRedis = { client: fakeRedisClient() } as unknown as RedisService;
+      const realReplayGuard = new TotpReplayGuardService(fakeRedis);
+      realService = new SecurityService(
+        repo as unknown as SecurityRepository,
+        lockout as unknown as TotpLockoutService,
+        sessions as unknown as RefreshTokenService,
+        cipher,
+        realReplayGuard,
+      );
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('rejects an immediate replay of an already-accepted code', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      const secret = authenticator.generateSecret();
+      repo.findState.mockResolvedValue({
+        userId,
+        twoFactorEnabled: true,
+        twoFactorSecret: cipher.encrypt(secret),
+      });
+      const code = authenticator.generate(secret);
+
+      await expect(realService.verifyLoginChallenge(userId, code)).resolves.toBe('ok');
+      // Same code, same step — rejected as a replay, not accepted again.
+      await expect(realService.verifyLoginChallenge(userId, code)).resolves.toBe('invalid');
+      // F5 judgment call (see PR description): a replay is the user's own
+      // code re-submitted, not a guess — it does not burn a lockout attempt.
+      expect(lockout.recordFailure).not.toHaveBeenCalled();
+    });
+
+    it('accepts a fresh code at a later step after a previous one was accepted', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      const secret = authenticator.generateSecret();
+      repo.findState.mockResolvedValue({
+        userId,
+        twoFactorEnabled: true,
+        twoFactorSecret: cipher.encrypt(secret),
+      });
+
+      const firstCode = authenticator.generate(secret);
+      await expect(realService.verifyLoginChallenge(userId, firstCode)).resolves.toBe('ok');
+
+      vi.setSystemTime(new Date('2026-01-01T00:00:31.000Z')); // one 30s step later
+      const laterCode = authenticator.generate(secret);
+      await expect(realService.verifyLoginChallenge(userId, laterCode)).resolves.toBe('ok');
+    });
+
+    it("rejects a stale code for an already-accepted step even when it is still inside otplib's own ±1 window", async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      const secret = authenticator.generateSecret();
+      repo.findState.mockResolvedValue({
+        userId,
+        twoFactorEnabled: true,
+        twoFactorSecret: cipher.encrypt(secret),
+      });
+
+      const firstCode = authenticator.generate(secret);
+      await expect(realService.verifyLoginChallenge(userId, firstCode)).resolves.toBe('ok');
+
+      // One step later: `firstCode` is still inside otplib's own ±1
+      // window relative to "now" (window: 1 tolerates the previous
+      // step), so otplib alone would happily accept it again — the
+      // replay guard is what actually stops it.
+      vi.setSystemTime(new Date('2026-01-01T00:00:31.000Z'));
+      await expect(realService.verifyLoginChallenge(userId, firstCode)).resolves.toBe('invalid');
+      expect(lockout.recordFailure).not.toHaveBeenCalled();
     });
   });
 
