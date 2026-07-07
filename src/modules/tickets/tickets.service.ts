@@ -17,7 +17,7 @@ import { WorkOrdersService } from '../work-orders/work-orders.service';
 import type { AddCommentInput } from './dto/add-comment.dto';
 import type { CreateTicketInput } from './dto/create-ticket.dto';
 import type { TicketEventResponse } from './dto/ticket-event-response.dto';
-import type { TicketResponse } from './dto/ticket-response.dto';
+import type { TicketListResponse, TicketResponse } from './dto/ticket-response.dto';
 import type { UpdateTicketInput } from './dto/update-ticket.dto';
 import { type TicketListFilter, type TicketPatch, TicketsRepository } from './tickets.repository';
 
@@ -53,9 +53,9 @@ export class TicketsService {
     private readonly notifications: NotificationsService,
   ) {}
 
-  async list(filter: TicketListFilter): Promise<{ items: TicketResponse[]; total: number }> {
-    const { items, total } = await this.repo.list(filter);
-    return { items: items.map(toTicketResponse), total };
+  async list(filter: TicketListFilter): Promise<TicketListResponse> {
+    const { items, total, summary } = await this.repo.list(filter);
+    return { items: items.map(toTicketResponse), total, summary };
   }
 
   async findById(id: string): Promise<TicketResponse> {

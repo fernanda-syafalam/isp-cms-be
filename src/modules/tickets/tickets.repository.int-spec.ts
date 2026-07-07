@@ -156,6 +156,78 @@ describe('TicketsRepository (integration)', () => {
     expect(page.total).toBe(3);
   });
 
+  // ---------------------------------------------------------------------------
+  // list — full-set summary aggregate (T1, FE contract parity)
+  // ---------------------------------------------------------------------------
+
+  describe('list — summary aggregate', () => {
+    it('summary.byStatus counts every ticket regardless of the status filter', async () => {
+      await repo.create(newTicket({ status: 'open' }));
+      await repo.create(newTicket({ status: 'in_progress' }));
+      await repo.create(newTicket({ status: 'resolved' }));
+      await repo.create(newTicket({ status: 'resolved' }));
+      await repo.create(newTicket({ status: 'breached' }));
+
+      // Filtered view: only resolved
+      const result = await repo.list({ status: 'resolved', limit: 50, offset: 0 });
+      expect(result.total).toBe(2); // filtered total
+      expect(result.items).toHaveLength(2);
+
+      // Full-set summary — must still reflect ALL 5 tickets across statuses
+      expect(result.summary).toEqual({
+        total: 5,
+        byStatus: { open: 1, in_progress: 1, resolved: 2, breached: 1 },
+      });
+    });
+
+    it('summary does not change when q matches only some tickets', async () => {
+      await repo.create(newTicket({ status: 'open', subject: 'Internet mati total' }));
+      await repo.create(newTicket({ status: 'resolved', subject: 'Lambat di jam sibuk' }));
+      await repo.create(newTicket({ status: 'breached', subject: 'WiFi putus-putus' }));
+
+      const filtered = await repo.list({ q: 'mati', limit: 50, offset: 0 });
+      expect(filtered.total).toBe(1); // filtered total
+
+      const all = await repo.list({ limit: 50, offset: 0 });
+
+      // Summary must be identical — q doesn't affect it either.
+      expect(filtered.summary).toEqual(all.summary);
+      expect(filtered.summary).toEqual({
+        total: 3,
+        byStatus: { open: 1, in_progress: 0, resolved: 1, breached: 1 },
+      });
+    });
+
+    it('zero-fills every status key when the table is empty', async () => {
+      const result = await repo.list({ limit: 50, offset: 0 });
+      expect(result.summary).toEqual({
+        total: 0,
+        byStatus: { open: 0, in_progress: 0, resolved: 0, breached: 0 },
+      });
+    });
+
+    it('limit/offset paging does not affect the summary', async () => {
+      await repo.create(newTicket({ status: 'open' }));
+      await repo.create(newTicket({ status: 'resolved' }));
+      await repo.create(newTicket({ status: 'breached' }));
+
+      const page1 = await repo.list({ limit: 1, offset: 0 });
+      const page2 = await repo.list({ limit: 1, offset: 1 });
+
+      expect(page1.summary).toEqual(page2.summary);
+      expect(page1.summary.total).toBe(3);
+    });
+
+    it('breached is counted as its own status bucket, not folded into resolved', async () => {
+      await repo.create(newTicket({ status: 'breached' }));
+      await repo.create(newTicket({ status: 'resolved' }));
+
+      const result = await repo.list({ limit: 50, offset: 0 });
+      expect(result.summary.byStatus.breached).toBe(1);
+      expect(result.summary.byStatus.resolved).toBe(1);
+    });
+  });
+
   it('updates fields and rejects a missing ticket', async () => {
     const created = await repo.create(newTicket());
     const updated = await repo.update(created.id, {

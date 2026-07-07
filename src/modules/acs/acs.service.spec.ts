@@ -38,16 +38,25 @@ describe('AcsService', () => {
     service = moduleRef.get(AcsService);
   });
 
+  const summary = { total: 2, byStatus: { online: 1, offline: 1 } };
+
   it('list seeds then maps devices (rxPower nullable)', async () => {
     repo.list.mockResolvedValue({
       items: [device, { ...device, id: 'x', rxPowerDbm: null, status: 'offline' }],
       total: 2,
+      summary,
     });
     const result = await service.list({ limit: 100, offset: 0 });
     expect(repo.ensureSeeded).toHaveBeenCalledTimes(1);
     expect(result.items[0]?.rxPowerDbm).toBeCloseTo(-21.5);
     expect(result.items[1]?.rxPowerDbm).toBeNull();
     expect(result.items[0]?.lastInform).toBe('2026-06-15T00:00:00.000Z');
+  });
+
+  it('list passes the summary rollup through unchanged (FE contract parity)', async () => {
+    repo.list.mockResolvedValue({ items: [device], total: 1, summary });
+    const result = await service.list({ limit: 100, offset: 0 });
+    expect(result.summary).toEqual(summary);
   });
 
   it('forwards q to the repository', async () => {

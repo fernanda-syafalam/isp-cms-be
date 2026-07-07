@@ -47,3 +47,44 @@ export const CustomerResponseSchema = z.object({
 export type CustomerResponse = z.infer<typeof CustomerResponseSchema>;
 
 export class CustomerResponseDto extends createZodDto(CustomerResponseSchema) {}
+
+/**
+ * Full-set lifecycle-status + outstanding rollup for the customer list.
+ * Computed over the caller's ACCESS SCOPE (area / resellerId — the same
+ * server-side scoping `list()` already applies, including the mitra
+ * resellerId override, ADR-0010) — but NEVER affected by the status/q
+ * filter or paging (mirrors the work-orders/invoices summary aggregate, FE
+ * contract parity). `outstanding` is the sum of `customers.outstanding`
+ * across that same scope. Every status key is always present (zero-filled).
+ */
+export const CustomerSummarySchema = z.object({
+  total: z.number().int().nonnegative(),
+  outstanding: z.number().int().nonnegative(),
+  byStatus: z.object({
+    prospek: z.number().int().nonnegative(),
+    instalasi: z.number().int().nonnegative(),
+    aktif: z.number().int().nonnegative(),
+    isolir: z.number().int().nonnegative(),
+    berhenti: z.number().int().nonnegative(),
+  }),
+});
+
+export type CustomerSummary = z.infer<typeof CustomerSummarySchema>;
+
+/**
+ * Paginated list response for GET /v1/customers.
+ *
+ * - `items`   – current page (after status/q/area filter, sort, limit/offset).
+ * - `total`   – count matching the current filter BEFORE paging.
+ * - `summary` – scope-wide aggregate (area/resellerId scoping applies, status/q
+ *   does not); never affected by paging.
+ */
+export const CustomerListResponseSchema = z.object({
+  items: z.array(CustomerResponseSchema),
+  total: z.number().int().nonnegative(),
+  summary: CustomerSummarySchema,
+});
+
+export type CustomerListResponse = z.infer<typeof CustomerListResponseSchema>;
+
+export class CustomerListResponseDto extends createZodDto(CustomerListResponseSchema) {}

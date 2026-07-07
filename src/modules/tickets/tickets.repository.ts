@@ -10,6 +10,7 @@ import {
   ticketEvents,
   tickets,
 } from '../../infrastructure/database/schema/tickets.schema';
+import type { TicketSummary } from './dto/ticket-response.dto';
 
 export interface TicketListFilter {
   q?: string;
@@ -49,7 +50,9 @@ export class TicketsRepository {
     return this.drizzle.db;
   }
 
-  async list(filter: TicketListFilter): Promise<{ items: Ticket[]; total: number }> {
+  async list(
+    filter: TicketListFilter,
+  ): Promise<{ items: Ticket[]; total: number; summary: TicketSummary }> {
     const where = and(
       filter.status ? eq(tickets.status, filter.status) : undefined,
       filter.q
@@ -76,7 +79,34 @@ export class TicketsRepository {
       .limit(filter.limit)
       .offset(filter.offset);
     const [totals] = await this.db.select({ value: count() }).from(tickets).where(where);
-    return { items, total: totals?.value ?? 0 };
+
+    // Full-set status-count rollup — computed over ALL tickets, ignoring
+    // status/q/paging (mirrors the work-orders/invoices summary aggregate).
+    // `breached` is a raw status value (see markBreachedPastSla below), so
+    // this is a straight grouped count — same shape as countByStatus(), but
+    // a single query here to match the list-summary pattern used by the
+    // other 7 list endpoints. Missing statuses are zero-filled below.
+    const [summaryRow] = await this.db
+      .select({
+        total: count(),
+        open: sql<number>`count(*) filter (where ${tickets.status} = 'open')`,
+        inProgress: sql<number>`count(*) filter (where ${tickets.status} = 'in_progress')`,
+        resolved: sql<number>`count(*) filter (where ${tickets.status} = 'resolved')`,
+        breached: sql<number>`count(*) filter (where ${tickets.status} = 'breached')`,
+      })
+      .from(tickets);
+
+    const summary: TicketSummary = {
+      total: summaryRow?.total ?? 0,
+      byStatus: {
+        open: Number(summaryRow?.open ?? 0),
+        in_progress: Number(summaryRow?.inProgress ?? 0),
+        resolved: Number(summaryRow?.resolved ?? 0),
+        breached: Number(summaryRow?.breached ?? 0),
+      },
+    };
+
+    return { items, total: totals?.value ?? 0, summary };
   }
 
   async findById(id: string): Promise<Ticket | null> {

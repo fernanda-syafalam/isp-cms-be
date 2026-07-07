@@ -15,7 +15,7 @@ import { z } from 'zod';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { DevicesService } from './devices.service';
-import { DeviceResponseDto } from './dto/device-response.dto';
+import { DeviceListResponseDto, DeviceResponseDto } from './dto/device-response.dto';
 import { UpdateDeviceDto } from './dto/update-device.dto';
 
 const ListQuerySchema = z.object({
@@ -34,6 +34,7 @@ export class DevicesController {
   constructor(private readonly devices: DevicesService) {}
 
   @Get()
+  @ZodSerializerDto(DeviceListResponseDto)
   list(@Query() query: unknown) {
     return this.devices.list(ListQuerySchema.parse(query));
   }

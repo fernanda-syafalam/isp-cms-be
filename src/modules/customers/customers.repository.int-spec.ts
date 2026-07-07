@@ -151,6 +151,133 @@ describe('CustomersRepository (integration)', () => {
     expect(search.items[0]?.fullName).toBe('Zaki');
   });
 
+  // ---------------------------------------------------------------------------
+  // list — full-set (scope-wide) summary aggregate (T1, FE contract parity)
+  // ---------------------------------------------------------------------------
+
+  describe('list — summary aggregate', () => {
+    it('summary.byStatus + outstanding cover every customer regardless of the status filter', async () => {
+      const a = await repo.create({ fullName: 'Aktif1', phone: '08', address: 'Jl', planId });
+      await repo.setStatus(a.id, 'aktif', {});
+      const a2 = await repo.create({ fullName: 'Aktif2', phone: '08', address: 'Jl', planId });
+      await repo.setStatus(a2.id, 'aktif', {});
+      const i = await repo.create({ fullName: 'Isolir1', phone: '08', address: 'Jl', planId });
+      await repo.setStatus(i.id, 'isolir', {});
+      await db.update(customers).set({ outstanding: 150_000 }).where(eq(customers.id, i.id));
+      await repo.create({ fullName: 'Prospek1', phone: '08', address: 'Jl', planId });
+
+      // Filtered view: only aktif
+      const result = await repo.list({ status: 'aktif', limit: 50, offset: 0 });
+      expect(result.total).toBe(2); // filtered total
+      expect(result.items).toHaveLength(2);
+
+      // Full-set summary — must still reflect ALL 4 customers across statuses.
+      expect(result.summary).toEqual({
+        total: 4,
+        outstanding: 150_000,
+        byStatus: { prospek: 1, instalasi: 0, aktif: 2, isolir: 1, berhenti: 0 },
+      });
+    });
+
+    it('summary does not change when q matches only some customers', async () => {
+      await repo.create({ fullName: 'Zaki', phone: '0810', address: 'Jl. Z', planId });
+      const ani = await repo.create({ fullName: 'Ani', phone: '0812', address: 'Jl. B', planId });
+      await repo.setStatus(ani.id, 'aktif', {});
+
+      const filtered = await repo.list({ q: 'zak', limit: 50, offset: 0 });
+      expect(filtered.total).toBe(1); // filtered total
+
+      const all = await repo.list({ limit: 50, offset: 0 });
+
+      // Summary must be identical — q doesn't affect it either.
+      expect(filtered.summary).toEqual(all.summary);
+      expect(filtered.summary).toEqual({
+        total: 2,
+        outstanding: 0,
+        byStatus: { prospek: 1, instalasi: 0, aktif: 1, isolir: 0, berhenti: 0 },
+      });
+    });
+
+    it('area scope narrows the summary — unassigned customers always count too', async () => {
+      await repo.create({
+        fullName: 'Jepara1',
+        phone: '08',
+        address: 'Jl',
+        planId,
+        areaName: 'Jepara',
+      });
+      await repo.create({
+        fullName: 'Tahunan1',
+        phone: '08',
+        address: 'Jl',
+        planId,
+        areaName: 'Tahunan',
+      });
+      await repo.create({ fullName: 'Unassigned1', phone: '08', address: 'Jl', planId });
+
+      // Scoped to Jepara only — but the unassigned customer is still in scope.
+      const scoped = await repo.list({ area: ['Jepara'], limit: 50, offset: 0 });
+      expect(scoped.summary.total).toBe(2); // Jepara1 + Unassigned1
+      expect(scoped.items.map((c) => c.fullName).sort()).toEqual(['Jepara1', 'Unassigned1']);
+
+      // Unscoped — every customer is in the summary.
+      const all = await repo.list({ limit: 50, offset: 0 });
+      expect(all.summary.total).toBe(3);
+    });
+
+    it('resellerId scope narrows the summary to that reseller only', async () => {
+      const [resellerA] = await db
+        .insert(resellers)
+        .values({ name: 'Loket Andi', area: 'Jepara' })
+        .returning();
+      const [resellerB] = await db
+        .insert(resellers)
+        .values({ name: 'Loket Budi', area: 'Kudus' })
+        .returning();
+      if (!resellerA || !resellerB) throw new Error('reseller seed failed');
+
+      await repo.create({
+        fullName: 'C1',
+        phone: '08',
+        address: 'Jl',
+        planId,
+        resellerId: resellerA.id,
+      });
+      await repo.create({
+        fullName: 'C2',
+        phone: '08',
+        address: 'Jl',
+        planId,
+        resellerId: resellerB.id,
+      });
+
+      const scoped = await repo.list({ resellerId: resellerA.id, limit: 50, offset: 0 });
+      expect(scoped.summary.total).toBe(1);
+      expect(scoped.items[0]?.fullName).toBe('C1');
+    });
+
+    it('zero-fills every status key and outstanding when the scope is empty', async () => {
+      const result = await repo.list({ limit: 50, offset: 0 });
+      expect(result.summary).toEqual({
+        total: 0,
+        outstanding: 0,
+        byStatus: { prospek: 0, instalasi: 0, aktif: 0, isolir: 0, berhenti: 0 },
+      });
+    });
+
+    it('limit/offset paging does not affect the summary', async () => {
+      await repo.create({ fullName: 'A', phone: '08', address: 'Jl', planId });
+      await repo.create({ fullName: 'B', phone: '08', address: 'Jl', planId });
+      await repo.create({ fullName: 'C', phone: '08', address: 'Jl', planId });
+
+      const page1 = await repo.list({ limit: 1, offset: 0 });
+      const page2 = await repo.list({ limit: 1, offset: 1 });
+
+      expect(page1.summary).toEqual(page2.summary);
+      expect(page1.summary.total).toBe(3);
+    });
+  });
+
   it('paginates with limit/offset while reporting the full total', async () => {
     for (const n of ['A', 'B', 'C']) {
       await repo.create({ fullName: n, phone: '0810', address: 'Jl.', planId });

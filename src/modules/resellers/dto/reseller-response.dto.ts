@@ -16,6 +16,40 @@ export type ResellerResponse = z.infer<typeof ResellerResponseSchema>;
 
 export class ResellerResponseDto extends createZodDto(ResellerResponseSchema) {}
 
+/**
+ * Full-set status-count + balance rollup for the reseller list. Computed
+ * over ALL resellers — NEVER affected by status/q/paging (mirrors the
+ * work-orders/invoices summary aggregate, FE contract parity). Every status
+ * key is always present (zero-filled).
+ */
+export const ResellerSummarySchema = z.object({
+  total: z.number().int().nonnegative(),
+  totalBalance: z.number().int().nonnegative(),
+  byStatus: z.object({
+    active: z.number().int().nonnegative(),
+    inactive: z.number().int().nonnegative(),
+  }),
+});
+
+export type ResellerSummary = z.infer<typeof ResellerSummarySchema>;
+
+/**
+ * Paginated list response for GET /v1/resellers.
+ *
+ * - `items`   – current page (after status/q filter, sort, limit/offset).
+ * - `total`   – count matching the current filter BEFORE paging.
+ * - `summary` – full-set aggregate; NEVER affected by any filter or paging.
+ */
+export const ResellerListResponseSchema = z.object({
+  items: z.array(ResellerResponseSchema),
+  total: z.number().int().nonnegative(),
+  summary: ResellerSummarySchema,
+});
+
+export type ResellerListResponse = z.infer<typeof ResellerListResponseSchema>;
+
+export class ResellerListResponseDto extends createZodDto(ResellerListResponseSchema) {}
+
 /** Output shape for a ledger entry (amount is signed). */
 export const LedgerEntryResponseSchema = z.object({
   id: z.uuid(),

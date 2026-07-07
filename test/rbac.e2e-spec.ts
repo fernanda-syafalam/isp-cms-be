@@ -43,8 +43,14 @@ describe('Staff read-surface gate (e2e)', () => {
     softDelete: vi.fn(),
   };
 
+  const emptyCustomerSummary = {
+    total: 0,
+    outstanding: 0,
+    byStatus: { prospek: 0, instalasi: 0, aktif: 0, isolir: 0, berhenti: 0 },
+  };
+
   const fakeCustomersRepo = {
-    list: vi.fn(async () => ({ items: [], total: 0 })),
+    list: vi.fn(async () => ({ items: [], total: 0, summary: emptyCustomerSummary })),
     // resolveForPortal fails closed on a miss (P0.3) — returning null here
     // makes /v1/portal/me a deterministic 404 for the customer probe below.
     findByEmail: vi.fn(async () => null),
@@ -149,7 +155,15 @@ describe('Staff read-surface gate (e2e)', () => {
       headers: { authorization: `Bearer ${await tokenFor('staff')}` },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ items: [], total: 0 });
+    expect(res.json()).toEqual({
+      items: [],
+      total: 0,
+      summary: {
+        total: 0,
+        outstanding: 0,
+        byStatus: { prospek: 0, instalasi: 0, aktif: 0, isolir: 0, berhenti: 0 },
+      },
+    });
   });
 
   // P1.2: teknisi is authorized for exactly its journey (network + tickets),
@@ -194,7 +208,15 @@ describe('Staff read-surface gate (e2e)', () => {
       headers: { authorization: `Bearer ${await tokenFor('mitra')}` },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ items: [], total: 0 });
+    expect(res.json()).toEqual({
+      items: [],
+      total: 0,
+      summary: {
+        total: 0,
+        outstanding: 0,
+        byStatus: { prospek: 0, instalasi: 0, aktif: 0, isolir: 0, berhenti: 0 },
+      },
+    });
   });
 
   it('404s a mitra reading a reseller that is not theirs', async () => {

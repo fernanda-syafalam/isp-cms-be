@@ -11,7 +11,7 @@ import {
 } from './customers.repository';
 import type { CreateCustomerInput } from './dto/create-customer.dto';
 import type { ChangePlanInput, RelocateInput, SetOnuWifiInput } from './dto/customer-actions.dto';
-import type { CustomerResponse } from './dto/customer-response.dto';
+import type { CustomerListResponse, CustomerResponse } from './dto/customer-response.dto';
 import type { UpdateCustomerInput } from './dto/update-customer.dto';
 import type { UpdateKycInput } from './dto/update-kyc.dto';
 
@@ -36,15 +36,22 @@ export class CustomersService {
     private readonly resellers: ResellersRepository,
   ) {}
 
-  async list(
-    filter: CustomerListFilter,
-    user?: AuthUser,
-  ): Promise<{ items: CustomerResponse[]; total: number }> {
+  async list(filter: CustomerListFilter, user?: AuthUser): Promise<CustomerListResponse> {
     const scoped = scopeForUser(filter, user);
     // A mitra with no reseller linked sees nothing rather than everything.
-    if (!scoped) return { items: [], total: 0 };
-    const { items, total } = await this.repo.list(scoped);
-    return { items: items.map(toCustomerResponse), total };
+    if (!scoped) {
+      return {
+        items: [],
+        total: 0,
+        summary: {
+          total: 0,
+          outstanding: 0,
+          byStatus: { prospek: 0, instalasi: 0, aktif: 0, isolir: 0, berhenti: 0 },
+        },
+      };
+    }
+    const { items, total, summary } = await this.repo.list(scoped);
+    return { items: items.map(toCustomerResponse), total, summary };
   }
 
   async findById(id: string): Promise<CustomerResponse> {
