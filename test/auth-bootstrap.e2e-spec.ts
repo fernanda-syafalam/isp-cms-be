@@ -58,6 +58,8 @@ describe('Auth bootstrap (e2e)', () => {
       .useValue({
         client: (() => {
           const kv = new Map<string, string>();
+          // RefreshTokenService's per-user session index (SEC-2).
+          const sets = new Map<string, Set<string>>();
           return {
             call: async () => null,
             get: async (k: string) => kv.get(k) ?? null,
@@ -72,6 +74,21 @@ describe('Auth bootstrap (e2e)', () => {
               return v;
             },
             del: async (k: string) => (kv.delete(k) ? 1 : 0),
+            sadd: async (k: string, ...members: string[]) => {
+              const set = sets.get(k) ?? new Set<string>();
+              for (const m of members) set.add(m);
+              sets.set(k, set);
+              return members.length;
+            },
+            srem: async (k: string, ...members: string[]) => {
+              const set = sets.get(k);
+              if (!set) return 0;
+              let removed = 0;
+              for (const m of members) if (set.delete(m)) removed++;
+              return removed;
+            },
+            smembers: async (k: string) => [...(sets.get(k) ?? [])],
+            expire: async () => 1,
           };
         })(),
         ping: async () => true,

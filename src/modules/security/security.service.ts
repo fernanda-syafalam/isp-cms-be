@@ -8,10 +8,8 @@ import {
 import { Authenticator } from '@otplib/core';
 import { createDigest, createRandomBytes } from '@otplib/plugin-crypto';
 import { keyDecoder, keyEncoder } from '@otplib/plugin-thirty-two';
-import type {
-  NewUserSession,
-  UserSession,
-} from '../../infrastructure/database/schema/security.schema';
+import type { SessionSummary } from '../sessions/refresh-token.service';
+import { RefreshTokenService } from '../sessions/refresh-token.service';
 import type { SecuritySessionResponse, SecurityStateResponse } from './dto/security-response.dto';
 import type { TwoFactorEnrollResponse } from './dto/two-factor-enroll-response.dto';
 import { SecurityRepository } from './security.repository';
@@ -53,11 +51,17 @@ export class SecurityService {
   constructor(
     private readonly repo: SecurityRepository,
     private readonly lockout: TotpLockoutService,
+    private readonly sessions: RefreshTokenService,
   ) {}
 
-  async getState(userId: string): Promise<SecurityStateResponse> {
-    await this.ensureSeeded(userId);
-    return this.buildState(userId);
+  /**
+   * `currentSessionId` comes from the caller's JWT `sid` claim
+   * (`AuthUser.sessionId`) — undefined for a pre-SEC-2 access token, in
+   * which case no row is marked `current` rather than guessing wrong.
+   */
+  async getState(userId: string, currentSessionId?: string): Promise<SecurityStateResponse> {
+    await this.repo.ensureState(userId);
+    return this.buildState(userId, currentSessionId);
   }
 
   /**
@@ -68,7 +72,7 @@ export class SecurityService {
    * previous unconfirmed secret.
    */
   async beginEnroll(userId: string, accountName: string): Promise<TwoFactorEnrollResponse> {
-    await this.ensureSeeded(userId);
+    await this.repo.ensureState(userId);
     const secret = authenticator.generateSecret();
     await this.repo.saveTwoFactorSecret(userId, secret);
     this.logger.log({ userId }, 'two-factor enrollment started');
@@ -87,12 +91,19 @@ export class SecurityService {
    * challenge — a stolen/guessed-at unconfirmed secret cannot be brute
    * forced here either.
    *
-   * F3 (deferred, folded into upcoming session-revocation work): does
-   * NOT revoke this user's other active sessions on success — a session
-   * hijacked before 2FA was enabled stays valid until its own TTL.
+   * F3: on success, revokes every OTHER active session for this user —
+   * enabling 2FA is frequently a direct response to "I think my account
+   * is compromised", so the moment it succeeds is exactly when a
+   * session hijacked before 2FA was on should be kicked out, not left
+   * to ride out its own TTL. `currentSessionId` (the caller's own
+   * session, from the JWT `sid` claim) is kept alive.
    */
-  async confirmEnroll(userId: string, code: string): Promise<SecurityStateResponse> {
-    await this.ensureSeeded(userId);
+  async confirmEnroll(
+    userId: string,
+    code: string,
+    currentSessionId?: string,
+  ): Promise<SecurityStateResponse> {
+    await this.repo.ensureState(userId);
     const state = await this.repo.findState(userId);
     if (!state?.twoFactorSecret) {
       throw new BadRequestException('two-factor enrollment was not started');
@@ -106,8 +117,9 @@ export class SecurityService {
     }
     await this.lockout.recordSuccess(userId);
     await this.repo.confirmTwoFactor(userId);
-    this.logger.log({ userId }, 'two-factor enabled');
-    return this.buildState(userId);
+    const revoked = await this.sessions.revokeOtherSessions(userId, currentSessionId);
+    this.logger.log({ userId, revokedOtherSessions: revoked }, 'two-factor enabled');
+    return this.buildState(userId, currentSessionId);
   }
 
   /**
@@ -116,8 +128,12 @@ export class SecurityService {
    * false) can be cancelled without one since it was never gating login.
    * F1: the same lockout as login/confirm applies to that code check.
    */
-  async disableTwoFactor(userId: string, code?: string): Promise<SecurityStateResponse> {
-    await this.ensureSeeded(userId);
+  async disableTwoFactor(
+    userId: string,
+    code?: string,
+    currentSessionId?: string,
+  ): Promise<SecurityStateResponse> {
+    await this.repo.ensureState(userId);
     const state = await this.repo.findState(userId);
     if (state?.twoFactorEnabled) {
       if (await this.lockout.isLocked(userId)) {
@@ -131,7 +147,7 @@ export class SecurityService {
     }
     await this.repo.clearTwoFactor(userId);
     this.logger.log({ userId }, 'two-factor disabled');
-    return this.buildState(userId);
+    return this.buildState(userId, currentSessionId);
   }
 
   /**
@@ -165,48 +181,56 @@ export class SecurityService {
     return 'ok';
   }
 
+  /**
+   * Revoke exactly one session, backed by the real refresh-token store
+   * (SEC-2) — the underlying token is deleted from Redis, not just a
+   * display row, so a stolen refresh token actually stops working.
+   */
   async revokeSession(userId: string, id: string): Promise<void> {
-    const deleted = await this.repo.deleteSession(id, userId);
-    if (!deleted) throw new NotFoundException('session not found');
+    const existed = await this.sessions.revokeSession(userId, id);
+    if (!existed) throw new NotFoundException('session not found');
     this.logger.log({ userId, sessionId: id }, 'session revoked');
   }
 
-  async revokeOtherSessions(userId: string): Promise<void> {
-    await this.repo.deleteOtherSessions(userId);
-    this.logger.log({ userId }, 'other sessions revoked');
+  /**
+   * "End all other sessions" — revokes every session for `userId` except
+   * `currentSessionId` (the caller's own, from the JWT `sid` claim).
+   */
+  async revokeOtherSessions(userId: string, currentSessionId?: string): Promise<void> {
+    const revoked = await this.sessions.revokeOtherSessions(userId, currentSessionId);
+    this.logger.log({ userId, revoked }, 'other sessions revoked');
   }
 
-  // Seed the per-user state + a representative session list on first access.
-  private async ensureSeeded(userId: string): Promise<void> {
-    await this.repo.ensureState(userId);
-    if ((await this.repo.countSessions(userId)) === 0) {
-      await this.repo.seedSessions(buildSeedSessions(userId));
-    }
-  }
-
-  private async buildState(userId: string): Promise<SecurityStateResponse> {
+  private async buildState(
+    userId: string,
+    currentSessionId: string | undefined,
+  ): Promise<SecurityStateResponse> {
     const state = await this.repo.findState(userId);
-    const sessions = await this.repo.listSessions(userId);
+    const sessions = await this.sessions.listSessions(userId);
     return {
       twoFactorEnabled: state?.twoFactorEnabled ?? false,
-      sessions: sessions.map(toSessionResponse),
+      sessions: sessions.map((s) => toSessionResponse(s, currentSessionId)),
     };
   }
 }
 
-function buildSeedSessions(userId: string): NewUserSession[] {
-  return [
-    { userId, device: 'Chrome di Windows', ip: '103.28.12.4', isCurrent: true },
-    { userId, device: 'Safari di iPhone', ip: '103.28.12.9', isCurrent: false },
-  ];
-}
-
-function toSessionResponse(row: UserSession): SecuritySessionResponse {
+/**
+ * Maps a real Redis-backed session onto the FE-facing shape. `device` is
+ * the raw `User-Agent` string — there is no client-side device/browser
+ * parsing implemented, so this is the most specific value that is both
+ * real (not invented) and available; a friendlier "Chrome on Windows"
+ * label is a FE-side (or future BE `ua-parser`) presentation concern, not
+ * a security-relevant value like a fabricated location would be.
+ */
+function toSessionResponse(
+  session: SessionSummary,
+  currentSessionId: string | undefined,
+): SecuritySessionResponse {
   return {
-    id: row.id,
-    device: row.device,
-    ip: row.ip,
-    lastActiveAt: row.lastActiveAt.toISOString(),
-    current: row.isCurrent,
+    id: session.id,
+    device: session.userAgent,
+    ip: session.ip,
+    lastActiveAt: session.lastUsedAt,
+    current: session.id === currentSessionId,
   };
 }

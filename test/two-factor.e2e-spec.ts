@@ -95,6 +95,10 @@ describe('Two-factor authentication (e2e)', () => {
       .useValue({
         client: (() => {
           const store = new Map<string, string>();
+          // RefreshTokenService's per-user session index (SEC-2) — a real
+          // Map-backed Set so login → list → revoke exercises actual
+          // membership semantics, not a stub.
+          const sets = new Map<string, Set<string>>();
           return {
             call: async () => null,
             get: async (k: string) => store.get(k) ?? null,
@@ -109,8 +113,24 @@ describe('Two-factor authentication (e2e)', () => {
               return v;
             },
             del: async (k: string) => (store.delete(k) ? 1 : 0),
+            sadd: async (k: string, ...members: string[]) => {
+              const set = sets.get(k) ?? new Set<string>();
+              for (const m of members) set.add(m);
+              sets.set(k, set);
+              return members.length;
+            },
+            srem: async (k: string, ...members: string[]) => {
+              const set = sets.get(k);
+              if (!set) return 0;
+              let removed = 0;
+              for (const m of members) if (set.delete(m)) removed++;
+              return removed;
+            },
+            smembers: async (k: string) => [...(sets.get(k) ?? [])],
             // TotpLockoutService (F1) — incr/expire back the per-user
-            // failed-attempt counter.
+            // failed-attempt counter. Also reused as the session TTL
+            // refresher by RefreshTokenService (no-op here — no TTL
+            // simulation needed for these e2e flows).
             incr: async (k: string) => {
               const v = Number(store.get(k) ?? '0') + 1;
               store.set(k, String(v));

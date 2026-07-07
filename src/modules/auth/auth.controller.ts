@@ -15,6 +15,7 @@ import { AnyAuthenticatedRole } from '../../common/decorators/any-authenticated-
 import { Audit } from '../../common/decorators/audit.decorator';
 import { type AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
+import type { SessionMeta } from '../sessions/refresh-token.service';
 import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
 import { BootstrapDto } from './dto/bootstrap.dto';
@@ -26,6 +27,19 @@ type CookieRequest = FastifyRequest & { cookies: Record<string, string | undefin
 
 const REFRESH_COOKIE = 'refresh_token';
 const COOKIE_PATH = '/v1/auth';
+
+/**
+ * Captures the request metadata a freshly minted session is tagged with
+ * (SEC-2) — the `userAgent`/`ip` shown back on the security page's
+ * session list. `req.ip` already honours `trustProxy: true` (main.ts).
+ */
+function sessionMetaFrom(req: FastifyRequest): SessionMeta {
+  const ua = req.headers['user-agent'];
+  return {
+    userAgent: (Array.isArray(ua) ? ua[0] : ua) ?? 'unknown',
+    ip: req.ip,
+  };
+}
 
 @Controller({ path: 'auth', version: '1' })
 export class AuthController {
@@ -43,9 +57,15 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async login(
     @Body() body: LoginDto,
+    @Req() req: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<{ accessToken: string; user: AuthUser }> {
-    const result = await this.auth.login(body.email, body.password, body.totpCode);
+    const result = await this.auth.login(
+      body.email,
+      body.password,
+      body.totpCode,
+      sessionMetaFrom(req),
+    );
     this.setRefreshCookie(reply, result.refreshToken, result.refreshExpiresInSeconds);
     return { accessToken: result.accessToken, user: result.user };
   }
@@ -68,7 +88,7 @@ export class AuthController {
     if (!rawToken) {
       throw new UnauthorizedException('refresh token cookie missing');
     }
-    const result = await this.auth.refresh(rawToken);
+    const result = await this.auth.refresh(rawToken, sessionMetaFrom(req));
     this.setRefreshCookie(reply, result.refreshToken, result.refreshExpiresInSeconds);
     return { accessToken: result.accessToken, user: result.user };
   }
@@ -116,9 +136,10 @@ export class AuthController {
   @HttpCode(HttpStatus.CREATED)
   async bootstrap(
     @Body() body: BootstrapDto,
+    @Req() req: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<{ accessToken: string; user: AuthUser }> {
-    const result = await this.auth.bootstrapAdmin(body);
+    const result = await this.auth.bootstrapAdmin(body, sessionMetaFrom(req));
     this.setRefreshCookie(reply, result.refreshToken, result.refreshExpiresInSeconds);
     return { accessToken: result.accessToken, user: result.user };
   }

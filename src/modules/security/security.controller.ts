@@ -23,7 +23,7 @@ export class SecurityController {
   @Get()
   @ZodSerializerDto(SecurityStateResponseDto)
   get(@CurrentUser() user: AuthUser) {
-    return this.security.getState(user.id);
+    return this.security.getState(user.id, user.sessionId);
   }
 
   /** Step 1/2 — generate + persist a TOTP secret, return the QR payload. */
@@ -48,7 +48,7 @@ export class SecurityController {
   @HttpCode(HttpStatus.OK)
   @ZodSerializerDto(SecurityStateResponseDto)
   confirm(@CurrentUser() user: AuthUser, @Body() body: ConfirmTwoFactorDto) {
-    return this.security.confirmEnroll(user.id, body.code);
+    return this.security.confirmEnroll(user.id, body.code, user.sessionId);
   }
 
   /** F1: same rationale as `confirm` above — this is the other endpoint that checks a TOTP code. */
@@ -58,7 +58,7 @@ export class SecurityController {
   @HttpCode(HttpStatus.OK)
   @ZodSerializerDto(SecurityStateResponseDto)
   disable(@CurrentUser() user: AuthUser, @Body() body: DisableTwoFactorDto) {
-    return this.security.disableTwoFactor(user.id, body.code);
+    return this.security.disableTwoFactor(user.id, body.code, user.sessionId);
   }
 
   @Audit('security.session.revoke')
@@ -72,6 +72,6 @@ export class SecurityController {
   @Post('sessions/revoke-others')
   @HttpCode(HttpStatus.NO_CONTENT)
   revokeOtherSessions(@CurrentUser() user: AuthUser): Promise<void> {
-    return this.security.revokeOtherSessions(user.id);
+    return this.security.revokeOtherSessions(user.id, user.sessionId);
   }
 }
