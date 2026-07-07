@@ -24,20 +24,42 @@ import { UpdateKycDto } from './dto/update-kyc.dto';
 // Query params for the list endpoint. The global ZodValidationPipe does
 // not validate plain query objects, so parse here (same pattern as the
 // users cursor query).
-const ListQuerySchema = z.object({
-  q: z.string().trim().min(1).optional(),
-  status: z.enum(['prospek', 'instalasi', 'aktif', 'isolir', 'berhenti']).optional(),
-  // Repeatable: ?area=Jepara&area=Tahunan — a single string is coerced to
-  // a one-element array so callers need not special-case the scalar case.
-  area: z
-    .union([z.string(), z.array(z.string())])
-    .transform((v) => (Array.isArray(v) ? v : [v]))
-    .optional(),
-  sort: z.string().optional(),
-  order: z.enum(['asc', 'desc']).optional(),
-  limit: z.coerce.number().int().min(1).max(200).default(50),
-  offset: z.coerce.number().int().min(0).default(0),
-});
+const ListQuerySchema = z
+  .object({
+    q: z.string().trim().min(1).optional(),
+    status: z.enum(['prospek', 'instalasi', 'aktif', 'isolir', 'berhenti']).optional(),
+    // Server-side reseller scoping for staff/admin (#26) — mirrors the
+    // scope a mitra principal already gets forced into (P1.5); staff may
+    // opt into the same narrowing to view one reseller's customers without
+    // client-filtering the full list. A mitra's own scope always wins over
+    // this (CustomersService.scopeForUser) — passing another reseller's id
+    // never widens or redirects a mitra's view.
+    resellerId: z.uuid().optional(),
+    // Ops diagnostic (#25): surface customers left with reseller_id IS
+    // NULL after migration 0031's name-based backfill (ambiguous/no match),
+    // so they can be reconciled. Admin/staff only — enforced the same way
+    // as resellerId above (a mitra is always forced back to their own
+    // scope regardless of this flag). Mutually exclusive with resellerId
+    // (both narrow the same reseller-scope predicate; only one applies).
+    unassignedReseller: z
+      .enum(['true', 'false'])
+      .optional()
+      .transform((v) => (v === undefined ? undefined : v === 'true')),
+    // Repeatable: ?area=Jepara&area=Tahunan — a single string is coerced to
+    // a one-element array so callers need not special-case the scalar case.
+    area: z
+      .union([z.string(), z.array(z.string())])
+      .transform((v) => (Array.isArray(v) ? v : [v]))
+      .optional(),
+    sort: z.string().optional(),
+    order: z.enum(['asc', 'desc']).optional(),
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+    offset: z.coerce.number().int().min(0).default(0),
+  })
+  .refine((v) => !(v.resellerId && v.unassignedReseller), {
+    message: 'resellerId and unassignedReseller are mutually exclusive',
+    path: ['resellerId'],
+  });
 
 @Roles('admin', 'staff')
 @Controller({ path: 'customers', version: '1' })

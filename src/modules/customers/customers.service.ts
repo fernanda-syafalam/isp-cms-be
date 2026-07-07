@@ -350,11 +350,19 @@ function normalizeEmail(email: string): string | null {
  * separate concerns (authorization boundary vs. data minimization) but
  * both are set here, in the one place a mitra filter is built, so a
  * future caller cannot apply one without the other.
+ *
+ * `unassignedReseller` (#25, ops diagnostic for admin/staff) is force-set
+ * to `false` here too: without this, a mitra passing `?unassignedReseller
+ * =true` would have `resellerId` overwritten below but the repository's
+ * `buildScopeWhere` prefers `unassignedReseller` over `resellerId` — so
+ * the override alone would let a mitra see every reseller-less customer
+ * (a real scope escape). Clearing the flag closes that gap; only
+ * staff/admin (who bypass this function entirely) can use it.
  */
 function scopeForUser(filter: CustomerListFilter, user?: AuthUser): CustomerListFilter | null {
   if (!user || user.role !== 'mitra') return filter;
   if (!user.resellerId) return null;
-  return { ...filter, resellerId: user.resellerId, excludeKyc: true };
+  return { ...filter, resellerId: user.resellerId, unassignedReseller: false, excludeKyc: true };
 }
 
 /**
