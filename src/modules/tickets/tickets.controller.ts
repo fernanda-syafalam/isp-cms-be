@@ -17,7 +17,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { WorkOrderResponseDto } from '../work-orders/dto/work-order-response.dto';
 import { AddCommentDto } from './dto/add-comment.dto';
 import { CreateTicketDto } from './dto/create-ticket.dto';
-import { TicketResponseDto } from './dto/ticket-response.dto';
+import { TicketListResponseDto, TicketResponseDto } from './dto/ticket-response.dto';
 import { UpdateTicketDto } from './dto/update-ticket.dto';
 import { TicketsService } from './tickets.service';
 
@@ -36,6 +36,7 @@ export class TicketsController {
   constructor(private readonly tickets: TicketsService) {}
 
   @Get()
+  @ZodSerializerDto(TicketListResponseDto)
   list(@Query() query: unknown) {
     return this.tickets.list(ListQuerySchema.parse(query));
   }

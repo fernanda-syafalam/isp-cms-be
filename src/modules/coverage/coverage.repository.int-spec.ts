@@ -99,6 +99,28 @@ describe('CoverageRepository (integration)', () => {
     expect(page.total).toBe(3);
   });
 
+  describe('list — summary aggregate', () => {
+    it('summary.byStatus counts every area regardless of status/type/q filter, zero-filled', async () => {
+      await repo.ensureSeeded(SEEDS);
+
+      const filtered = await repo.list({ status: 'operational', limit: 50, offset: 0 });
+      expect(filtered.total).toBe(1); // filtered total
+
+      expect(filtered.summary).toEqual({
+        total: 3,
+        byStatus: { operational: 1, maintenance: 1, down: 1 },
+      });
+    });
+
+    it('zero-fills every status key when the table is empty', async () => {
+      const result = await repo.list({ limit: 50, offset: 0 });
+      expect(result.summary).toEqual({
+        total: 0,
+        byStatus: { operational: 0, maintenance: 0, down: 0 },
+      });
+    });
+  });
+
   describe('search (q)', () => {
     it('matches by name substring case-insensitively', async () => {
       await repo.ensureSeeded(SEEDS);

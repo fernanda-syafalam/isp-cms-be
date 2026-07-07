@@ -7,6 +7,7 @@ import {
   type NewAcsDevice,
   acsDevices,
 } from '../../infrastructure/database/schema/acs.schema';
+import type { AcsSummary } from './dto/acs-response.dto';
 
 // Columns the frontend may sort on (camelCase key → Drizzle column).
 // Unknown/absent key falls back to `serial asc` via buildOrderBy — never throws.
@@ -47,7 +48,9 @@ export class AcsRepository {
     await this.db.insert(acsDevices).values(defaults).onConflictDoNothing();
   }
 
-  async list(filter: AcsListFilter): Promise<{ items: AcsDevice[]; total: number }> {
+  async list(
+    filter: AcsListFilter,
+  ): Promise<{ items: AcsDevice[]; total: number; summary: AcsSummary }> {
     const where = and(
       filter.q
         ? or(
@@ -72,7 +75,29 @@ export class AcsRepository {
       .limit(filter.limit)
       .offset(filter.offset);
     const [totals] = await this.db.select({ value: count() }).from(acsDevices).where(where);
-    return { items, total: totals?.value ?? 0 };
+
+    // Full-set status-count rollup — computed over ALL CPE devices, ignoring
+    // q/paging (mirrors the work-orders/invoices summary aggregate). A single
+    // grouped-filter aggregate avoids 2 separate COUNT queries; a missing
+    // status is zero-filled below since a fresh table may have zero rows for
+    // a given status.
+    const [summaryRow] = await this.db
+      .select({
+        total: count(),
+        online: sql<number>`count(*) filter (where ${acsDevices.status} = 'online')`,
+        offline: sql<number>`count(*) filter (where ${acsDevices.status} = 'offline')`,
+      })
+      .from(acsDevices);
+
+    const summary: AcsSummary = {
+      total: summaryRow?.total ?? 0,
+      byStatus: {
+        online: Number(summaryRow?.online ?? 0),
+        offline: Number(summaryRow?.offline ?? 0),
+      },
+    };
+
+    return { items, total: totals?.value ?? 0, summary };
   }
 
   // How many of the given ids exist (affected count for reboot / wifi).

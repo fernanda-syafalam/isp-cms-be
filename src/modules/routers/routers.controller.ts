@@ -4,7 +4,11 @@ import { z } from 'zod';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { ConnectRouterDto } from './dto/connect-router.dto';
-import { RouterResponseDto, TestConnectionResultDto } from './dto/router-response.dto';
+import {
+  RouterListResponseDto,
+  RouterResponseDto,
+  TestConnectionResultDto,
+} from './dto/router-response.dto';
 import { RoutersService } from './routers.service';
 
 const ListQuerySchema = z.object({
@@ -22,6 +26,7 @@ export class RoutersController {
   constructor(private readonly routers: RoutersService) {}
 
   @Get()
+  @ZodSerializerDto(RouterListResponseDto)
   list(@Query() query: unknown) {
     return this.routers.list(ListQuerySchema.parse(query));
   }

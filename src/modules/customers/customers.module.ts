@@ -9,7 +9,10 @@ import { CustomersService } from './customers.service';
 
 @Module({
   // PlansModule exports PlansRepository (plan FK validation + price for
-  // proration); NotificationsModule exports NotificationsService (WhatsApp
+  // proration); it now also reads CustomersRepository back (PlansService,
+  // to enrich the plan-list summary's `totalSubscribers`), so this edge
+  // needs forwardRef() on both sides (see plans.module.ts).
+  // NotificationsModule exports NotificationsService (WhatsApp
   // dunning). RouterResourcesModule exports SecretsRepository so lifecycle
   // transitions can enforce isolir on the PPPoE secret (ADR-0008); it imports
   // CustomersModule back (resolves a secret's customer), so the edge uses
@@ -18,7 +21,7 @@ import { CustomersService } from './customers.service';
   // also imports CustomersModule back (customerCount derivation), same
   // forwardRef treatment.
   imports: [
-    PlansModule,
+    forwardRef(() => PlansModule),
     NotificationsModule,
     forwardRef(() => RouterResourcesModule),
     forwardRef(() => ResellersModule),

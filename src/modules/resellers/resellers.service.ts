@@ -15,7 +15,11 @@ import type { AddLedgerEntryInput } from './dto/add-ledger-entry.dto';
 import type { CreatePayoutInput } from './dto/create-payout.dto';
 import type { CreateResellerInput } from './dto/create-reseller.dto';
 import type { PayoutResponse } from './dto/payout-response.dto';
-import type { LedgerEntryResponse, ResellerResponse } from './dto/reseller-response.dto';
+import type {
+  LedgerEntryResponse,
+  ResellerListResponse,
+  ResellerResponse,
+} from './dto/reseller-response.dto';
 import type { UpdateResellerInput } from './dto/update-reseller.dto';
 import {
   type LedgerListFilter,
@@ -35,13 +39,14 @@ export class ResellersService {
     private readonly customers: CustomersRepository,
   ) {}
 
-  async list(filter: ResellerListFilter): Promise<{ items: ResellerResponse[]; total: number }> {
-    const { items, total } = await this.repo.list(filter);
+  async list(filter: ResellerListFilter): Promise<ResellerListResponse> {
+    const { items, total, summary } = await this.repo.list(filter);
     const counts = await this.customers.countsByResellerId();
     const byId = new Map(counts.map((c) => [c.resellerId, c.count]));
     return {
       items: items.map((r) => toResellerResponse(r, byId.get(r.id) ?? 0)),
       total,
+      summary,
     };
   }
 

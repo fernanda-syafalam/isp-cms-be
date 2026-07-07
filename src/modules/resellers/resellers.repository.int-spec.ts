@@ -110,6 +110,32 @@ describe('ResellersRepository (integration)', () => {
     expect(active.total).toBe(1);
   });
 
+  describe('list — summary aggregate', () => {
+    it('summary.byStatus and totalBalance cover every reseller regardless of status/q filter', async () => {
+      await seed({ name: 'Loket Andi', balance: 1_000_000, status: 'active' });
+      await seed({ name: 'Agen Budi', balance: 250_000, status: 'inactive' });
+      await seed({ name: 'Mitra Citra', balance: 500_000, status: 'active' });
+
+      const filtered = await repo.list({ status: 'active', limit: 50, offset: 0 });
+      expect(filtered.total).toBe(2); // filtered total
+
+      expect(filtered.summary).toEqual({
+        total: 3,
+        totalBalance: 1_750_000,
+        byStatus: { active: 2, inactive: 1 },
+      });
+    });
+
+    it('zero-fills every status key and totalBalance when the table is empty', async () => {
+      const result = await repo.list({ limit: 50, offset: 0 });
+      expect(result.summary).toEqual({
+        total: 0,
+        totalBalance: 0,
+        byStatus: { active: 0, inactive: 0 },
+      });
+    });
+  });
+
   describe('search (q)', () => {
     it('matches by name substring case-insensitively', async () => {
       await seed({ name: 'Loket Andi', area: 'Jepara' });

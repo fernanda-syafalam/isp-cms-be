@@ -64,13 +64,21 @@ describe('TicketsService', () => {
     service = moduleRef.get(TicketsService);
   });
 
+  const summary = { total: 1, byStatus: { open: 1, in_progress: 0, resolved: 0, breached: 0 } };
+
   describe('list', () => {
     it('forwards the filter to the repo and maps rows', async () => {
-      repo.list.mockResolvedValue({ items: [baseTicket], total: 1 });
+      repo.list.mockResolvedValue({ items: [baseTicket], total: 1, summary });
       const result = await service.list({ limit: 50, offset: 0 });
       expect(repo.list).toHaveBeenCalledWith({ limit: 50, offset: 0 });
       expect(result.total).toBe(1);
       expect(result.items[0]).toMatchObject({ code: 'TKT-2001' });
+    });
+
+    it('passes the summary rollup through unchanged (FE contract parity)', async () => {
+      repo.list.mockResolvedValue({ items: [baseTicket], total: 1, summary });
+      const result = await service.list({ limit: 50, offset: 0 });
+      expect(result.summary).toEqual(summary);
     });
 
     it('passes q filter through to the repo', async () => {

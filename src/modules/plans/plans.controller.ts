@@ -15,7 +15,7 @@ import { AnyAuthenticatedRole } from '../../common/decorators/any-authenticated-
 import { Audit } from '../../common/decorators/audit.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CreatePlanDto } from './dto/create-plan.dto';
-import { PlanResponseDto } from './dto/plan-response.dto';
+import { PlanListResponseDto, PlanResponseDto } from './dto/plan-response.dto';
 import { UpdatePlanDto } from './dto/update-plan.dto';
 import { PlansService } from './plans.service';
 
@@ -37,6 +37,7 @@ export class PlansController {
   // previously undocumented; recorded explicitly here.
   @AnyAuthenticatedRole()
   @Get()
+  @ZodSerializerDto(PlanListResponseDto)
   list(@Query() query: unknown) {
     return this.plans.list(ListQuerySchema.parse(query));
   }

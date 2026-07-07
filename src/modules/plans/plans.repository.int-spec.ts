@@ -59,6 +59,32 @@ describe('PlansRepository (integration)', () => {
     expect(total).toBe(2);
   });
 
+  describe('list — summary aggregate', () => {
+    it('summary.byStatus counts every plan regardless of q filter, zero-filled', async () => {
+      await repo.create({ name: 'Home 20', speedMbps: 20, priceMonthly: 200_000 });
+      const toArchive = await repo.create({
+        name: 'Legacy 10',
+        speedMbps: 10,
+        priceMonthly: 100_000,
+      });
+      await repo.archive(toArchive.id);
+      await repo.create({ name: 'Home 50', speedMbps: 50, priceMonthly: 350_000 });
+
+      const filtered = await repo.list({ q: 'Home', limit: 50, offset: 0 });
+      expect(filtered.total).toBe(2); // filtered total
+
+      expect(filtered.summary).toEqual({
+        total: 3,
+        byStatus: { active: 2, archived: 1 },
+      });
+    });
+
+    it('zero-fills every status key when the table is empty', async () => {
+      const result = await repo.list({ limit: 50, offset: 0 });
+      expect(result.summary).toEqual({ total: 0, byStatus: { active: 0, archived: 0 } });
+    });
+  });
+
   it('updates price and bumps updated_at', async () => {
     const created = await repo.create({
       name: 'Home 20',

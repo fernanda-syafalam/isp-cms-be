@@ -7,6 +7,7 @@ import {
   type Router,
   routers,
 } from '../../infrastructure/database/schema/routers.schema';
+import type { RouterSummary } from './dto/router-response.dto';
 
 // Columns the frontend may sort on (camelCase key → Drizzle column).
 // Unknown/absent key falls back to `createdAt desc` via buildOrderBy — never throws.
@@ -41,7 +42,9 @@ export class RoutersRepository {
     return this.drizzle.db;
   }
 
-  async list(filter: RouterListFilter): Promise<{ items: Router[]; total: number }> {
+  async list(
+    filter: RouterListFilter,
+  ): Promise<{ items: Router[]; total: number; summary: RouterSummary }> {
     const where = and(
       filter.status ? eq(routers.status, filter.status) : undefined,
       filter.q
@@ -68,7 +71,28 @@ export class RoutersRepository {
       .limit(filter.limit)
       .offset(filter.offset);
     const [totals] = await this.db.select({ value: count() }).from(routers).where(where);
-    return { items, total: totals?.value ?? 0 };
+
+    // Full-set status-count rollup — computed over ALL routers, ignoring
+    // status/q/paging (mirrors the work-orders/invoices summary aggregate).
+    // A single grouped-filter aggregate avoids 2 separate COUNT queries; a
+    // missing status is zero-filled below.
+    const [summaryRow] = await this.db
+      .select({
+        total: count(),
+        online: sql<number>`count(*) filter (where ${routers.status} = 'online')`,
+        offline: sql<number>`count(*) filter (where ${routers.status} = 'offline')`,
+      })
+      .from(routers);
+
+    const summary: RouterSummary = {
+      total: summaryRow?.total ?? 0,
+      byStatus: {
+        online: Number(summaryRow?.online ?? 0),
+        offline: Number(summaryRow?.offline ?? 0),
+      },
+    };
+
+    return { items, total: totals?.value ?? 0, summary };
   }
 
   async findById(id: string): Promise<Router | null> {

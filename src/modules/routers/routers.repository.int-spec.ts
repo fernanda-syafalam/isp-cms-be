@@ -91,6 +91,27 @@ describe('RoutersRepository (integration)', () => {
     await expect(repo.markSynced('00000000-0000-0000-0000-0000000000ff')).rejects.toThrow();
   });
 
+  describe('list — summary aggregate', () => {
+    it('summary.byStatus counts every router regardless of status/q filter, zero-filled', async () => {
+      await repo.create(newRouter());
+      await repo.create(newRouter({ name: 'Edge-1', status: 'offline' }));
+      await repo.create(newRouter({ name: 'Edge-2', status: 'offline' }));
+
+      const filtered = await repo.list({ status: 'online', limit: 50, offset: 0 });
+      expect(filtered.total).toBe(1); // filtered total
+
+      expect(filtered.summary).toEqual({
+        total: 3,
+        byStatus: { online: 1, offline: 2 },
+      });
+    });
+
+    it('zero-fills every status key when the table is empty', async () => {
+      const result = await repo.list({ limit: 50, offset: 0 });
+      expect(result.summary).toEqual({ total: 0, byStatus: { online: 0, offline: 0 } });
+    });
+  });
+
   describe('search (q)', () => {
     it('filters by name substring case-insensitively', async () => {
       await repo.create(newRouter({ name: 'Core-Router-1', address: '10.0.1.1' }));

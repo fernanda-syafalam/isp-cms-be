@@ -86,6 +86,32 @@ describe('DevicesRepository (integration)', () => {
     expect(page.total).toBe(3);
   });
 
+  describe('list — summary aggregate', () => {
+    it('summary.byStatus counts every device regardless of type/status/q filter, zero-filled', async () => {
+      await repo.ensureSeeded([
+        onu({ status: 'online' }),
+        onu({ name: 'ONU-0002', status: 'degraded' }),
+        onu({ name: 'OLT-1', type: 'olt', rxPower: null, status: 'offline' }),
+      ]);
+
+      const filtered = await repo.list({ type: 'onu', limit: 50, offset: 0 });
+      expect(filtered.total).toBe(2); // filtered total
+
+      expect(filtered.summary).toEqual({
+        total: 3,
+        byStatus: { online: 1, degraded: 1, offline: 1 },
+      });
+    });
+
+    it('zero-fills every status key when the table is empty', async () => {
+      const result = await repo.list({ limit: 50, offset: 0 });
+      expect(result.summary).toEqual({
+        total: 0,
+        byStatus: { online: 0, degraded: 0, offline: 0 },
+      });
+    });
+  });
+
   it('preserves nullable rx_power and reads it back as a number', async () => {
     await repo.ensureSeeded([
       onu({ rxPower: -22.5 }),

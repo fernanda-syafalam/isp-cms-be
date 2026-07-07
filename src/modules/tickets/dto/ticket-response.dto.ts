@@ -29,3 +29,41 @@ export const TicketResponseSchema = z.object({
 export type TicketResponse = z.infer<typeof TicketResponseSchema>;
 
 export class TicketResponseDto extends createZodDto(TicketResponseSchema) {}
+
+/**
+ * Full-set status-count rollup for the ticket list. Computed over ALL
+ * tickets — NEVER affected by status/q/paging (mirrors the
+ * work-orders/invoices summary aggregate, FE contract parity). `breached`
+ * is a raw status value (not a derived SLA condition) — see
+ * `TicketsRepository.markBreachedPastSla` — so this is a straight grouped
+ * count, same shape as `countByStatus()`. Every status key is always
+ * present (zero-filled).
+ */
+export const TicketSummarySchema = z.object({
+  total: z.number().int().nonnegative(),
+  byStatus: z.object({
+    open: z.number().int().nonnegative(),
+    in_progress: z.number().int().nonnegative(),
+    resolved: z.number().int().nonnegative(),
+    breached: z.number().int().nonnegative(),
+  }),
+});
+
+export type TicketSummary = z.infer<typeof TicketSummarySchema>;
+
+/**
+ * Paginated list response for GET /v1/tickets.
+ *
+ * - `items`   – current page (after status/q filter, sort, limit/offset).
+ * - `total`   – count matching the current filter BEFORE paging.
+ * - `summary` – full-set aggregate; NEVER affected by any filter or paging.
+ */
+export const TicketListResponseSchema = z.object({
+  items: z.array(TicketResponseSchema),
+  total: z.number().int().nonnegative(),
+  summary: TicketSummarySchema,
+});
+
+export type TicketListResponse = z.infer<typeof TicketListResponseSchema>;
+
+export class TicketListResponseDto extends createZodDto(TicketListResponseSchema) {}

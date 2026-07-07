@@ -25,6 +25,7 @@ import {
 } from '../../infrastructure/database/schema/customers.schema';
 import { plans } from '../../infrastructure/database/schema/plans.schema';
 import { resellers } from '../../infrastructure/database/schema/resellers.schema';
+import type { CustomerSummary } from './dto/customer-response.dto';
 
 // A customer row joined with its plan's display name. planName is never
 // stored on the customer (single source of truth lives in plans).
@@ -96,8 +97,12 @@ export class CustomersRepository {
       .leftJoin(resellers, eq(customers.resellerId, resellers.id));
   }
 
-  async list(filter: CustomerListFilter): Promise<{ items: CustomerRow[]; total: number }> {
+  async list(
+    filter: CustomerListFilter,
+  ): Promise<{ items: CustomerRow[]; total: number; summary: CustomerSummary }> {
+    const scopeWhere = this.buildScopeWhere(filter);
     const where = and(
+      scopeWhere,
       filter.status ? eq(customers.status, filter.status) : undefined,
       filter.q
         ? or(
@@ -106,13 +111,6 @@ export class CustomersRepository {
             ilike(customers.phone, `%${filter.q}%`),
           )
         : undefined,
-      // Multi-value area scope: match any listed area OR unassigned (null).
-      // The OR-null rule ensures unassigned customers are never hidden when a
-      // branch-scope filter is active.
-      filter.area && filter.area.length > 0
-        ? or(inArray(customers.areaName, filter.area), isNull(customers.areaName))
-        : undefined,
-      filter.resellerId ? eq(customers.resellerId, filter.resellerId) : undefined,
     );
 
     const orderBy = buildOrderBy(
@@ -130,7 +128,54 @@ export class CustomersRepository {
 
     const [totals] = await this.db.select({ value: count() }).from(customers).where(where);
 
-    return { items, total: totals?.value ?? 0 };
+    // Scope-wide lifecycle-status + outstanding rollup — computed over the
+    // caller's ACCESS SCOPE (area/resellerId, same as `scopeWhere` above),
+    // ignoring status/q/paging (mirrors the work-orders/invoices summary
+    // aggregate). A single grouped-filter aggregate avoids 5 separate COUNT
+    // queries; missing statuses are zero-filled below.
+    const [summaryRow] = await this.db
+      .select({
+        total: count(),
+        outstanding: sql<string>`coalesce(sum(${customers.outstanding}), 0)`,
+        prospek: sql<number>`count(*) filter (where ${customers.status} = 'prospek')`,
+        instalasi: sql<number>`count(*) filter (where ${customers.status} = 'instalasi')`,
+        aktif: sql<number>`count(*) filter (where ${customers.status} = 'aktif')`,
+        isolir: sql<number>`count(*) filter (where ${customers.status} = 'isolir')`,
+        berhenti: sql<number>`count(*) filter (where ${customers.status} = 'berhenti')`,
+      })
+      .from(customers)
+      .where(scopeWhere);
+
+    const summary: CustomerSummary = {
+      total: summaryRow?.total ?? 0,
+      outstanding: Number(summaryRow?.outstanding ?? 0),
+      byStatus: {
+        prospek: Number(summaryRow?.prospek ?? 0),
+        instalasi: Number(summaryRow?.instalasi ?? 0),
+        aktif: Number(summaryRow?.aktif ?? 0),
+        isolir: Number(summaryRow?.isolir ?? 0),
+        berhenti: Number(summaryRow?.berhenti ?? 0),
+      },
+    };
+
+    return { items, total: totals?.value ?? 0, summary };
+  }
+
+  // The caller's access-scope predicate (area/resellerId) shared by both the
+  // paged `where` and the summary aggregate — status/q are deliberately
+  // excluded here since the summary must stay stable while a user switches
+  // status tabs or types a search query (mirrors the FE mock contract: the
+  // branch scope applies before the status filter).
+  private buildScopeWhere(filter: CustomerListFilter) {
+    return and(
+      // Multi-value area scope: match any listed area OR unassigned (null).
+      // The OR-null rule ensures unassigned customers are never hidden when a
+      // branch-scope filter is active.
+      filter.area && filter.area.length > 0
+        ? or(inArray(customers.areaName, filter.area), isNull(customers.areaName))
+        : undefined,
+      filter.resellerId ? eq(customers.resellerId, filter.resellerId) : undefined,
+    );
   }
 
   async findById(id: string): Promise<CustomerRow | null> {

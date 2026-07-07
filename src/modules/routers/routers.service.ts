@@ -1,7 +1,11 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { Router } from '../../infrastructure/database/schema/routers.schema';
 import type { ConnectRouterInput } from './dto/connect-router.dto';
-import type { RouterResponse, TestConnectionResult } from './dto/router-response.dto';
+import type {
+  RouterListResponse,
+  RouterResponse,
+  TestConnectionResult,
+} from './dto/router-response.dto';
 import { type RouterListFilter, RoutersRepository } from './routers.repository';
 
 // Synthesised RouterOS metadata until the real API integration lands. The
@@ -15,9 +19,9 @@ export class RoutersService {
 
   constructor(private readonly repo: RoutersRepository) {}
 
-  async list(filter: RouterListFilter): Promise<{ items: RouterResponse[]; total: number }> {
-    const { items, total } = await this.repo.list(filter);
-    return { items: items.map(toRouterResponse), total };
+  async list(filter: RouterListFilter): Promise<RouterListResponse> {
+    const { items, total, summary } = await this.repo.list(filter);
+    return { items: items.map(toRouterResponse), total, summary };
   }
 
   async findById(id: string): Promise<RouterResponse> {

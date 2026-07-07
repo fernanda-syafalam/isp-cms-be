@@ -7,6 +7,7 @@ import {
   type NewDevice,
   devices,
 } from '../../infrastructure/database/schema/devices.schema';
+import type { DeviceSummary } from './dto/device-response.dto';
 
 export interface DeviceListFilter {
   q?: string;
@@ -50,7 +51,9 @@ export class DevicesRepository {
     await this.db.insert(devices).values(defaults).onConflictDoNothing();
   }
 
-  async list(filter: DeviceListFilter): Promise<{ items: Device[]; total: number }> {
+  async list(
+    filter: DeviceListFilter,
+  ): Promise<{ items: Device[]; total: number; summary: DeviceSummary }> {
     const where = and(
       filter.type ? eq(devices.type, filter.type) : undefined,
       filter.status ? eq(devices.status, filter.status) : undefined,
@@ -73,7 +76,30 @@ export class DevicesRepository {
       .limit(filter.limit)
       .offset(filter.offset);
     const [totals] = await this.db.select({ value: count() }).from(devices).where(where);
-    return { items, total: totals?.value ?? 0 };
+
+    // Full-set status-count rollup — computed over ALL devices, ignoring
+    // type/status/q/paging (mirrors the work-orders/invoices summary
+    // aggregate). A single grouped-filter aggregate avoids 3 separate COUNT
+    // queries; missing statuses are zero-filled below.
+    const [summaryRow] = await this.db
+      .select({
+        total: count(),
+        online: sql<number>`count(*) filter (where ${devices.status} = 'online')`,
+        degraded: sql<number>`count(*) filter (where ${devices.status} = 'degraded')`,
+        offline: sql<number>`count(*) filter (where ${devices.status} = 'offline')`,
+      })
+      .from(devices);
+
+    const summary: DeviceSummary = {
+      total: summaryRow?.total ?? 0,
+      byStatus: {
+        online: Number(summaryRow?.online ?? 0),
+        degraded: Number(summaryRow?.degraded ?? 0),
+        offline: Number(summaryRow?.offline ?? 0),
+      },
+    };
+
+    return { items, total: totals?.value ?? 0, summary };
   }
 
   async findById(id: string): Promise<Device | null> {
