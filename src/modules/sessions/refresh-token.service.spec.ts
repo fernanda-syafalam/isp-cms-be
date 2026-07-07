@@ -3,61 +3,17 @@ import { ConfigService } from '@nestjs/config';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RedisService } from '../../infrastructure/redis/redis.service';
+import { createFakeRedisClient } from '../../test-utils/fake-redis-client';
 import { RefreshTokenService } from './refresh-token.service';
-
-/**
- * An in-memory ioredis stand-in. Implements only the operations
- * RefreshTokenService relies on (string get/set/getdel/del + set
- * sadd/srem/smembers + expire). Faster and more deterministic than
- * spinning a real Redis for these unit tests.
- */
-function makeFakeRedisClient() {
-  const store = new Map<string, string>();
-  const sets = new Map<string, Set<string>>();
-  return {
-    set: vi.fn(async (key: string, value: string) => {
-      store.set(key, value);
-      return 'OK' as const;
-    }),
-    get: vi.fn(async (key: string) => store.get(key) ?? null),
-    getdel: vi.fn(async (key: string) => {
-      const value = store.get(key);
-      if (value === undefined) return null;
-      store.delete(key);
-      return value;
-    }),
-    del: vi.fn(async (key: string) => {
-      const had = store.delete(key);
-      return had ? 1 : 0;
-    }),
-    sadd: vi.fn(async (key: string, ...members: string[]) => {
-      const set = sets.get(key) ?? new Set<string>();
-      for (const m of members) set.add(m);
-      sets.set(key, set);
-      return members.length;
-    }),
-    srem: vi.fn(async (key: string, ...members: string[]) => {
-      const set = sets.get(key);
-      if (!set) return 0;
-      let removed = 0;
-      for (const m of members) if (set.delete(m)) removed++;
-      return removed;
-    }),
-    smembers: vi.fn(async (key: string) => [...(sets.get(key) ?? [])]),
-    expire: vi.fn(async () => 1),
-    _store: store,
-    _sets: sets,
-  };
-}
 
 describe('RefreshTokenService', () => {
   let service: RefreshTokenService;
-  let client: ReturnType<typeof makeFakeRedisClient>;
+  let client: ReturnType<typeof createFakeRedisClient>;
 
   const meta = { userAgent: 'Mozilla/5.0 (Test)', ip: '203.0.113.1' };
 
   beforeEach(async () => {
-    client = makeFakeRedisClient();
+    client = createFakeRedisClient();
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         RefreshTokenService,
@@ -159,7 +115,7 @@ describe('RefreshTokenService', () => {
       expect(await service.listSessions('user-5')).toHaveLength(0);
     });
 
-    it('revokeSession deletes the backing refresh token, so it is rejected by rotate', async () => {
+    it('revokeSession deletes the backing refresh token, so it is rejected by rotate and does not resurrect the session', async () => {
       const a = await service.mint('user-6', meta);
       const b = await service.mint('user-6', meta);
 
@@ -167,12 +123,61 @@ describe('RefreshTokenService', () => {
       expect(existed).toBe(true);
 
       await expect(service.rotate(a.token)).rejects.toBeInstanceOf(UnauthorizedException);
+      // The rejected rotate must NOT have re-created session `a` — only
+      // the untouched session `b` remains.
+      const remaining = await service.listSessions('user-6');
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]?.id).toBe(b.sessionId);
       // The other session is untouched.
       await expect(service.rotate(b.token)).resolves.toMatchObject({ userId: 'user-6' });
     });
 
     it('revokeSession returns false for an unknown session id', async () => {
       await expect(service.revokeSession('user-7', 'never-existed')).resolves.toBe(false);
+    });
+
+    // SEC-RACE regression: revokeSession and rotate/commitMint must be
+    // mutually atomic, so a rotate that is already "in flight" (its old
+    // token already consumed via GETDEL) cannot resurrect a session that
+    // gets revoked before the rotate's commit runs. Simulated here by
+    // gating the ONE `client.get` call `commitMint` makes to read the
+    // existing session record — the exact point between "old token
+    // consumed" and "new token + session record committed" — and running
+    // `revokeSession` to completion while `rotate` is parked there.
+    it('SEC-RACE: a session revoked while a rotate is in flight is NOT resurrected by that rotate', async () => {
+      const minted = await service.mint('user-race', meta);
+
+      let releaseRotate!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        releaseRotate = resolve;
+      });
+      const realGet = client.get.getMockImplementation();
+      client.get.mockImplementationOnce(async (key: string) => {
+        await gate;
+        return realGet ? realGet(key) : null;
+      });
+
+      // Kick off the rotate — it consumes the old token (GETDEL) and then
+      // parks on the gated `get` inside `commitMint`, BEFORE its atomic
+      // commit script runs.
+      const rotatePromise = service.rotate(minted.token, meta);
+
+      // While rotate is parked, the revoke runs to completion for real —
+      // this is the "concurrent revoke" the SEC-RACE fix must survive.
+      const revoked = await service.revokeSession('user-race', minted.sessionId);
+      expect(revoked).toBe(true);
+
+      // Only now let the parked rotate proceed to its atomic commit.
+      releaseRotate();
+
+      // The commit's membership guard must catch the concurrent revoke
+      // and reject — NOT write a fresh token/session for the now-dead
+      // session id.
+      await expect(rotatePromise).rejects.toBeInstanceOf(UnauthorizedException);
+
+      // No trace of the session survives — the revoke's outcome wins,
+      // regardless of the rotate that was in flight against it.
+      expect(await service.listSessions('user-race')).toHaveLength(0);
     });
 
     it('revokeOtherSessions revokes every session except the kept one', async () => {

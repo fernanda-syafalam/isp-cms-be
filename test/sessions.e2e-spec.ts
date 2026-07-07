@@ -4,13 +4,14 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 import { Test, type TestingModule } from '@nestjs/testing';
 import * as argon2 from 'argon2';
 import { authenticator } from 'otplib';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../src/app.module';
 import { DrizzleService } from '../src/infrastructure/database/drizzle.service';
 import type { User } from '../src/infrastructure/database/schema/users.schema';
 import { RedisService } from '../src/infrastructure/redis/redis.service';
 import { SecurityRepository } from '../src/modules/security/security.repository';
 import { UsersRepository } from '../src/modules/users/users.repository';
+import { createFakeRedisClient } from '../src/test-utils/fake-redis-client';
 
 const PASSWORD = 'correct-horse-battery-staple';
 
@@ -38,9 +39,9 @@ describe('Sessions (SEC-2, e2e)', () => {
   // sharing one across the whole file — the session index this feature is
   // testing is keyed per-user, so a shared user would let one test's
   // sessions bleed into the next's assertions.
-  const usersById = new Map<string, User>();
-  const usersByEmail = new Map<string, User>();
-  const securityState = new Map<string, FakeSecurityRow>();
+  let usersById: Map<string, User>;
+  let usersByEmail: Map<string, User>;
+  let securityState: Map<string, FakeSecurityRow>;
   let nextUserSuffix = 0;
 
   function registerUser(): User {
@@ -64,6 +65,19 @@ describe('Sessions (SEC-2, e2e)', () => {
 
   beforeAll(async () => {
     passwordHash = await argon2.hash(PASSWORD, { type: argon2.argon2id });
+  });
+
+  // A FRESH app (and fresh fakes) per test, rather than one shared app for
+  // the whole file: `POST /v1/auth/login` carries its own tight per-route
+  // throttle (F1: 10 requests/60s, unrelated to what this suite tests), and
+  // several tests here each mint 2+ real logins ("device A" + "device B")
+  // to prove session-scoped behavior. A single shared app would accumulate
+  // login calls across all `it`s and eventually 429 for reasons that have
+  // nothing to do with session/revocation correctness.
+  beforeEach(async () => {
+    usersById = new Map();
+    usersByEmail = new Map();
+    securityState = new Map();
 
     const fakeUsersRepo = {
       findById: vi.fn(async (id: string) => usersById.get(id) ?? null),
@@ -103,46 +117,11 @@ describe('Sessions (SEC-2, e2e)', () => {
       })
       .overrideProvider(RedisService)
       .useValue({
-        client: (() => {
-          const store = new Map<string, string>();
-          const sets = new Map<string, Set<string>>();
-          return {
-            call: async () => null,
-            get: async (k: string) => store.get(k) ?? null,
-            set: async (k: string, v: string) => {
-              store.set(k, v);
-              return 'OK';
-            },
-            getdel: async (k: string) => {
-              const v = store.get(k);
-              if (v === undefined) return null;
-              store.delete(k);
-              return v;
-            },
-            del: async (k: string) => (store.delete(k) ? 1 : 0),
-            sadd: async (k: string, ...members: string[]) => {
-              const set = sets.get(k) ?? new Set<string>();
-              for (const m of members) set.add(m);
-              sets.set(k, set);
-              return members.length;
-            },
-            srem: async (k: string, ...members: string[]) => {
-              const set = sets.get(k);
-              if (!set) return 0;
-              let removed = 0;
-              for (const m of members) if (set.delete(m)) removed++;
-              return removed;
-            },
-            smembers: async (k: string) => [...(sets.get(k) ?? [])],
-            // TotpLockoutService (F1) — used by the F3 test's enroll/confirm.
-            incr: async (k: string) => {
-              const v = Number(store.get(k) ?? '0') + 1;
-              store.set(k, String(v));
-              return v;
-            },
-            expire: async () => 1,
-          };
-        })(),
+        // Fresh fake per test — real get/set/getdel/del + sadd/srem/
+        // smembers (SEC-2 session index) + incr/expire (F1 lockout, used
+        // by the F3 test's enroll/confirm) + the atomic revoke/
+        // rotate-commit `eval` scripts.
+        client: createFakeRedisClient(),
         ping: async () => true,
         onModuleInit: () => Promise.resolve(),
         onModuleDestroy: () => Promise.resolve(),
@@ -160,7 +139,7 @@ describe('Sessions (SEC-2, e2e)', () => {
     await app.getHttpAdapter().getInstance().ready();
   });
 
-  afterAll(async () => {
+  afterEach(async () => {
     await app.close();
   });
 
@@ -312,6 +291,33 @@ describe('Sessions (SEC-2, e2e)', () => {
       headers: { authorization: `Bearer ${session.accessToken}` },
     });
     expect(revoke.statusCode).toBe(404);
+  });
+
+  it("cross-user IDOR: user A cannot revoke user B's session by id — 404, and B stays alive", async () => {
+    const userA = registerUser();
+    const userB = registerUser();
+    const sessionA = await login(userA.email, 'Mozilla/5.0 (IDOR User A)');
+    const sessionB = await login(userB.email, 'Mozilla/5.0 (IDOR User B)');
+
+    // A learns B's session id (e.g. leaked, guessed, or a future
+    // admin-facing view) — the revoke keys are namespaced per user
+    // (`session:<userId>:<sessionId>`), so this must never succeed.
+    const listedFromB = await getSecurityState(sessionB.accessToken);
+    const bSessionId = listedFromB.sessions[0]?.id;
+    expect(bSessionId).toBeDefined();
+
+    const revokeAsA = await app.inject({
+      method: 'POST',
+      url: `/v1/security/sessions/${bSessionId}/revoke`,
+      headers: { authorization: `Bearer ${sessionA.accessToken}` },
+    });
+    expect(revokeAsA.statusCode).toBe(404);
+
+    // B's session is completely unaffected — still listed, refresh still works.
+    const stillListed = await getSecurityState(sessionB.accessToken);
+    expect(stillListed.sessions).toHaveLength(1);
+    expect(stillListed.sessions[0]?.id).toBe(bSessionId);
+    expect((await refreshWith(sessionB.refreshCookie)).statusCode).toBe(200);
   });
 
   it('F3: enabling 2FA revokes every OTHER active session, keeping the enabling session alive', async () => {

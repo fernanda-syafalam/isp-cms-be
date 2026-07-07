@@ -11,9 +11,15 @@ import { TwoFactorEnrollResponseDto } from './dto/two-factor-enroll-response.dto
 import { SecurityService } from './security.service';
 
 /**
- * Self-service account security for the authenticated user. Not role-gated —
- * every user manages their own 2FA and sessions (JwtAuthGuard already
- * requires authentication).
+ * Self-service account security for the authenticated user — each caller
+ * manages only their OWN 2FA state and sessions (every service method is
+ * scoped by the caller's own `userId`/`sessionId`, never another user's).
+ *
+ * Staff/admin-only in v1 (`@Roles('admin', 'staff')` below correctly
+ * EXCLUDES `customer`) — there is no customer-facing security page in the
+ * FE yet. Extending self-service 2FA/session management to `customer` is
+ * a future product decision, not an oversight; do not widen this without
+ * that decision being made explicitly.
  */
 @Roles('admin', 'staff')
 @Controller({ path: 'security', version: '1' })
