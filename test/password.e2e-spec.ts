@@ -8,6 +8,7 @@ import { AppModule } from '../src/app.module';
 import { DrizzleService } from '../src/infrastructure/database/drizzle.service';
 import type { User } from '../src/infrastructure/database/schema/users.schema';
 import { RedisService } from '../src/infrastructure/redis/redis.service';
+import { SecurityRepository } from '../src/modules/security/security.repository';
 import { UsersRepository } from '../src/modules/users/users.repository';
 
 const OLD_PASSWORD = 'correct-horse-battery-staple';
@@ -88,6 +89,15 @@ describe('Password lifecycle (e2e)', () => {
       })
       .overrideProvider(UsersRepository)
       .useValue(fakeRepo)
+      // No 2FA in this suite — see auth.e2e-spec.ts for the same override.
+      .overrideProvider(SecurityRepository)
+      .useValue({
+        findState: vi.fn(async () => ({
+          userId: storedUser.id,
+          twoFactorEnabled: false,
+          twoFactorSecret: null,
+        })),
+      })
       .compile();
 
     app = moduleFixture.createNestApplication<NestFastifyApplication>(new FastifyAdapter());

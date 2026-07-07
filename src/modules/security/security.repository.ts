@@ -36,10 +36,32 @@ export class SecurityRepository {
     return row ?? null;
   }
 
-  async setTwoFactor(userId: string, enabled: boolean): Promise<void> {
+  /**
+   * Persist a freshly generated TOTP secret and start (or restart)
+   * enrollment. `twoFactorEnabled` is explicitly reset to false here — a
+   * stored secret alone must never gate login; only `confirmTwoFactor`
+   * (after a valid code) does.
+   */
+  async saveTwoFactorSecret(userId: string, secret: string): Promise<void> {
     await this.db
       .update(userSecurity)
-      .set({ twoFactorEnabled: enabled, updatedAt: sql`now()` })
+      .set({ twoFactorSecret: secret, twoFactorEnabled: false, updatedAt: sql`now()` })
+      .where(eq(userSecurity.userId, userId));
+  }
+
+  /** Flip the flag on after the caller has verified a TOTP code against the stored secret. */
+  async confirmTwoFactor(userId: string): Promise<void> {
+    await this.db
+      .update(userSecurity)
+      .set({ twoFactorEnabled: true, updatedAt: sql`now()` })
+      .where(eq(userSecurity.userId, userId));
+  }
+
+  /** Clear the secret and disable the flag — used by `disableTwoFactor`. */
+  async clearTwoFactor(userId: string): Promise<void> {
+    await this.db
+      .update(userSecurity)
+      .set({ twoFactorSecret: null, twoFactorEnabled: false, updatedAt: sql`now()` })
       .where(eq(userSecurity.userId, userId));
   }
 

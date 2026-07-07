@@ -40,7 +40,7 @@ export class AuthController {
     @Body() body: LoginDto,
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<{ accessToken: string; user: AuthUser }> {
-    const result = await this.auth.login(body.email, body.password);
+    const result = await this.auth.login(body.email, body.password, body.totpCode);
     this.setRefreshCookie(reply, result.refreshToken, result.refreshExpiresInSeconds);
     return { accessToken: result.accessToken, user: result.user };
   }

@@ -1,10 +1,31 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { authenticator } from 'otplib';
 import type {
   NewUserSession,
   UserSession,
 } from '../../infrastructure/database/schema/security.schema';
 import type { SecuritySessionResponse, SecurityStateResponse } from './dto/security-response.dto';
+import type { TwoFactorEnrollResponse } from './dto/two-factor-enroll-response.dto';
 import { SecurityRepository } from './security.repository';
+
+/** The issuer label shown in the authenticator app next to the account name. */
+const TOTP_ISSUER = 'ISP CMS';
+
+// Tolerate one step (30s) of clock skew on either side of "now" — the
+// window otplib's `authenticator.check` uses for every verification in
+// this service. v1 accepts any code inside that window, including one
+// already spent (no single-use replay tracking yet) — noted as a
+// follow-up in the PR description.
+authenticator.options = { window: 1 };
+
+/** Outcome of checking a login attempt against the user's 2FA state. */
+export type LoginChallengeResult = 'ok' | 'required' | 'invalid';
 
 @Injectable()
 export class SecurityService {
@@ -17,21 +38,78 @@ export class SecurityService {
     return this.buildState(userId);
   }
 
-  async enableTwoFactor(userId: string, _code: string): Promise<SecurityStateResponse> {
-    // The 6-digit shape is validated by the DTO. A real backend verifies the
-    // code against the user's TOTP secret; this mock accepts any well-formed
-    // code and flips the flag.
+  /**
+   * Step 1 of 2: generate a fresh TOTP secret, persist it, and hand back
+   * the otpauth URI (for a QR code) + the raw base32 secret (manual entry
+   * fallback). `twoFactorEnabled` is left false — a stored-but-unconfirmed
+   * secret must never gate login. Re-callable: starting over discards any
+   * previous unconfirmed secret.
+   */
+  async beginEnroll(userId: string, accountName: string): Promise<TwoFactorEnrollResponse> {
     await this.ensureSeeded(userId);
-    await this.repo.setTwoFactor(userId, true);
+    const secret = authenticator.generateSecret();
+    await this.repo.saveTwoFactorSecret(userId, secret);
+    this.logger.log({ userId }, 'two-factor enrollment started');
+    return {
+      twoFactorSecret: secret,
+      otpauthUri: authenticator.keyuri(accountName, TOTP_ISSUER, secret),
+    };
+  }
+
+  /**
+   * Step 2 of 2: verify the code the user just read off their
+   * authenticator app against the secret stored by `beginEnroll`. Only on
+   * success does `twoFactorEnabled` flip to true.
+   */
+  async confirmEnroll(userId: string, code: string): Promise<SecurityStateResponse> {
+    await this.ensureSeeded(userId);
+    const state = await this.repo.findState(userId);
+    if (!state?.twoFactorSecret) {
+      throw new BadRequestException('two-factor enrollment was not started');
+    }
+    if (!authenticator.check(code, state.twoFactorSecret)) {
+      throw new UnauthorizedException('invalid two-factor authentication code');
+    }
+    await this.repo.confirmTwoFactor(userId);
     this.logger.log({ userId }, 'two-factor enabled');
     return this.buildState(userId);
   }
 
-  async disableTwoFactor(userId: string): Promise<SecurityStateResponse> {
+  /**
+   * Requires a valid current TOTP code only when 2FA is actually enabled —
+   * an in-progress, never-confirmed enrollment (secret present, flag
+   * false) can be cancelled without one since it was never gating login.
+   */
+  async disableTwoFactor(userId: string, code?: string): Promise<SecurityStateResponse> {
     await this.ensureSeeded(userId);
-    await this.repo.setTwoFactor(userId, false);
+    const state = await this.repo.findState(userId);
+    if (state?.twoFactorEnabled) {
+      if (!code || !state.twoFactorSecret || !authenticator.check(code, state.twoFactorSecret)) {
+        throw new UnauthorizedException('invalid two-factor authentication code');
+      }
+    }
+    await this.repo.clearTwoFactor(userId);
     this.logger.log({ userId }, 'two-factor disabled');
     return this.buildState(userId);
+  }
+
+  /**
+   * Called by AuthService during login — never by the security controller.
+   * Returns 'ok' when the user has no confirmed 2FA, or the supplied code
+   * checks out; 'required' when 2FA is on and no code was submitted;
+   * 'invalid' when a submitted code fails verification. Deliberately
+   * returns a discriminated result instead of throwing so AuthService (not
+   * this module) decides the HTTP-facing error shape.
+   */
+  async verifyLoginChallenge(userId: string, code?: string): Promise<LoginChallengeResult> {
+    const state = await this.repo.findState(userId);
+    if (!state?.twoFactorEnabled) return 'ok';
+    if (!code) return 'required';
+    // Defensive: `twoFactorEnabled` should never be true without a secret
+    // (confirmTwoFactor only runs after a secret-backed check succeeds),
+    // but never gate on a code we cannot verify.
+    if (!state.twoFactorSecret) return 'ok';
+    return authenticator.check(code, state.twoFactorSecret) ? 'ok' : 'invalid';
   }
 
   async revokeSession(userId: string, id: string): Promise<void> {

@@ -14,9 +14,13 @@ import { ZodError } from 'zod';
  * teams typically point at their internal error catalogue. `instance`
  * is the request URL so support can correlate without a request id.
  *
- * Optional, non-RFC field: `requestId`. Standard problem+json allows
- * extension members; we add ours so support can grep logs without
- * passing the URL around.
+ * Optional, non-RFC fields: `requestId`, `code`. Standard problem+json
+ * allows extension members; we add ours so support can grep logs without
+ * passing the URL around, and so a client can branch on a stable
+ * machine-readable `code` instead of parsing `title` (which is meant for
+ * humans and may be localized later). `code` is opt-in per exception —
+ * throw `new SomeHttpException({ message, code })` to set it; otherwise
+ * it is simply omitted from the body.
  */
 interface ProblemDetails {
   type: string;
@@ -26,6 +30,7 @@ interface ProblemDetails {
   instance: string;
   errors?: unknown;
   requestId?: string;
+  code?: string;
 }
 
 /**
@@ -51,6 +56,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let title = 'Internal Server Error';
     let detail: string | undefined;
     let errors: unknown;
+    let code: string | undefined;
 
     if (exception instanceof ZodError) {
       status = HttpStatus.BAD_REQUEST;
@@ -64,6 +70,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
         const obj = res as Record<string, unknown>;
         if (typeof obj.message === 'string') title = obj.message;
         if (typeof obj.detail === 'string') detail = obj.detail;
+        if (typeof obj.code === 'string') code = obj.code;
         if ('errors' in obj) errors = obj.errors;
       }
     } else if (exception instanceof Error) {
@@ -79,6 +86,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       instance: req.url,
       errors,
       requestId: req.id?.toString(),
+      code,
     };
 
     reply.status(status).type('application/problem+json').send(body);

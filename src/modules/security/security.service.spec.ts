@@ -1,5 +1,6 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
+import { authenticator } from 'otplib';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UserSession } from '../../infrastructure/database/schema/security.schema';
 import { SecurityRepository } from './security.repository';
@@ -25,7 +26,9 @@ describe('SecurityService', () => {
     repo = {
       ensureState: vi.fn(),
       findState: vi.fn(),
-      setTwoFactor: vi.fn(),
+      saveTwoFactorSecret: vi.fn(),
+      confirmTwoFactor: vi.fn(),
+      clearTwoFactor: vi.fn(),
       countSessions: vi.fn(),
       seedSessions: vi.fn(),
       listSessions: vi.fn(),
@@ -69,27 +72,146 @@ describe('SecurityService', () => {
     });
   });
 
-  describe('two-factor', () => {
-    it('enables 2FA and returns the refreshed state', async () => {
+  describe('beginEnroll', () => {
+    it('generates a secret, persists it, and returns the QR payload', async () => {
       repo.countSessions.mockResolvedValue(1);
-      repo.findState.mockResolvedValue({ userId, twoFactorEnabled: true });
+
+      const out = await service.beginEnroll(userId, 'user@example.test');
+
+      expect(repo.saveTwoFactorSecret).toHaveBeenCalledWith(userId, out.twoFactorSecret);
+      expect(out.twoFactorSecret).toMatch(/^[A-Z2-7]+$/); // base32
+      expect(out.otpauthUri).toContain('otpauth://totp/');
+      expect(out.otpauthUri).toContain(encodeURIComponent('user@example.test'));
+    });
+  });
+
+  describe('confirmEnroll', () => {
+    it('flips enabled to true when the code matches the stored secret', async () => {
+      const secret = authenticator.generateSecret();
+      repo.countSessions.mockResolvedValue(1);
+      repo.findState.mockResolvedValue({
+        userId,
+        twoFactorEnabled: false,
+        twoFactorSecret: secret,
+      });
       repo.listSessions.mockResolvedValue([currentSession]);
+      // Refresh after confirm reflects the flipped flag.
+      repo.confirmTwoFactor.mockImplementation(async () => {
+        repo.findState.mockResolvedValue({
+          userId,
+          twoFactorEnabled: true,
+          twoFactorSecret: secret,
+        });
+      });
 
-      const state = await service.enableTwoFactor(userId, '123456');
+      const code = authenticator.generate(secret);
+      const state = await service.confirmEnroll(userId, code);
 
-      expect(repo.setTwoFactor).toHaveBeenCalledWith(userId, true);
+      expect(repo.confirmTwoFactor).toHaveBeenCalledWith(userId);
       expect(state.twoFactorEnabled).toBe(true);
     });
 
-    it('disables 2FA', async () => {
+    it('rejects a wrong code and does not enable 2FA', async () => {
+      const secret = authenticator.generateSecret();
       repo.countSessions.mockResolvedValue(1);
-      repo.findState.mockResolvedValue({ userId, twoFactorEnabled: false });
+      repo.findState.mockResolvedValue({
+        userId,
+        twoFactorEnabled: false,
+        twoFactorSecret: secret,
+      });
+
+      await expect(service.confirmEnroll(userId, '000000')).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      expect(repo.confirmTwoFactor).not.toHaveBeenCalled();
+    });
+
+    it('rejects when enrollment was never started (no stored secret)', async () => {
+      repo.countSessions.mockResolvedValue(1);
+      repo.findState.mockResolvedValue({ userId, twoFactorEnabled: false, twoFactorSecret: null });
+
+      await expect(service.confirmEnroll(userId, '123456')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(repo.confirmTwoFactor).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('disableTwoFactor', () => {
+    it('clears the secret + flag when the current code is valid', async () => {
+      const secret = authenticator.generateSecret();
+      repo.countSessions.mockResolvedValue(1);
+      repo.findState.mockResolvedValue({ userId, twoFactorEnabled: true, twoFactorSecret: secret });
+      repo.listSessions.mockResolvedValue([currentSession]);
+      repo.clearTwoFactor.mockImplementation(async () => {
+        repo.findState.mockResolvedValue({
+          userId,
+          twoFactorEnabled: false,
+          twoFactorSecret: null,
+        });
+      });
+
+      const code = authenticator.generate(secret);
+      const state = await service.disableTwoFactor(userId, code);
+
+      expect(repo.clearTwoFactor).toHaveBeenCalledWith(userId);
+      expect(state.twoFactorEnabled).toBe(false);
+    });
+
+    it('rejects disabling an enabled account with a missing/wrong code', async () => {
+      const secret = authenticator.generateSecret();
+      repo.countSessions.mockResolvedValue(1);
+      repo.findState.mockResolvedValue({ userId, twoFactorEnabled: true, twoFactorSecret: secret });
+
+      await expect(service.disableTwoFactor(userId, undefined)).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      await expect(service.disableTwoFactor(userId, '000000')).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+      expect(repo.clearTwoFactor).not.toHaveBeenCalled();
+    });
+
+    it('allows cancelling an unconfirmed enrollment without a code', async () => {
+      repo.countSessions.mockResolvedValue(1);
+      repo.findState.mockResolvedValue({
+        userId,
+        twoFactorEnabled: false,
+        twoFactorSecret: 'SOMEUNCONFIRMEDSECRET',
+      });
       repo.listSessions.mockResolvedValue([currentSession]);
 
       const state = await service.disableTwoFactor(userId);
 
-      expect(repo.setTwoFactor).toHaveBeenCalledWith(userId, false);
+      expect(repo.clearTwoFactor).toHaveBeenCalledWith(userId);
       expect(state.twoFactorEnabled).toBe(false);
+    });
+  });
+
+  describe('verifyLoginChallenge', () => {
+    it('returns ok when the user has no 2FA enabled, regardless of code', async () => {
+      repo.findState.mockResolvedValue({ userId, twoFactorEnabled: false, twoFactorSecret: null });
+      await expect(service.verifyLoginChallenge(userId)).resolves.toBe('ok');
+      await expect(service.verifyLoginChallenge(userId, '000000')).resolves.toBe('ok');
+    });
+
+    it('returns required when 2FA is enabled and no code was submitted', async () => {
+      const secret = authenticator.generateSecret();
+      repo.findState.mockResolvedValue({ userId, twoFactorEnabled: true, twoFactorSecret: secret });
+      await expect(service.verifyLoginChallenge(userId)).resolves.toBe('required');
+    });
+
+    it('returns invalid when 2FA is enabled and the code is wrong', async () => {
+      const secret = authenticator.generateSecret();
+      repo.findState.mockResolvedValue({ userId, twoFactorEnabled: true, twoFactorSecret: secret });
+      await expect(service.verifyLoginChallenge(userId, '000000')).resolves.toBe('invalid');
+    });
+
+    it('returns ok when 2FA is enabled and the code is correct', async () => {
+      const secret = authenticator.generateSecret();
+      repo.findState.mockResolvedValue({ userId, twoFactorEnabled: true, twoFactorSecret: secret });
+      const code = authenticator.generate(secret);
+      await expect(service.verifyLoginChallenge(userId, code)).resolves.toBe('ok');
     });
   });
 

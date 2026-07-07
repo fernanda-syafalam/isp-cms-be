@@ -2,6 +2,7 @@ import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/co
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import type { AuthUser } from '../../common/decorators/current-user.decorator';
+import { SecurityService } from '../security/security.service';
 import { UsersRepository } from '../users/users.repository';
 import { UsersService } from '../users/users.service';
 import type { BootstrapInput } from './dto/bootstrap.dto';
@@ -33,6 +34,7 @@ export class AuthService {
     private readonly users: UsersService,
     private readonly jwt: JwtService,
     private readonly refreshTokens: RefreshTokenService,
+    private readonly security: SecurityService,
   ) {}
 
   /** True only when no user exists yet — the first-run bootstrap window. */
@@ -68,7 +70,15 @@ export class AuthService {
     };
   }
 
-  async login(email: string, password: string): Promise<LoginResult> {
+  /**
+   * `totpCode` is optional and only consulted once the password has
+   * already checked out (Pilar: never leak "you'd need a 2FA code" to an
+   * attacker guessing passwords). ADR-0002 documents the two error
+   * markers this can throw: `totp_required` (2FA on, no/blank code sent —
+   * client should prompt) and `totp_invalid` (2FA on, code sent but
+   * wrong). No token is issued in either case.
+   */
+  async login(email: string, password: string, totpCode?: string): Promise<LoginResult> {
     const user = await this.usersRepo.findByEmail(email);
     // Same response shape for "user not found" and "password mismatch"
     // so an attacker cannot enumerate registered emails through timing
@@ -79,6 +89,20 @@ export class AuthService {
       .catch(() => false);
     if (!user || !passwordOk) {
       throw new UnauthorizedException('invalid credentials');
+    }
+
+    const challenge = await this.security.verifyLoginChallenge(user.id, totpCode);
+    if (challenge === 'required') {
+      throw new UnauthorizedException({
+        message: 'two-factor authentication code required',
+        code: 'totp_required',
+      });
+    }
+    if (challenge === 'invalid') {
+      throw new UnauthorizedException({
+        message: 'invalid two-factor authentication code',
+        code: 'totp_invalid',
+      });
     }
 
     const accessToken = await this.signAccess(user.id, user.role);
