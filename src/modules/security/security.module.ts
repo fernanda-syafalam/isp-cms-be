@@ -4,6 +4,8 @@ import { SecurityController } from './security.controller';
 import { SecurityRepository } from './security.repository';
 import { SecurityService } from './security.service';
 import { TotpLockoutService } from './totp-lockout.service';
+import { TotpReplayGuardService } from './totp-replay-guard.service';
+import { TotpSecretCipherService } from './totp-secret-cipher.service';
 
 @Module({
   // SessionsModule (not AuthModule — that would cycle back, since
@@ -12,7 +14,13 @@ import { TotpLockoutService } from './totp-lockout.service';
   // revoke endpoints (SEC-2).
   imports: [SessionsModule],
   controllers: [SecurityController],
-  providers: [SecurityService, SecurityRepository, TotpLockoutService],
+  providers: [
+    SecurityService,
+    SecurityRepository,
+    TotpLockoutService,
+    TotpSecretCipherService,
+    TotpReplayGuardService,
+  ],
   // AuthModule imports this to reach `verifyLoginChallenge` during login —
   // cross-module access goes through this exported provider, never a
   // direct import of `security.service` from outside this folder.

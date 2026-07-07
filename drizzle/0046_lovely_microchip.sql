@@ -1,0 +1,1 @@
+ALTER TABLE "user_security" ALTER COLUMN "two_factor_secret" SET DATA TYPE text;

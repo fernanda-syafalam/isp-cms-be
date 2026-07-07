@@ -47,6 +47,13 @@ import type { AppConfig } from '../../config/configuration';
               '*.refreshToken',
               '*.twoFactorSecret',
               '*.otpauthUri',
+              // F2: the AES-256-GCM key encrypting the TOTP secret at rest
+              // (`TWOFA_ENC_KEY` / `AppConfig.twoFactor.encKey`). Nothing
+              // logs this today (`TotpSecretCipherService` never logs it),
+              // but redact it at the boundary too — cheap insurance
+              // against a future accidental config dump.
+              '*.encKey',
+              '*.TWOFA_ENC_KEY',
             ],
             censor: '[REDACTED]',
           },

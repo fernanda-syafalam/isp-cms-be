@@ -1,4 +1,4 @@
-import { boolean, index, pgTable, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import { boolean, index, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
 
 // Per-user account-security state backing the FE security page: the 2FA flag
 // plus the active login sessions a user can review and revoke. Mock-first
@@ -9,13 +9,21 @@ export const userSecurity = pgTable('user_security', {
   // One row per user; the user id is the natural primary key.
   userId: uuid('user_id').primaryKey(),
   twoFactorEnabled: boolean('two_factor_enabled').notNull().default(false),
-  // Base32 TOTP secret (RFC 4648) — null until enrollment starts. A row can
-  // hold a secret with `twoFactorEnabled = false` while enrollment is
-  // in-progress and unconfirmed; only `confirmTwoFactor` (after a valid
-  // code) flips the flag. This is the single source of truth for both the
-  // secret and the enabled state — do not duplicate either on `users`.
-  // Not encrypted at rest yet — tracked as a follow-up (see PR description).
-  twoFactorSecret: varchar('two_factor_secret', { length: 64 }),
+  // AES-256-GCM-encrypted TOTP secret (F2) — null until enrollment starts.
+  // Stored as `iv:authTag:ciphertext` (base64, colon-joined); the
+  // underlying plaintext is a base32 (RFC 4648) secret. `TotpSecretCipherService`
+  // is the only encrypt/decrypt boundary — this column never holds
+  // plaintext going forward. `text` (not a fixed `varchar`) because the
+  // encrypted blob is longer than the old 64-char plaintext secret and has
+  // no natural fixed max (migration 0046 widened this column from
+  // `varchar(64)`, which used to hold the plaintext secret directly).
+  //
+  // A row can hold a secret with `twoFactorEnabled = false` while
+  // enrollment is in-progress and unconfirmed; only `confirmTwoFactor`
+  // (after a valid code) flips the flag. This is the single source of
+  // truth for both the secret and the enabled state — do not duplicate
+  // either on `users`.
+  twoFactorSecret: text('two_factor_secret'),
   createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
 });
