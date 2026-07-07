@@ -272,6 +272,13 @@ export class SecurityService {
    * treats a `null` return the same way it already treats a genuinely
    * missing secret: fail the challenge closed, never crash, never let it
    * through as valid.
+   *
+   * (M2, out of scope here) 2FA is unreleased and there are no
+   * production-enrolled secrets yet, so a legacy-plaintext value failing
+   * closed is the correct — and sufficient — behavior for v1. If that
+   * stops being true (real enrollments exist before this ships), a
+   * re-encryption backfill for pre-F2 rows should be a deploy-time
+   * checklist item, not code added here.
    */
   private decryptSecretOrWarn(userId: string, stored: string): string | null {
     const plain = this.cipher.decrypt(stored);
@@ -291,7 +298,9 @@ export class SecurityService {
    * step — which may be the step before/after "now" thanks to
    * `window: 1` — can be compared against the last accepted step for
    * this user, rather than only knowing "some step in the window
-   * matched".
+   * matched". The compare-and-record itself is a single atomic call
+   * (`TotpReplayGuardService.acceptStep`) — see that service for why a
+   * separate read-then-write here would be a race.
    */
   private async checkCode(userId: string, code: string, secret: string): Promise<CodeCheckResult> {
     const delta = authenticator.checkDelta(code, secret);
@@ -301,12 +310,8 @@ export class SecurityService {
     // step this computes for delta === 0 always matches what otplib just
     // matched against.
     const matchedStep = Math.floor(Date.now() / step / 1000) + delta;
-    const lastAccepted = await this.replayGuard.getLastAcceptedStep(userId);
-    if (lastAccepted !== null && matchedStep <= lastAccepted) {
-      return 'replay';
-    }
-    await this.replayGuard.recordAcceptedStep(userId, matchedStep);
-    return 'ok';
+    const accepted = await this.replayGuard.acceptStep(userId, matchedStep);
+    return accepted ? 'ok' : 'replay';
   }
 }
 

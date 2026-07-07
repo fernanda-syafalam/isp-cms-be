@@ -1,47 +1,68 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type { RedisService } from '../../infrastructure/redis/redis.service';
+import { createFakeRedisClient } from '../../test-utils/fake-redis-client';
 import { TotpReplayGuardService } from './totp-replay-guard.service';
 
 describe('TotpReplayGuardService', () => {
   const userId = '00000000-0000-0000-0000-0000000000a1';
-  let client: {
-    get: ReturnType<typeof vi.fn>;
-    set: ReturnType<typeof vi.fn>;
-    expire: ReturnType<typeof vi.fn>;
-  };
+  let client: ReturnType<typeof createFakeRedisClient>;
   let service: TotpReplayGuardService;
 
   beforeEach(() => {
-    client = {
-      get: vi.fn(),
-      set: vi.fn(),
-      expire: vi.fn(),
-    };
+    client = createFakeRedisClient();
     service = new TotpReplayGuardService({ client } as unknown as RedisService);
   });
 
-  it('has no last-accepted step when nothing was ever recorded', async () => {
-    client.get.mockResolvedValue(null);
-    await expect(service.getLastAcceptedStep(userId)).resolves.toBeNull();
+  it('accepts the first step ever seen for a user', async () => {
+    await expect(service.acceptStep(userId, 100)).resolves.toBe(true);
   });
 
-  it('returns the recorded step as a number', async () => {
-    client.get.mockResolvedValue('12345');
-    await expect(service.getLastAcceptedStep(userId)).resolves.toBe(12345);
+  it('rejects an exact replay of an already-accepted step', async () => {
+    await expect(service.acceptStep(userId, 100)).resolves.toBe(true);
+    await expect(service.acceptStep(userId, 100)).resolves.toBe(false);
   });
 
-  it('scopes the key to the user', async () => {
-    client.get.mockResolvedValue(null);
-    await service.getLastAcceptedStep(userId);
-    expect(client.get).toHaveBeenCalledWith(expect.stringContaining(userId));
+  it('rejects a step older than the last accepted one', async () => {
+    await expect(service.acceptStep(userId, 100)).resolves.toBe(true);
+    await expect(service.acceptStep(userId, 99)).resolves.toBe(false);
   });
 
-  it('records a step and sets the self-expiry TTL', async () => {
-    await service.recordAcceptedStep(userId, 999);
-    expect(client.set).toHaveBeenCalledWith(expect.stringContaining(userId), '999');
-    expect(client.expire).toHaveBeenCalledWith(
+  it('accepts a strictly later step', async () => {
+    await expect(service.acceptStep(userId, 100)).resolves.toBe(true);
+    await expect(service.acceptStep(userId, 101)).resolves.toBe(true);
+  });
+
+  it('tracks acceptance independently per user', async () => {
+    const userA = userId;
+    const userB = '00000000-0000-0000-0000-0000000000b9';
+
+    await expect(service.acceptStep(userA, 100)).resolves.toBe(true);
+    // userB never saw step 100 before — not a replay for them.
+    await expect(service.acceptStep(userB, 100)).resolves.toBe(true);
+    // ...but a repeat for userA still is.
+    await expect(service.acceptStep(userA, 100)).resolves.toBe(false);
+  });
+
+  // M1: the compare-and-set is a single atomic Redis EVAL (see
+  // `ACCEPT_STEP_SCRIPT`), not a separate GET-then-SET — so even two
+  // "concurrent" callers racing for the same step resolve to exactly one
+  // acceptance, never both.
+  it('accepts at most one of two concurrent attempts at the same step', async () => {
+    const [a, b] = await Promise.all([
+      service.acceptStep(userId, 42),
+      service.acceptStep(userId, 42),
+    ]);
+    expect([a, b].filter(Boolean)).toHaveLength(1);
+  });
+
+  it('issues the accept-step script as a single-key EVAL scoped to the user', async () => {
+    await service.acceptStep(userId, 7);
+    expect(client.eval).toHaveBeenCalledWith(
+      expect.any(String),
+      1,
       expect.stringContaining(userId),
-      TotpReplayGuardService.TTL_SECONDS,
+      '7',
+      String(TotpReplayGuardService.TTL_SECONDS),
     );
   });
 });

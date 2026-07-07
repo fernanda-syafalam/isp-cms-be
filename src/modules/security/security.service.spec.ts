@@ -13,7 +13,15 @@ import { TotpLockoutService } from './totp-lockout.service';
 import { TotpReplayGuardService } from './totp-replay-guard.service';
 import { TotpSecretCipherService } from './totp-secret-cipher.service';
 
-/** Minimal in-memory stand-in for `RedisService.client`'s get/set/incr/expire/del. */
+/**
+ * Minimal in-memory stand-in for `RedisService.client`'s
+ * get/set/incr/expire/del, PLUS the single-key `eval` script
+ * `TotpReplayGuardService.acceptStep` issues (numkeys === 1 — see that
+ * service's `ACCEPT_STEP_SCRIPT` doc comment). Mirrors
+ * `src/test-utils/fake-redis-client.ts`'s dispatch-by-numkeys approach,
+ * kept local here since this file only ever needs the 1-key script, not
+ * `RefreshTokenService`'s 2/3-key ones.
+ */
 function fakeRedisClient() {
   const store = new Map<string, string>();
   return {
@@ -29,6 +37,20 @@ function fakeRedisClient() {
     },
     expire: async () => 1,
     del: async (k: string) => (store.delete(k) ? 1 : 0),
+    eval: async (_script: string, numkeys: number, ...rest: Array<string | number>) => {
+      const keys = rest.slice(0, numkeys).map(String);
+      const args = rest.slice(numkeys).map(String);
+      // Only one script ever reaches this fake: TotpReplayGuardService's
+      // accept-step compare-and-set. KEYS = [key], ARGV = [step, ttl].
+      const [key] = keys as [string];
+      const [stepStr] = args as [string, string];
+      const last = store.get(key);
+      if (last !== undefined && Number(last) >= Number(stepStr)) {
+        return 0;
+      }
+      store.set(key, stepStr);
+      return 1;
+    },
   };
 }
 
@@ -101,8 +123,7 @@ describe('SecurityService', () => {
     // doesn't care about F5. The dedicated 'F5 replay protection'
     // describe block below wires a real TotpReplayGuardService instead.
     replayGuard = {
-      getLastAcceptedStep: vi.fn().mockResolvedValue(null),
-      recordAcceptedStep: vi.fn(),
+      acceptStep: vi.fn().mockResolvedValue(true),
     };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
@@ -572,6 +593,32 @@ describe('SecurityService', () => {
       // F5 judgment call (see PR description): a replay is the user's own
       // code re-submitted, not a guess — it does not burn a lockout attempt.
       expect(lockout.recordFailure).not.toHaveBeenCalled();
+    });
+
+    // M1 regression: the accept-step compare-and-set must be atomic — two
+    // concurrent requests bearing the SAME still-valid code must not both
+    // be accepted. `TotpReplayGuardService.acceptStep` does the read +
+    // compare + write as one Redis `EVAL`, so even "concurrent" calls from
+    // this test's point of view resolve to exactly one acceptance.
+    it('accepts at most one of two concurrent verifications for the same step', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      const secret = authenticator.generateSecret();
+      repo.findState.mockResolvedValue({
+        userId,
+        twoFactorEnabled: true,
+        twoFactorSecret: cipher.encrypt(secret),
+      });
+      const code = authenticator.generate(secret);
+
+      const [first, second] = await Promise.all([
+        realService.verifyLoginChallenge(userId, code),
+        realService.verifyLoginChallenge(userId, code),
+      ]);
+
+      const results = [first, second];
+      expect(results.filter((r) => r === 'ok')).toHaveLength(1);
+      expect(results.filter((r) => r === 'invalid')).toHaveLength(1);
     });
 
     it('accepts a fresh code at a later step after a previous one was accepted', async () => {
