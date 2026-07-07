@@ -86,6 +86,10 @@ export class SecurityService {
    * F1: gated by the same per-user brute-force lockout as the login
    * challenge — a stolen/guessed-at unconfirmed secret cannot be brute
    * forced here either.
+   *
+   * F3 (deferred, folded into upcoming session-revocation work): does
+   * NOT revoke this user's other active sessions on success — a session
+   * hijacked before 2FA was enabled stays valid until its own TTL.
    */
   async confirmEnroll(userId: string, code: string): Promise<SecurityStateResponse> {
     await this.ensureSeeded(userId);
