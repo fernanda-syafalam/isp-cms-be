@@ -6,6 +6,7 @@ import {
   pgSequence,
   pgTable,
   real,
+  text,
   timestamp,
   uuid,
   varchar,
@@ -61,6 +62,10 @@ export const workOrders = pgTable(
     signatureUrl: varchar('signature_url', { length: 512 }),
     gpsLat: real('gps_lat'),
     gpsLng: real('gps_lng'),
+    // Free-text field notes the technician enters on completion (e.g. what
+    // was actually done, obstacles encountered). Nullable — same
+    // degrade-gracefully contract as the rest of the evidence columns.
+    completionNotes: text('completion_notes'),
     completedAt: timestamp('completed_at', { withTimezone: true, precision: 3 }),
     completedBy: varchar('completed_by', { length: 120 }),
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),

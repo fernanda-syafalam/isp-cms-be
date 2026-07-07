@@ -66,6 +66,7 @@ describe('WorkOrdersRepository (integration)', () => {
         ticket_id uuid,
         scanned_onu_serial varchar(64), measured_rx_power real, photos jsonb,
         signature_url varchar(512), gps_lat real, gps_lng real,
+        completion_notes text,
         completed_at timestamptz(3), completed_by varchar(120),
         created_at timestamptz(3) NOT NULL DEFAULT now(),
         updated_at timestamptz(3) NOT NULL DEFAULT now()
@@ -254,8 +255,32 @@ describe('WorkOrdersRepository (integration)', () => {
     expect(done.scannedOnuSerial).toBeNull();
     expect(done.measuredRxPower).toBeNull();
     expect(done.photos).toBeNull();
+    expect(done.completionNotes).toBeNull();
     expect(done.completedAt).toBeNull();
     expect(done.completedBy).toBeNull();
+  });
+
+  // completion_notes (0045) — free-text "Catatan" field entered by the
+  // technician on completion.
+  it('markDone persists the completion note and reads it back on findById', async () => {
+    const created = await repo.create(newWo());
+
+    const done = await repo.markDone(created.id, {
+      completionNotes: 'ONT dipasang di lantai 2, sinyal stabil.',
+      completedAt: new Date('2026-07-06T08:00:00.000Z'),
+      completedBy: 'Teknisi Budi',
+    });
+
+    expect(done.completionNotes).toBe('ONT dipasang di lantai 2, sinyal stabil.');
+
+    const found = await repo.findById(created.id);
+    expect(found?.completionNotes).toBe('ONT dipasang di lantai 2, sinyal stabil.');
+  });
+
+  it('markDone with no note leaves completionNotes null (nullable)', async () => {
+    const created = await repo.create(newWo());
+    const done = await repo.markDone(created.id, { completedBy: 'Teknisi Budi' });
+    expect(done.completionNotes).toBeNull();
   });
 
   // ---- search (q) ----------------------------------------------------------
