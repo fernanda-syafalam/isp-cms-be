@@ -3,6 +3,7 @@ import type {
   AppSettings,
   NewAppSettings,
 } from '../../infrastructure/database/schema/settings.schema';
+import type { PublicSettingsResponse } from './dto/public-settings-response.dto';
 import type { SettingsResponse } from './dto/settings-response.dto';
 import type { UpdateSettingsInput } from './dto/update-settings.dto';
 import { SettingsRepository } from './settings.repository';
@@ -39,6 +40,17 @@ export class SettingsService {
 
   async get(): Promise<SettingsResponse> {
     return toSettingsResponse(await this.repo.getOrCreate(DEFAULTS));
+  }
+
+  /**
+   * SEC-3: the invoice-needed subset (company identity + tax fields) —
+   * safe for any authenticated role, including `customer`. Backs
+   * `GET /v1/settings/public`; never include the `billing` section here,
+   * that stays behind the admin-only `get()` / `GET /v1/settings`.
+   */
+  async getPublic(): Promise<PublicSettingsResponse> {
+    const { company, tax } = await this.get();
+    return { company, tax };
   }
 
   /**

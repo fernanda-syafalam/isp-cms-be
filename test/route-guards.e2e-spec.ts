@@ -24,9 +24,11 @@ import { ROLES_KEY } from '../src/common/decorators/roles.decorator';
  *
  * `@AnyAuthenticatedRole()` is a pure documentation/audit marker (see
  * its own doc comment) for handlers where RolesGuard's default-allow
- * is a deliberate choice, not an oversight — e.g. `GET /v1/settings`
- * (any signed-in user needs company/tax data for invoices) or
- * `POST /v1/auth/change-password` (self-service, any role). It does
+ * is a deliberate choice, not an oversight — e.g. `GET /v1/settings/public`
+ * (any signed-in user needs the company/tax subset for invoices — the
+ * full `GET /v1/settings` blob, including billing policy, is
+ * `@Roles('admin')`) or `POST /v1/auth/change-password` (self-service,
+ * any role). It does
  * NOT relax any guard — it only lets this test distinguish "reviewed,
  * intentionally unrestricted" from "forgot to add @Roles". If a future
  * handler is genuinely neither, this test fails and lists it — do not
