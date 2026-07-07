@@ -48,6 +48,21 @@ describe('SettingsService', () => {
     });
   });
 
+  it('getPublic returns only the company + tax sections (no billing)', async () => {
+    repo.getOrCreate.mockResolvedValue(row);
+    const result = await service.getPublic();
+    expect(result).toEqual({
+      company: {
+        name: 'Jepara Net',
+        address: 'Jl. Pemuda No. 12',
+        phone: '0291-591234',
+        email: 'billing@jeparanet.id',
+      },
+      tax: { pkp: true, npwp: '01.234.567.8-901.000', ppnRate: 0.11 },
+    });
+    expect(result).not.toHaveProperty('billing');
+  });
+
   it('update flattens only the provided sections into the patch', async () => {
     repo.getOrCreate.mockResolvedValue(row);
     repo.update.mockResolvedValue({ ...row, billingLateFeeIdr: 50_000, billingDueDays: 15 });
