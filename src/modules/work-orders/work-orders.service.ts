@@ -11,6 +11,7 @@ import type { WorkOrder } from '../../infrastructure/database/schema/work-orders
 import { type CustomerRow, CustomersRepository } from '../customers/customers.repository';
 import { InventoryService } from '../inventory/inventory.service';
 import { InvoicesService } from '../invoices/invoices.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { ProfilesRepository } from '../router-resources/profiles.repository';
 import { SecretsRepository } from '../router-resources/secrets.repository';
 import { RoutersRepository } from '../routers/routers.repository';
@@ -45,6 +46,9 @@ export class WorkOrdersService {
     private readonly secrets: SecretsRepository,
     @Inject(forwardRef(() => TicketsService))
     private readonly tickets: TicketsService,
+    // Customer-facing lifecycle notices (wo_scheduled/wo_done) — best-effort,
+    // mirrors the resilience of the invoice/ticket emits (ADR-0012).
+    private readonly notifications: NotificationsService,
   ) {}
 
   async list(filter: WorkOrderListFilter): Promise<WorkOrderListResponse> {
@@ -107,6 +111,8 @@ export class WorkOrdersService {
       await this.tickets.resolveFromWorkOrder(wo.ticketId, done.code, author);
     }
 
+    await this.notifyWoDone(done);
+
     return toWorkOrderResponse(done);
   }
 
@@ -151,6 +157,7 @@ export class WorkOrdersService {
     const wo = await this.requireOpen(id);
     const rescheduled = await this.repo.patch(wo.id, { scheduledAt });
     this.logger.log({ workOrderId: id }, 'work order rescheduled');
+    await this.notifyWoScheduled(rescheduled);
     return toWorkOrderResponse(rescheduled);
   }
 
@@ -247,6 +254,7 @@ export class WorkOrdersService {
       { workOrderId: wo.id, ticketId: input.ticketId },
       'work order created from ticket',
     );
+    await this.notifyWoScheduled(wo);
     return toWorkOrderResponse(wo);
   }
 
@@ -271,6 +279,7 @@ export class WorkOrdersService {
       { workOrderId: wo.id, customerId: input.customerId },
       'install scheduled from onboarding',
     );
+    await this.notifyWoScheduled(wo);
     return toWorkOrderResponse(wo);
   }
 
@@ -295,7 +304,98 @@ export class WorkOrdersService {
       { workOrderId: wo.id, customerId: input.customerId },
       'install scheduled from lead',
     );
+    await this.notifyWoScheduled(wo);
     return toWorkOrderResponse(wo);
+  }
+
+  /**
+   * Notify the customer their install/repair was just scheduled (or
+   * rescheduled) — wo_scheduled (ADR-0012 follow-up). jobId is per work
+   * order + the exact scheduledAt instant, so a reschedule (a new
+   * scheduledAt) fires a fresh notice while re-running the same schedule
+   * never double-sends. No-op for a WO with no linked customer (a repair
+   * dispatched before the subscriber exists) or one with no phone.
+   * Best-effort: a queue outage must never fail the WO write that already
+   * committed.
+   */
+  private async notifyWoScheduled(wo: WorkOrder): Promise<void> {
+    await this.notifyBestEffort(
+      async () => {
+        if (!wo.customerId) return;
+        const customer = await this.customers.findById(wo.customerId);
+        if (!customer?.phone) return;
+        await this.notifications.enqueue(
+          {
+            event: 'wo_scheduled',
+            to: customer.phone,
+            vars: {
+              nama: customer.fullName,
+              tipe: woTypeLabel(wo.type),
+              kode: wo.code,
+              jadwal: wo.scheduledAt.toISOString(),
+            },
+          },
+          `wo_scheduled:${wo.id}:${wo.scheduledAt.toISOString()}`,
+        );
+      },
+      { event: 'wo_scheduled', workOrderId: wo.id },
+    );
+  }
+
+  /**
+   * Notify the customer their install/repair is done — wo_done (ADR-0012
+   * follow-up). jobId is per work order id: a WO can only reach `done` once
+   * (guarded by the idempotent early-return at the top of `complete()`), so
+   * no extra component is needed. Best-effort: see `notifyWoScheduled`.
+   */
+  private async notifyWoDone(wo: WorkOrder): Promise<void> {
+    await this.notifyBestEffort(
+      async () => {
+        if (!wo.customerId) return;
+        const customer = await this.customers.findById(wo.customerId);
+        if (!customer?.phone) return;
+        await this.notifications.enqueue(
+          {
+            event: 'wo_done',
+            to: customer.phone,
+            vars: {
+              nama: customer.fullName,
+              tipe: woTypeLabel(wo.type),
+              kode: wo.code,
+              selesai: (wo.completedAt ?? new Date()).toISOString(),
+            },
+          },
+          `wo_done:${wo.id}`,
+        );
+      },
+      { event: 'wo_done', workOrderId: wo.id },
+    );
+  }
+
+  // A notification enqueue failure (e.g. Redis unavailable) must never break
+  // the WO write that already committed — log and swallow rather than
+  // rethrow. Mirrors `InvoicesService.notifyBestEffort` (ADR-0012).
+  private async notifyBestEffort(
+    fn: () => Promise<void>,
+    context: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      await fn();
+    } catch (err) {
+      this.logger.warn({ ...context, err }, 'notification enqueue failed');
+    }
+  }
+}
+
+// Human-readable (Indonesian) WO type label for notification vars.
+function woTypeLabel(type: WorkOrder['type']): string {
+  switch (type) {
+    case 'install':
+      return 'instalasi';
+    case 'repair':
+      return 'perbaikan';
+    case 'dismantle':
+      return 'pencabutan';
   }
 }
 

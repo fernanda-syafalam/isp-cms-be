@@ -375,9 +375,9 @@ export class InvoicesService {
 
   // A notification enqueue failure (e.g. Redis unavailable) must never
   // break the billing/payment write that already committed — log and
-  // swallow rather than rethrow. Mirrors the resilience gap called out in
-  // ADR-0012 for the new events (dunning's own dispatchDunning is not
-  // wrapped this way today).
+  // swallow rather than rethrow. Mirrors the same best-effort resilience
+  // BillingAutomationService applies to dispatchDunning/notifyIsolir
+  // (ADR-0012).
   private async notifyBestEffort(
     fn: () => Promise<void>,
     context: Record<string, unknown>,

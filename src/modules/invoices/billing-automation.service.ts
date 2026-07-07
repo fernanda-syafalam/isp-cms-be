@@ -92,6 +92,10 @@ export class BillingAutomationService {
   // Enqueue one WhatsApp dunning message per customer in the cohort. The job id
   // is per customer + event + month, so re-running the cycle never double-sends
   // (BullMQ rejects the duplicate jobId). Customers without a phone are skipped.
+  // Best-effort (C1 follow-up to ADR-0012): a queue outage for one customer's
+  // notice must never abort the rest of the cohort or the billing run that
+  // already committed the overdue/due-soon marking — log and swallow rather
+  // than rethrow, same resilience as notifyIsolir below.
   private async dispatchDunning(
     event: 'due_soon' | 'overdue',
     customerIds: string[],
@@ -101,15 +105,19 @@ export class BillingAutomationService {
       const customer = await this.customers.findById(id);
       if (!customer?.phone) continue;
       const outstanding = await this.repo.sumUnpaidByCustomer(id);
-      await this.notifications.enqueue(
-        {
-          event,
-          to: customer.phone,
-          // Real per-recipient template variables (P2.2) — no more SAMPLE_VARS.
-          vars: { nama: customer.fullName, jumlah: formatIdr(outstanding) },
-        },
-        `dun:${event}:${id}:${period}`,
-      );
+      try {
+        await this.notifications.enqueue(
+          {
+            event,
+            to: customer.phone,
+            // Real per-recipient template variables (P2.2) — no more SAMPLE_VARS.
+            vars: { nama: customer.fullName, jumlah: formatIdr(outstanding) },
+          },
+          `dun:${event}:${id}:${period}`,
+        );
+      } catch (err) {
+        this.logger.warn({ customerId: id, event, err }, 'dunning notification enqueue failed');
+      }
     }
   }
 
@@ -146,9 +154,8 @@ export class BillingAutomationService {
 
   // Best-effort (ADR-0012): a queue outage must never abort the isolir
   // enforcement that already committed (status flip + router secret
-  // disable above) — log and swallow rather than rethrow. Unlike
-  // dispatchDunning (not wrapped today), the new isolir notice is
-  // deliberately made resilient.
+  // disable above) — log and swallow rather than rethrow. Same resilience
+  // as dispatchDunning above (C1 follow-up made that best-effort too).
   private async notifyIsolir(
     customerId: string,
     fullName: string,

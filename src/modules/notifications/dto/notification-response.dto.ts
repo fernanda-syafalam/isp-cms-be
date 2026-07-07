@@ -8,6 +8,8 @@ const EVENTS = [
   'isolir',
   'paid',
   'ticket_update',
+  'wo_scheduled',
+  'wo_done',
 ] as const;
 
 /** Output shape for a notification template. */

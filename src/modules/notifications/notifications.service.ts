@@ -47,6 +47,16 @@ const DEFAULT_TEMPLATES: NewNotificationTemplate[] = [
     name: 'Update tiket',
     body: 'Halo {nama}, ada pembaruan pada tiket dukungan Anda. Tim kami akan menindaklanjuti.',
   },
+  {
+    event: 'wo_scheduled',
+    name: 'Jadwal kunjungan teknisi',
+    body: 'Halo {nama}, {tipe} Anda (kode {kode}) dijadwalkan pada {jadwal}. Teknisi kami akan datang sesuai jadwal.',
+  },
+  {
+    event: 'wo_done',
+    name: 'Pekerjaan selesai',
+    body: 'Halo {nama}, {tipe} Anda (kode {kode}) telah selesai dikerjakan pada {selesai}. Terima kasih telah menggunakan layanan kami.',
+  },
 ];
 
 @Injectable()

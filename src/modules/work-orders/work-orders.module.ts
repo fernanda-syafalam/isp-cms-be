@@ -2,6 +2,7 @@ import { Module, forwardRef } from '@nestjs/common';
 import { CustomersModule } from '../customers/customers.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { InvoicesModule } from '../invoices/invoices.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { RouterResourcesModule } from '../router-resources/router-resources.module';
 import { RoutersModule } from '../routers/routers.module';
 import { TicketsModule } from '../tickets/tickets.module';
@@ -29,6 +30,8 @@ import { WorkOrdersService } from './work-orders.service';
     RoutersModule,
     RouterResourcesModule,
     forwardRef(() => TicketsModule),
+    // wo_scheduled/wo_done customer notices (ADR-0012 follow-up).
+    NotificationsModule,
   ],
   controllers: [WorkOrdersController],
   providers: [WorkOrdersService, WorkOrdersRepository],
