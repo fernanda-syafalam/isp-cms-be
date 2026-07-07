@@ -3,7 +3,7 @@ import type {
   CoverageArea,
   NewCoverageArea,
 } from '../../infrastructure/database/schema/coverage.schema';
-import type { CoverageResponse } from './dto/coverage-response.dto';
+import type { CoverageListResponse, CoverageResponse } from './dto/coverage-response.dto';
 import { type CoverageListFilter, CoverageRepository } from './coverage.repository';
 
 const AREA_NAMES = [
@@ -32,10 +32,10 @@ const DEFAULTS: NewCoverageArea[] = AREA_NAMES.map((name, i) => ({
 export class CoverageService {
   constructor(private readonly repo: CoverageRepository) {}
 
-  async list(filter: CoverageListFilter): Promise<{ items: CoverageResponse[]; total: number }> {
+  async list(filter: CoverageListFilter): Promise<CoverageListResponse> {
     await this.repo.ensureSeeded(DEFAULTS);
-    const { items, total } = await this.repo.list(filter);
-    return { items: items.map(toCoverageResponse), total };
+    const { items, total, summary } = await this.repo.list(filter);
+    return { items: items.map(toCoverageResponse), total, summary };
   }
 
   /**

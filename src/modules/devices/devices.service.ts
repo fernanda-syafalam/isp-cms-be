@@ -1,7 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { Device, NewDevice } from '../../infrastructure/database/schema/devices.schema';
 import { type DeviceListFilter, type DevicePatch, DevicesRepository } from './devices.repository';
-import type { DeviceResponse } from './dto/device-response.dto';
+import type { DeviceListResponse, DeviceResponse } from './dto/device-response.dto';
 import type { UpdateDeviceInput } from './dto/update-device.dto';
 
 // Representative managed fleet, seeded on first read (name is unique so the
@@ -95,10 +95,10 @@ export class DevicesService {
 
   constructor(private readonly repo: DevicesRepository) {}
 
-  async list(filter: DeviceListFilter): Promise<{ items: DeviceResponse[]; total: number }> {
+  async list(filter: DeviceListFilter): Promise<DeviceListResponse> {
     await this.repo.ensureSeeded(DEFAULTS);
-    const { items, total } = await this.repo.list(filter);
-    return { items: items.map(toDeviceResponse), total };
+    const { items, total, summary } = await this.repo.list(filter);
+    return { items: items.map(toDeviceResponse), total, summary };
   }
 
   async findById(id: string): Promise<DeviceResponse> {

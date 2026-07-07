@@ -1,7 +1,9 @@
 import { Controller, Get, Query } from '@nestjs/common';
+import { ZodSerializerDto } from 'nestjs-zod';
 import { z } from 'zod';
-import { CoverageService } from './coverage.service';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { CoverageService } from './coverage.service';
+import { CoverageListResponseDto } from './dto/coverage-response.dto';
 
 const ListQuerySchema = z.object({
   status: z.enum(['operational', 'maintenance', 'down']).optional(),
@@ -19,6 +21,7 @@ export class CoverageController {
   constructor(private readonly coverage: CoverageService) {}
 
   @Get()
+  @ZodSerializerDto(CoverageListResponseDto)
   list(@Query() query: unknown) {
     return this.coverage.list(ListQuerySchema.parse(query));
   }

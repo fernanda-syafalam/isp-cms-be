@@ -99,10 +99,18 @@ describe('CustomersService', () => {
       );
     });
 
-    it('returns empty for a mitra with no linked reseller', async () => {
+    it('returns empty (with a zero-filled summary) for a mitra with no linked reseller', async () => {
       const result = await service.list({ limit: 50, offset: 0 }, { ...mitra, resellerId: null });
 
-      expect(result).toEqual({ items: [], total: 0 });
+      expect(result).toEqual({
+        items: [],
+        total: 0,
+        summary: {
+          total: 0,
+          outstanding: 0,
+          byStatus: { prospek: 0, instalasi: 0, aktif: 0, isolir: 0, berhenti: 0 },
+        },
+      });
       expect(repo.list).not.toHaveBeenCalled();
     });
 
@@ -405,11 +413,23 @@ describe('CustomersService', () => {
   });
 
   describe('list', () => {
+    const summary = {
+      total: 1,
+      outstanding: 0,
+      byStatus: { prospek: 0, instalasi: 0, aktif: 1, isolir: 0, berhenti: 0 },
+    };
+
     it('projects every row and passes the total through', async () => {
-      repo.list.mockResolvedValue({ items: [sampleRow], total: 1 });
+      repo.list.mockResolvedValue({ items: [sampleRow], total: 1, summary });
       const result = await service.list({ limit: 50, offset: 0 });
       expect(result.total).toBe(1);
       expect(result.items[0]?.planName).toBe('Home 20');
+    });
+
+    it('passes the summary rollup through unchanged (FE contract parity)', async () => {
+      repo.list.mockResolvedValue({ items: [sampleRow], total: 1, summary });
+      const result = await service.list({ limit: 50, offset: 0 });
+      expect(result.summary).toEqual(summary);
     });
 
     it('forwards q search to the repository', async () => {

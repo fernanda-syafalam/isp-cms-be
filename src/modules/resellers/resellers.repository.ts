@@ -11,6 +11,7 @@ import {
   resellerPayouts,
   resellers,
 } from '../../infrastructure/database/schema/resellers.schema';
+import type { ResellerSummary } from './dto/reseller-response.dto';
 
 // Columns the frontend may sort on (camelCase key → Drizzle column).
 // `customerCount` is derived in the service layer (post-query) and is NOT a
@@ -97,7 +98,9 @@ export class ResellersRepository {
     return this.drizzle.db;
   }
 
-  async list(filter: ResellerListFilter): Promise<{ items: Reseller[]; total: number }> {
+  async list(
+    filter: ResellerListFilter,
+  ): Promise<{ items: Reseller[]; total: number; summary: ResellerSummary }> {
     const where = and(
       filter.status ? eq(resellers.status, filter.status) : undefined,
       filter.q
@@ -120,7 +123,30 @@ export class ResellersRepository {
       .limit(filter.limit)
       .offset(filter.offset);
     const [totals] = await this.db.select({ value: count() }).from(resellers).where(where);
-    return { items, total: totals?.value ?? 0 };
+
+    // Full-set status-count + balance rollup — computed over ALL resellers,
+    // ignoring status/q/paging (mirrors the work-orders/invoices summary
+    // aggregate). A single grouped-filter aggregate avoids 2 separate COUNT
+    // queries; a missing status is zero-filled below.
+    const [summaryRow] = await this.db
+      .select({
+        total: count(),
+        totalBalance: sql<string>`coalesce(sum(${resellers.balance}), 0)`,
+        active: sql<number>`count(*) filter (where ${resellers.status} = 'active')`,
+        inactive: sql<number>`count(*) filter (where ${resellers.status} = 'inactive')`,
+      })
+      .from(resellers);
+
+    const summary: ResellerSummary = {
+      total: summaryRow?.total ?? 0,
+      totalBalance: Number(summaryRow?.totalBalance ?? 0),
+      byStatus: {
+        active: Number(summaryRow?.active ?? 0),
+        inactive: Number(summaryRow?.inactive ?? 0),
+      },
+    };
+
+    return { items, total: totals?.value ?? 0, summary };
   }
 
   async findById(id: string): Promise<Reseller | null> {

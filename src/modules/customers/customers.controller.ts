@@ -17,7 +17,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CustomersService } from './customers.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { ChangePlanDto, RelocateDto, SetOnuWifiDto } from './dto/customer-actions.dto';
-import { CustomerResponseDto } from './dto/customer-response.dto';
+import { CustomerListResponseDto, CustomerResponseDto } from './dto/customer-response.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { UpdateKycDto } from './dto/update-kyc.dto';
 
@@ -48,6 +48,7 @@ export class CustomersController {
   // their own reseller's acquisitions (scoped server-side, P1.5).
   @Roles('admin', 'staff', 'mitra')
   @Get()
+  @ZodSerializerDto(CustomerListResponseDto)
   list(@Query() query: unknown, @CurrentUser() user: AuthUser) {
     const filter = ListQuerySchema.parse(query);
     return this.customers.list(filter, user);

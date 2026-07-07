@@ -2,6 +2,7 @@ import { NotFoundException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Plan } from '../../infrastructure/database/schema/plans.schema';
+import { CustomersRepository } from '../customers/customers.repository';
 import { PlansRepository } from './plans.repository';
 import { PlansService } from './plans.service';
 
@@ -44,6 +45,15 @@ describe('PlansService', () => {
     update: ReturnType<typeof vi.fn>;
     archive: ReturnType<typeof vi.fn>;
   };
+  let customers: { countByStatus: ReturnType<typeof vi.fn> };
+
+  const statusCountsDefault = {
+    prospek: 0,
+    instalasi: 0,
+    aktif: 0,
+    isolir: 0,
+    berhenti: 0,
+  };
 
   beforeEach(async () => {
     repo = {
@@ -53,19 +63,41 @@ describe('PlansService', () => {
       update: vi.fn(),
       archive: vi.fn(),
     };
+    customers = { countByStatus: vi.fn().mockResolvedValue(statusCountsDefault) };
     const moduleRef: TestingModule = await Test.createTestingModule({
-      providers: [PlansService, { provide: PlansRepository, useValue: repo }],
+      providers: [
+        PlansService,
+        { provide: PlansRepository, useValue: repo },
+        { provide: CustomersRepository, useValue: customers },
+      ],
     }).compile();
     service = moduleRef.get(PlansService);
   });
 
   // ── list / pagination / search / sort ─────────────────────────────────────
 
+  const summary = { total: 2, byStatus: { active: 2, archived: 0 } };
+
   it('list returns items and filtered total from repository', async () => {
-    repo.list.mockResolvedValue({ items: [planHome20, planHome50], total: 2 });
+    repo.list.mockResolvedValue({ items: [planHome20, planHome50], total: 2, summary });
     const result = await service.list({ limit: 50, offset: 0 });
     expect(result.items).toHaveLength(2);
     expect(result.total).toBe(2);
+  });
+
+  it('list enriches the summary with totalSubscribers from the active customer count', async () => {
+    repo.list.mockResolvedValue({ items: [planHome20, planHome50], total: 2, summary });
+    customers.countByStatus.mockResolvedValue({ ...statusCountsDefault, aktif: 42 });
+    const result = await service.list({ limit: 50, offset: 0 });
+    expect(result.summary).toEqual({ ...summary, totalSubscribers: 42 });
+  });
+
+  it('list summary is independent of the q filter (full-set rollup)', async () => {
+    repo.list.mockResolvedValue({ items: [planHome20], total: 1, summary });
+    customers.countByStatus.mockResolvedValue({ ...statusCountsDefault, aktif: 10 });
+    const result = await service.list({ q: 'Home', limit: 50, offset: 0 });
+    expect(result.total).toBe(1); // filtered total, unaffected by summary
+    expect(result.summary).toEqual({ ...summary, totalSubscribers: 10 });
   });
 
   it('list forwards q to the repository for name substring search', async () => {

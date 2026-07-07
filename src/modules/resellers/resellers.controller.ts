@@ -18,7 +18,7 @@ import { AddLedgerEntryDto } from './dto/add-ledger-entry.dto';
 import { CreatePayoutDto } from './dto/create-payout.dto';
 import { CreateResellerDto } from './dto/create-reseller.dto';
 import { PayoutResponseDto } from './dto/payout-response.dto';
-import { ResellerResponseDto } from './dto/reseller-response.dto';
+import { ResellerListResponseDto, ResellerResponseDto } from './dto/reseller-response.dto';
 import { UpdateResellerDto } from './dto/update-reseller.dto';
 import { ResellersService } from './resellers.service';
 
@@ -53,6 +53,7 @@ export class ResellersController {
   constructor(private readonly resellers: ResellersService) {}
 
   @Get()
+  @ZodSerializerDto(ResellerListResponseDto)
   list(@Query() query: unknown) {
     return this.resellers.list(ListQuerySchema.parse(query));
   }

@@ -69,16 +69,29 @@ describe('ResellersService', () => {
     service = moduleRef.get(ResellersService);
   });
 
+  const summary = {
+    total: 1,
+    totalBalance: 1_000_000,
+    byStatus: { active: 1, inactive: 0 },
+  };
+
   it('list attaches derived customerCount by resellerId', async () => {
-    repo.list.mockResolvedValue({ items: [reseller], total: 1 });
+    repo.list.mockResolvedValue({ items: [reseller], total: 1, summary });
     customers.countsByResellerId.mockResolvedValue([{ resellerId: reseller.id, count: 7 }]);
     const result = await service.list({ limit: 50, offset: 0 });
     expect(result.items[0]?.customerCount).toBe(7);
     expect(result.items[0]?.commissionPct).toBe(0.05);
   });
 
+  it('list passes the summary rollup through unchanged (FE contract parity)', async () => {
+    repo.list.mockResolvedValue({ items: [reseller], total: 1, summary });
+    customers.countsByResellerId.mockResolvedValue([]);
+    const result = await service.list({ limit: 50, offset: 0 });
+    expect(result.summary).toEqual(summary);
+  });
+
   it('list forwards q, sort, and order to the repository unchanged', async () => {
-    repo.list.mockResolvedValue({ items: [reseller], total: 1 });
+    repo.list.mockResolvedValue({ items: [reseller], total: 1, summary });
     customers.countsByResellerId.mockResolvedValue([]);
     await service.list({ q: 'Jepara', sort: 'name', order: 'asc', limit: 10, offset: 0 });
     expect(repo.list).toHaveBeenCalledWith({

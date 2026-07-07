@@ -193,6 +193,52 @@ describe('AcsRepository (integration)', () => {
     });
   });
 
+  // --- summary aggregate (FE contract parity) ------------------------------
+
+  describe('list — summary aggregate', () => {
+    it('summary.byStatus counts every device regardless of q filter, zero-filled', async () => {
+      await repo.ensureSeeded([
+        {
+          serial: 'SUM-A0001',
+          customerName: 'Alpha',
+          model: 'ZTE F670L',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'online' as const,
+        },
+        {
+          serial: 'SUM-A0002',
+          customerName: 'Beta',
+          model: 'ZTE F670L',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'online' as const,
+        },
+        {
+          serial: 'SUM-A0003',
+          customerName: 'Gamma',
+          model: 'ZTE F670L',
+          firmware: 'v1.0',
+          rxPowerDbm: null,
+          status: 'offline' as const,
+        },
+      ]);
+
+      const filtered = await repo.list({ q: 'Alpha', limit: 50, offset: 0 });
+      expect(filtered.total).toBe(1); // filtered total
+
+      expect(filtered.summary).toEqual({
+        total: 3,
+        byStatus: { online: 2, offline: 1 },
+      });
+    });
+
+    it('zero-fills every status key when the table is empty', async () => {
+      const result = await repo.list({ limit: 50, offset: 0 });
+      expect(result.summary).toEqual({ total: 0, byStatus: { online: 0, offline: 0 } });
+    });
+  });
+
   describe('sort', () => {
     it('sorts by serial ascending', async () => {
       await repo.ensureSeeded([

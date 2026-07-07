@@ -73,11 +73,19 @@ describe('RoutersService', () => {
     await expect(service.test('missing')).rejects.toBeInstanceOf(NotFoundException);
   });
 
+  const summary = { total: 1, byStatus: { online: 1, offline: 0 } };
+
   it('list maps routers and exposes secretCount + lastSyncAt', async () => {
-    repo.list.mockResolvedValue({ items: [router], total: 1 });
+    repo.list.mockResolvedValue({ items: [router], total: 1, summary });
     const result = await service.list({ limit: 50, offset: 0 });
     expect(result.items[0]?.secretCount).toBe(0);
     expect(result.items[0]?.lastSyncAt).toBe('2026-06-15T00:00:00.000Z');
+  });
+
+  it('passes the summary rollup through unchanged (FE contract parity)', async () => {
+    repo.list.mockResolvedValue({ items: [router], total: 1, summary });
+    const result = await service.list({ limit: 50, offset: 0 });
+    expect(result.summary).toEqual(summary);
   });
 
   it('forwards q to the repository', async () => {

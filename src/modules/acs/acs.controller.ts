@@ -1,8 +1,10 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Post, Query } from '@nestjs/common';
+import { ZodSerializerDto } from 'nestjs-zod';
 import { z } from 'zod';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { AcsService } from './acs.service';
+import { AcsDeviceListResponseDto } from './dto/acs-response.dto';
 import { BulkAcsDto } from './dto/bulk-acs.dto';
 
 const ListQuerySchema = z.object({
@@ -19,6 +21,7 @@ export class AcsController {
   constructor(private readonly acs: AcsService) {}
 
   @Get('devices')
+  @ZodSerializerDto(AcsDeviceListResponseDto)
   listDevices(@Query() query: unknown) {
     return this.acs.list(ListQuerySchema.parse(query));
   }

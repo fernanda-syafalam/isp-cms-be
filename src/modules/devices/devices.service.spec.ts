@@ -39,9 +39,11 @@ describe('DevicesService', () => {
     service = moduleRef.get(DevicesService);
   });
 
+  const summary = { total: 1, byStatus: { online: 1, degraded: 0, offline: 0 } };
+
   describe('list', () => {
     it('seeds on first read and maps rows to ISO last-seen', async () => {
-      repo.list.mockResolvedValue({ items: [onu], total: 1 });
+      repo.list.mockResolvedValue({ items: [onu], total: 1, summary });
       const { items, total } = await service.list({ limit: 200, offset: 0 });
       expect(repo.ensureSeeded).toHaveBeenCalledTimes(1);
       expect(total).toBe(1);
@@ -51,6 +53,12 @@ describe('DevicesService', () => {
         rxPower: -18.5,
         lastSeenAt: '2026-06-15T00:00:00.000Z',
       });
+    });
+
+    it('passes the summary rollup through unchanged (FE contract parity)', async () => {
+      repo.list.mockResolvedValue({ items: [onu], total: 1, summary });
+      const result = await service.list({ limit: 200, offset: 0 });
+      expect(result.summary).toEqual(summary);
     });
 
     it('passes q filter through to the repo', async () => {

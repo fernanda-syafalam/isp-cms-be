@@ -1,7 +1,11 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { AcsDevice, NewAcsDevice } from '../../infrastructure/database/schema/acs.schema';
 import { type AcsListFilter, AcsRepository } from './acs.repository';
-import type { AcsDeviceResponse, BulkAcsResult } from './dto/acs-response.dto';
+import type {
+  AcsDeviceListResponse,
+  AcsDeviceResponse,
+  BulkAcsResult,
+} from './dto/acs-response.dto';
 import type { BulkAcsInput } from './dto/bulk-acs.dto';
 import { SetWifiSchema } from './dto/set-wifi.dto';
 import type { SetWifiResult, WifiResponse } from './dto/wifi-response.dto';
@@ -40,10 +44,10 @@ export class AcsService {
 
   constructor(private readonly repo: AcsRepository) {}
 
-  async list(filter: AcsListFilter): Promise<{ items: AcsDeviceResponse[]; total: number }> {
+  async list(filter: AcsListFilter): Promise<AcsDeviceListResponse> {
     await this.repo.ensureSeeded(DEFAULTS);
-    const { items, total } = await this.repo.list(filter);
-    return { items: items.map(toAcsResponse), total };
+    const { items, total, summary } = await this.repo.list(filter);
+    return { items: items.map(toAcsResponse), total, summary };
   }
 
   /**

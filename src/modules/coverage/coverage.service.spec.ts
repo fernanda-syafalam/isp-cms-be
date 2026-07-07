@@ -28,8 +28,10 @@ describe('CoverageService', () => {
     service = moduleRef.get(CoverageService);
   });
 
+  const summary = { total: 1, byStatus: { operational: 1, maintenance: 0, down: 0 } };
+
   it('seeds defaults then maps the coverage list', async () => {
-    repo.list.mockResolvedValue({ items: [area], total: 1 });
+    repo.list.mockResolvedValue({ items: [area], total: 1, summary });
     const result = await service.list({ limit: 100, offset: 0 });
     expect(repo.ensureSeeded).toHaveBeenCalledTimes(1);
     // the default set carries 8 areas alternating pop/area
@@ -44,6 +46,12 @@ describe('CoverageService', () => {
       activeConnections: 320,
       status: 'operational',
     });
+  });
+
+  it('passes the summary rollup through unchanged (FE contract parity)', async () => {
+    repo.list.mockResolvedValue({ items: [area], total: 1, summary });
+    const result = await service.list({ limit: 100, offset: 0 });
+    expect(result.summary).toEqual(summary);
   });
 
   it('forwards q to the repository unchanged', async () => {

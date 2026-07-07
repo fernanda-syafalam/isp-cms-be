@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { and, asc, count, eq, ilike, or } from 'drizzle-orm';
+import { and, asc, count, eq, ilike, or, sql } from 'drizzle-orm';
 import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
@@ -7,6 +7,7 @@ import {
   type NewCoverageArea,
   coverageAreas,
 } from '../../infrastructure/database/schema/coverage.schema';
+import type { CoverageSummary } from './dto/coverage-response.dto';
 
 export interface CoverageListFilter {
   status?: CoverageArea['status'];
@@ -62,7 +63,9 @@ export class CoverageRepository {
     return row ?? null;
   }
 
-  async list(filter: CoverageListFilter): Promise<{ items: CoverageArea[]; total: number }> {
+  async list(
+    filter: CoverageListFilter,
+  ): Promise<{ items: CoverageArea[]; total: number; summary: CoverageSummary }> {
     const where = and(
       filter.status ? eq(coverageAreas.status, filter.status) : undefined,
       filter.type ? eq(coverageAreas.type, filter.type) : undefined,
@@ -89,6 +92,29 @@ export class CoverageRepository {
       .limit(filter.limit)
       .offset(filter.offset);
     const [totals] = await this.db.select({ value: count() }).from(coverageAreas).where(where);
-    return { items, total: totals?.value ?? 0 };
+
+    // Full-set status-count rollup — computed over ALL coverage areas,
+    // ignoring status/type/q/paging (mirrors the work-orders/invoices
+    // summary aggregate). A single grouped-filter aggregate avoids 3
+    // separate COUNT queries; missing statuses are zero-filled below.
+    const [summaryRow] = await this.db
+      .select({
+        total: count(),
+        operational: sql<number>`count(*) filter (where ${coverageAreas.status} = 'operational')`,
+        maintenance: sql<number>`count(*) filter (where ${coverageAreas.status} = 'maintenance')`,
+        down: sql<number>`count(*) filter (where ${coverageAreas.status} = 'down')`,
+      })
+      .from(coverageAreas);
+
+    const summary: CoverageSummary = {
+      total: summaryRow?.total ?? 0,
+      byStatus: {
+        operational: Number(summaryRow?.operational ?? 0),
+        maintenance: Number(summaryRow?.maintenance ?? 0),
+        down: Number(summaryRow?.down ?? 0),
+      },
+    };
+
+    return { items, total: totals?.value ?? 0, summary };
   }
 }
