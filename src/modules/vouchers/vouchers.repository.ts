@@ -60,6 +60,7 @@ export interface VoucherSummary {
   total: number;
   unused: number;
   used: number;
+  expired: number;
   revenue: number;
 }
 
@@ -128,6 +129,7 @@ export class VouchersRepository {
         total: count(),
         unused: sql<number>`count(*) filter (where ${vouchers.status} = 'unused')`,
         used: sql<number>`count(*) filter (where ${vouchers.status} = 'used')`,
+        expired: sql<number>`count(*) filter (where ${vouchers.status} = 'expired')`,
         revenue: sum(
           sql`case when ${vouchers.status} = 'used' then ${vouchers.priceIdr} else 0 end`,
         ),
@@ -138,6 +140,7 @@ export class VouchersRepository {
       total: summaryRow?.total ?? 0,
       unused: Number(summaryRow?.unused ?? 0),
       used: Number(summaryRow?.used ?? 0),
+      expired: Number(summaryRow?.expired ?? 0),
       revenue: Number(summaryRow?.revenue ?? 0),
     };
 

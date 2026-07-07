@@ -156,6 +156,17 @@ describe('CustomersService', () => {
         expect(result.items[0]).not.toHaveProperty('ktp');
       });
 
+      // ADR-0011 parity: billingAnchorDay is billing config, not KYC — it
+      // must survive the mitra projection unlike npwp/ktp above.
+      it('includes billingAnchorDay in a mitra list response (not gated by the KYC projection)', async () => {
+        repo.list.mockResolvedValue({
+          items: [{ ...kycRow, billingAnchorDay: 15 }],
+          total: 1,
+        });
+        const result = await service.list({ limit: 50, offset: 0 }, mitra);
+        expect(result.items[0]?.billingAnchorDay).toBe(15);
+      });
+
       it('does not set excludeKyc for staff/admin reads', async () => {
         repo.list.mockResolvedValue({ items: [], total: 0 });
         await service.list({ limit: 50, offset: 0 }, { ...mitra, role: 'staff' });
@@ -213,6 +224,18 @@ describe('CustomersService', () => {
       it('a mitra CAN read their own reseller customer by id', async () => {
         repo.findById.mockResolvedValue(kycRow);
         await expect(service.findById(kycRow.id, mitra)).resolves.toMatchObject({ id: kycRow.id });
+      });
+
+      // ADR-0011 parity: billingAnchorDay is billing config, not KYC — must
+      // survive both the mitra projection and the null (unset) case.
+      it('includes billingAnchorDay in the detail response for a mitra, null when unset', async () => {
+        repo.findById.mockResolvedValue({ ...kycRow, billingAnchorDay: 10 });
+        const result = await service.findById(kycRow.id, mitra);
+        expect(result.billingAnchorDay).toBe(10);
+
+        repo.findById.mockResolvedValue({ ...kycRow, billingAnchorDay: null });
+        const unset = await service.findById(kycRow.id, mitra);
+        expect(unset.billingAnchorDay).toBeNull();
       });
     });
   });

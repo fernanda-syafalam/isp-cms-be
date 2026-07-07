@@ -22,6 +22,8 @@ export const OdpSummarySchema = z.object({
   totalOdp: z.number().int().nonnegative(),
   /** Fleet utilization: round(Σ(usedPorts) / Σ(totalPorts) * 100), 0 if no ports. */
   utilization: z.number().int().nonnegative(),
+  /** Count of ODP with totalPorts - usedPorts > 0 (at least one free port). */
+  available: z.number().int().nonnegative(),
   /** Count of ODP with totalPorts - usedPorts === 0 (no free port). */
   full: z.number().int().nonnegative(),
   /** Count of ODP with status !== 'healthy'. */

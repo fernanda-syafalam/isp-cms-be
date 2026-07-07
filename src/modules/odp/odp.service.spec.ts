@@ -56,12 +56,14 @@ const rowCritical: OdpRecordRow = {
  *   totalOdp  = 3
  *   usedPorts = 2 + 8 + 4 = 14,  totalPorts = 16 + 8 + 8 = 32
  *   utilization = round(14/32 * 100) = round(43.75) = 44
+ *   available = 2 (rowHealthy: 16-2=14 free, rowCritical: 8-4=4 free)
  *   full    = 1 (rowWarning: 8-8=0)
  *   optical = 2 (rowWarning + rowCritical, both !== 'healthy')
  */
 const FULL_SUMMARY: OdpSummary = {
   totalOdp: 3,
   utilization: 44,
+  available: 2,
   full: 1,
   optical: 2,
 };
@@ -121,10 +123,13 @@ describe('OdpService', () => {
       });
       const { summary } = await service.list(PAGE);
       expect(summary.totalOdp).toBe(3);
+      expect(summary.available).toBe(2);
       expect(summary.full).toBeGreaterThanOrEqual(0);
       expect(summary.optical).toBeGreaterThanOrEqual(0);
       // optical (non-healthy) must be <= totalOdp
       expect(summary.optical).toBeLessThanOrEqual(summary.totalOdp);
+      // available + full must equal totalOdp (every ODP is one or the other)
+      expect(summary.available + summary.full).toBe(summary.totalOdp);
     });
 
     it('utilization is clamped: 0 ≤ utilization ≤ 100', async () => {

@@ -252,6 +252,27 @@ describe('VouchersRepository (integration)', () => {
     expect(page.total).toBe(3);
   });
 
+  // ADR-0011 parity: FE status filter tabs need an `expired` count over the
+  // FULL set, independent of the status filter applied to `items`.
+  it('summary.expired counts every expired voucher regardless of the status filter', async () => {
+    await repo.createBatch(batchRows(2, 'B5')); // unused
+    await repo.createBatch(batchRows(1, 'B6', { status: 'used', priceIdr: 10_000 }));
+    await repo.createBatch(batchRows(3, 'B7', { status: 'expired' }));
+
+    const filtered = await repo.list({ status: 'unused', limit: 50, offset: 0 });
+    expect(filtered.total).toBe(2); // filtered count
+    expect(filtered.summary.total).toBe(6); // full-set
+    expect(filtered.summary.unused).toBe(2);
+    expect(filtered.summary.used).toBe(1);
+    expect(filtered.summary.expired).toBe(3);
+    expect(filtered.summary.revenue).toBe(10_000);
+  });
+
+  it('summary is zero-filled when no vouchers exist', async () => {
+    const result = await repo.list({ limit: 50, offset: 0 });
+    expect(result.summary).toEqual({ total: 0, unused: 0, used: 0, expired: 0, revenue: 0 });
+  });
+
   describe('settle — the loket voucher settlement (P3.D.3, money code)', () => {
     it('settles a voucher, defaulting usedBy and stamping usedAt', async () => {
       await repo.createBatch(batchRows(1, 'B4'));

@@ -19,7 +19,12 @@ const branch: Branch = {
   updatedAt: new Date('2026-06-15T00:00:00.000Z'),
 };
 
-const defaultSummary = { branches: 1, customers: 145, mrr: 41_000_000 };
+const defaultSummary = {
+  branches: 1,
+  customers: 145,
+  mrr: 41_000_000,
+  byStatus: { active: 1, inactive: 0 },
+};
 
 describe('BranchesService', () => {
   let service: BranchesService;
@@ -80,7 +85,12 @@ describe('BranchesService', () => {
     repo.list.mockResolvedValue({
       items: [],
       total: 0,
-      summary: { branches: 3, customers: 200, mrr: 10_000_000 },
+      summary: {
+        branches: 3,
+        customers: 200,
+        mrr: 10_000_000,
+        byStatus: { active: 2, inactive: 1 },
+      },
     });
     const result = await service.list({ q: 'nonexistent', limit: 50, offset: 0 });
     expect(result.items).toHaveLength(0);
@@ -89,6 +99,14 @@ describe('BranchesService', () => {
     expect(result.summary.branches).toBe(3);
     expect(result.summary.customers).toBe(200);
     expect(result.summary.mrr).toBe(10_000_000);
+  });
+
+  // ADR-0011 parity: byStatus is a passthrough from the repository's
+  // grouped-filter aggregate — the service must not recompute or drop it.
+  it('summary.byStatus passes through unchanged, zero-filled', async () => {
+    repo.list.mockResolvedValue({ items: [], total: 0, summary: defaultSummary });
+    const result = await service.list({ limit: 50, offset: 0 });
+    expect(result.summary.byStatus).toEqual({ active: 1, inactive: 0 });
   });
 
   it('create passes the input through', async () => {

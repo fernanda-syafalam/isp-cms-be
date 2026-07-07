@@ -151,6 +151,26 @@ describe('CustomersRepository (integration)', () => {
     expect(search.items[0]?.fullName).toBe('Zaki');
   });
 
+  // ADR-0011 parity: billingAnchorDay is an item-level field the FE customer
+  // schema requires — it must survive list()'s column projection (never
+  // dropped), null when unset.
+  it('list() returns billingAnchorDay per item, null when unset', async () => {
+    await repo.create({ fullName: 'Zaki', phone: '0810', address: 'Jl. Z', planId });
+    await repo.create({
+      fullName: 'Ani',
+      phone: '0812',
+      address: 'Jl. B',
+      planId,
+      billingAnchorDay: 15,
+    });
+
+    const result = await repo.list({ limit: 50, offset: 0 });
+    const ani = result.items.find((c) => c.fullName === 'Ani');
+    const zaki = result.items.find((c) => c.fullName === 'Zaki');
+    expect(ani?.billingAnchorDay).toBe(15);
+    expect(zaki?.billingAnchorDay).toBeNull();
+  });
+
   // ---------------------------------------------------------------------------
   // list — full-set (scope-wide) summary aggregate (T1, FE contract parity)
   // ---------------------------------------------------------------------------

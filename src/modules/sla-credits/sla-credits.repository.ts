@@ -68,16 +68,20 @@ export class SlaCreditsRepository {
     // Full-set summary — computed over ALL sla_credits, ignoring q/paging.
     const [summaryRow] = await this.db
       .select({
+        total: count(),
         activeAmount: sql<string>`coalesce(sum(case when ${slaCredits.status} != 'void' then ${slaCredits.amount} else 0 end), 0)`,
         pending: sql<number>`count(*) filter (where ${slaCredits.status} = 'pending')`,
         applied: sql<number>`count(*) filter (where ${slaCredits.status} = 'applied')`,
+        voidCount: sql<number>`count(*) filter (where ${slaCredits.status} = 'void')`,
       })
       .from(slaCredits);
 
     const summary: SlaCreditSummary = {
+      total: summaryRow?.total ?? 0,
       activeAmount: Number(summaryRow?.activeAmount ?? 0),
       pending: Number(summaryRow?.pending ?? 0),
       applied: Number(summaryRow?.applied ?? 0),
+      void: Number(summaryRow?.voidCount ?? 0),
     };
 
     return { items, total: filteredCount?.value ?? 0, summary };

@@ -29,6 +29,7 @@ function customer(over: Partial<CustomerResponse> = {}): CustomerResponse {
     status: 'instalasi',
     holdReason: null,
     outstanding: 0,
+    billingAnchorDay: null,
     npwp: null,
     ktp: null,
     consentAt: null,

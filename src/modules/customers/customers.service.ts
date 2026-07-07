@@ -399,6 +399,9 @@ function toCustomerResponse(
     status: row.status,
     holdReason: row.holdReason,
     outstanding: row.outstanding,
+    // Billing config, not KYC (ADR-0011 parity) — included for every role,
+    // unlike npwp/ktp below which are gated by opts.includeKyc.
+    billingAnchorDay: row.billingAnchorDay,
     consentAt: row.consentAt ? row.consentAt.toISOString() : null,
     resellerName: row.resellerName,
     connection: row.connection ?? null,

@@ -30,6 +30,7 @@ export const VoucherSummarySchema = z.object({
   total: z.number().int().nonnegative(),
   unused: z.number().int().nonnegative(),
   used: z.number().int().nonnegative(),
+  expired: z.number().int().nonnegative(),
   revenue: z.number().int().nonnegative(),
 });
 
