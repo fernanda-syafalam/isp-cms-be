@@ -1,0 +1,1 @@
+ALTER TABLE "user_security" ADD COLUMN "two_factor_secret" varchar(64);

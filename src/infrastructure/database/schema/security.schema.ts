@@ -9,6 +9,13 @@ export const userSecurity = pgTable('user_security', {
   // One row per user; the user id is the natural primary key.
   userId: uuid('user_id').primaryKey(),
   twoFactorEnabled: boolean('two_factor_enabled').notNull().default(false),
+  // Base32 TOTP secret (RFC 4648) — null until enrollment starts. A row can
+  // hold a secret with `twoFactorEnabled = false` while enrollment is
+  // in-progress and unconfirmed; only `confirmTwoFactor` (after a valid
+  // code) flips the flag. This is the single source of truth for both the
+  // secret and the enabled state — do not duplicate either on `users`.
+  // Not encrypted at rest yet — tracked as a follow-up (see PR description).
+  twoFactorSecret: varchar('two_factor_secret', { length: 64 }),
   createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
 });

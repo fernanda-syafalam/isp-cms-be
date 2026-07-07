@@ -9,6 +9,7 @@ import { AppModule } from '../src/app.module';
 import { DrizzleService } from '../src/infrastructure/database/drizzle.service';
 import type { User } from '../src/infrastructure/database/schema/users.schema';
 import { RedisService } from '../src/infrastructure/redis/redis.service';
+import { SecurityRepository } from '../src/modules/security/security.repository';
 import { UsersRepository } from '../src/modules/users/users.repository';
 
 /**
@@ -85,6 +86,18 @@ describe('Auth (e2e)', () => {
       })
       .overrideProvider(UsersRepository)
       .useValue(fakeRepo)
+      // No user in this suite has 2FA enrolled — the fake always reports
+      // `twoFactorEnabled: false` so AuthService.login's TOTP challenge is
+      // a no-op here (covered separately in security.service.spec.ts and
+      // auth.service.spec.ts).
+      .overrideProvider(SecurityRepository)
+      .useValue({
+        findState: vi.fn(async () => ({
+          userId: storedUser.id,
+          twoFactorEnabled: false,
+          twoFactorSecret: null,
+        })),
+      })
       .compile();
 
     app = moduleFixture.createNestApplication<NestFastifyApplication>(new FastifyAdapter());

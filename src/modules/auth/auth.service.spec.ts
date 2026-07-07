@@ -4,6 +4,7 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import * as argon2 from 'argon2';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { User } from '../../infrastructure/database/schema/users.schema';
+import { SecurityService } from '../security/security.service';
 import { UsersRepository } from '../users/users.repository';
 import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
@@ -25,6 +26,7 @@ describe('AuthService', () => {
     rotate: ReturnType<typeof vi.fn>;
     revoke: ReturnType<typeof vi.fn>;
   };
+  let security: { verifyLoginChallenge: ReturnType<typeof vi.fn> };
 
   const password = 'correct-horse-battery-staple';
   let user: User;
@@ -50,6 +52,8 @@ describe('AuthService', () => {
       rotate: vi.fn(),
       revoke: vi.fn(),
     };
+    // Default: no 2FA challenge — matches every pre-existing regression test.
+    security = { verifyLoginChallenge: vi.fn().mockResolvedValue('ok') };
 
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
@@ -58,6 +62,7 @@ describe('AuthService', () => {
         { provide: UsersService, useValue: usersService },
         { provide: JwtService, useValue: jwt },
         { provide: RefreshTokenService, useValue: refresh },
+        { provide: SecurityService, useValue: security },
       ],
     }).compile();
     service = moduleRef.get(AuthService);
@@ -100,6 +105,64 @@ describe('AuthService', () => {
       );
       expect(jwt.signAsync).not.toHaveBeenCalled();
       expect(refresh.mint).not.toHaveBeenCalled();
+    });
+
+    describe('with two-factor enabled', () => {
+      it('rejects with totp_required when no code is submitted, never touching the password-check-only path', async () => {
+        repo.findByEmail.mockResolvedValue(user);
+        security.verifyLoginChallenge.mockResolvedValue('required');
+
+        const err = await service.login(user.email, password).catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(UnauthorizedException);
+        expect((err as UnauthorizedException).getResponse()).toMatchObject({
+          code: 'totp_required',
+        });
+        expect(security.verifyLoginChallenge).toHaveBeenCalledWith(user.id, undefined);
+        expect(jwt.signAsync).not.toHaveBeenCalled();
+        expect(refresh.mint).not.toHaveBeenCalled();
+      });
+
+      it('rejects with totp_invalid when a wrong code is submitted', async () => {
+        repo.findByEmail.mockResolvedValue(user);
+        security.verifyLoginChallenge.mockResolvedValue('invalid');
+
+        const err = await service.login(user.email, password, '000000').catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(UnauthorizedException);
+        expect((err as UnauthorizedException).getResponse()).toMatchObject({
+          code: 'totp_invalid',
+        });
+        expect(security.verifyLoginChallenge).toHaveBeenCalledWith(user.id, '000000');
+        expect(jwt.signAsync).not.toHaveBeenCalled();
+        expect(refresh.mint).not.toHaveBeenCalled();
+      });
+
+      it('rejects with totp_locked when the account is brute-force locked out (F1), even with a code', async () => {
+        repo.findByEmail.mockResolvedValue(user);
+        security.verifyLoginChallenge.mockResolvedValue('locked');
+
+        const err = await service.login(user.email, password, '123456').catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(UnauthorizedException);
+        expect((err as UnauthorizedException).getResponse()).toMatchObject({
+          code: 'totp_locked',
+        });
+        expect(jwt.signAsync).not.toHaveBeenCalled();
+        expect(refresh.mint).not.toHaveBeenCalled();
+      });
+
+      it('issues tokens when the code checks out (verification itself is SecurityService.verifyLoginChallenge — mocked here)', async () => {
+        repo.findByEmail.mockResolvedValue(user);
+        security.verifyLoginChallenge.mockResolvedValue('ok');
+
+        const code = '123456';
+        const out = await service.login(user.email, password, code);
+
+        expect(security.verifyLoginChallenge).toHaveBeenCalledWith(user.id, code);
+        expect(out.accessToken).toBe('signed.jwt.value');
+        expect(refresh.mint).toHaveBeenCalledWith(user.id);
+      });
     });
   });
 

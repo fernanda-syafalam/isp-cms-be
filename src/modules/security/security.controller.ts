@@ -1,10 +1,13 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { type AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { EnableTwoFactorDto } from './dto/enable-two-factor.dto';
+import { ConfirmTwoFactorDto } from './dto/confirm-two-factor.dto';
+import { DisableTwoFactorDto } from './dto/disable-two-factor.dto';
 import { SecurityStateResponseDto } from './dto/security-response.dto';
+import { TwoFactorEnrollResponseDto } from './dto/two-factor-enroll-response.dto';
 import { SecurityService } from './security.service';
 
 /**
@@ -23,20 +26,39 @@ export class SecurityController {
     return this.security.getState(user.id);
   }
 
-  @Audit('security.2fa.enable')
-  @Post('2fa/enable')
+  /** Step 1/2 — generate + persist a TOTP secret, return the QR payload. */
+  @Audit('security.2fa.enroll')
+  @Post('2fa/enroll')
   @HttpCode(HttpStatus.OK)
-  @ZodSerializerDto(SecurityStateResponseDto)
-  enable(@CurrentUser() user: AuthUser, @Body() body: EnableTwoFactorDto) {
-    return this.security.enableTwoFactor(user.id, body.code);
+  @ZodSerializerDto(TwoFactorEnrollResponseDto)
+  enroll(@CurrentUser() user: AuthUser) {
+    return this.security.beginEnroll(user.id, user.email);
   }
 
+  /**
+   * Step 2/2 — verify the code from the authenticator app, flip the flag
+   * on. F1: throttled tighter than the global default — this is the
+   * endpoint an attacker with a stolen-but-unconfirmed secret would
+   * brute force; also gated per-user by `TotpLockoutService` inside
+   * `SecurityService.confirmEnroll`.
+   */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Audit('security.2fa.confirm')
+  @Post('2fa/confirm')
+  @HttpCode(HttpStatus.OK)
+  @ZodSerializerDto(SecurityStateResponseDto)
+  confirm(@CurrentUser() user: AuthUser, @Body() body: ConfirmTwoFactorDto) {
+    return this.security.confirmEnroll(user.id, body.code);
+  }
+
+  /** F1: same rationale as `confirm` above — this is the other endpoint that checks a TOTP code. */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Audit('security.2fa.disable')
   @Post('2fa/disable')
   @HttpCode(HttpStatus.OK)
   @ZodSerializerDto(SecurityStateResponseDto)
-  disable(@CurrentUser() user: AuthUser) {
-    return this.security.disableTwoFactor(user.id);
+  disable(@CurrentUser() user: AuthUser, @Body() body: DisableTwoFactorDto) {
+    return this.security.disableTwoFactor(user.id, body.code);
   }
 
   @Audit('security.session.revoke')

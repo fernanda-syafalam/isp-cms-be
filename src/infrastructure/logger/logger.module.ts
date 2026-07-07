@@ -35,10 +35,18 @@ import type { AppConfig } from '../../config/configuration';
               'req.body.token',
               'req.body.accessToken',
               'req.body.refreshToken',
+              // TOTP 2FA (login challenge + enroll/confirm/disable). `code`
+              // is scoped to req.body only (not wildcarded) — it also names
+              // unrelated business identifiers (ticket/work-order/voucher
+              // codes) that must stay visible in logs.
+              'req.body.code',
+              'req.body.totpCode',
               '*.password',
               '*.passwordHash',
               '*.accessToken',
               '*.refreshToken',
+              '*.twoFactorSecret',
+              '*.otpauthUri',
             ],
             censor: '[REDACTED]',
           },

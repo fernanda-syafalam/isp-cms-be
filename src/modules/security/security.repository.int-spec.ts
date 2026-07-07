@@ -9,7 +9,7 @@ import { SecurityRepository } from './security.repository';
 
 /**
  * Real Postgres integration test for SecurityRepository. Requires Docker.
- * Schema applied by hand (mirroring migration 0023).
+ * Schema applied by hand (mirroring migration 0023 + 0044).
  */
 describe('SecurityRepository (integration)', () => {
   let container: StartedPostgreSqlContainer;
@@ -29,6 +29,7 @@ describe('SecurityRepository (integration)', () => {
       CREATE TABLE user_security (
         user_id uuid PRIMARY KEY,
         two_factor_enabled boolean NOT NULL DEFAULT false,
+        two_factor_secret varchar(64),
         created_at timestamptz(3) NOT NULL DEFAULT now(),
         updated_at timestamptz(3) NOT NULL DEFAULT now()
       );
@@ -66,12 +67,37 @@ describe('SecurityRepository (integration)', () => {
     expect(rows).toHaveLength(1);
   });
 
-  it('toggles two-factor', async () => {
+  it('stores a secret without enabling, then confirms', async () => {
     await repo.ensureState(userA);
-    await repo.setTwoFactor(userA, true);
+    await repo.saveTwoFactorSecret(userA, 'JBSWY3DPEHPK3PXP');
+    const enrolled = await repo.findState(userA);
+    expect(enrolled?.twoFactorSecret).toBe('JBSWY3DPEHPK3PXP');
+    expect(enrolled?.twoFactorEnabled).toBe(false);
+
+    await repo.confirmTwoFactor(userA);
     expect((await repo.findState(userA))?.twoFactorEnabled).toBe(true);
-    await repo.setTwoFactor(userA, false);
-    expect((await repo.findState(userA))?.twoFactorEnabled).toBe(false);
+  });
+
+  it('clears the secret and flag on disable', async () => {
+    await repo.ensureState(userA);
+    await repo.saveTwoFactorSecret(userA, 'JBSWY3DPEHPK3PXP');
+    await repo.confirmTwoFactor(userA);
+
+    await repo.clearTwoFactor(userA);
+    const state = await repo.findState(userA);
+    expect(state?.twoFactorEnabled).toBe(false);
+    expect(state?.twoFactorSecret).toBeNull();
+  });
+
+  it('resets the enabled flag to false when a new secret is saved (re-enrollment)', async () => {
+    await repo.ensureState(userA);
+    await repo.saveTwoFactorSecret(userA, 'JBSWY3DPEHPK3PXP');
+    await repo.confirmTwoFactor(userA);
+
+    await repo.saveTwoFactorSecret(userA, 'NEWSECRETVALUE22');
+    const state = await repo.findState(userA);
+    expect(state?.twoFactorEnabled).toBe(false);
+    expect(state?.twoFactorSecret).toBe('NEWSECRETVALUE22');
   });
 
   it('seeds + lists sessions current-first', async () => {

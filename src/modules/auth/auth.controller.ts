@@ -9,6 +9,7 @@ import {
   Res,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { AnyAuthenticatedRole } from '../../common/decorators/any-authenticated-role.decorator';
 import { Audit } from '../../common/decorators/audit.decorator';
@@ -33,6 +34,10 @@ export class AuthController {
     private readonly users: UsersService,
   ) {}
 
+  // F1: stricter than the global per-IP limit — login is also gated by
+  // the per-user TOTP lockout (TotpLockoutService) once 2FA is on, but
+  // this caps raw login attempts (password guessing) regardless of 2FA.
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -40,7 +45,7 @@ export class AuthController {
     @Body() body: LoginDto,
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<{ accessToken: string; user: AuthUser }> {
-    const result = await this.auth.login(body.email, body.password);
+    const result = await this.auth.login(body.email, body.password, body.totpCode);
     this.setRefreshCookie(reply, result.refreshToken, result.refreshExpiresInSeconds);
     return { accessToken: result.accessToken, user: result.user };
   }
