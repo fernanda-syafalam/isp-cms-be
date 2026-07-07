@@ -39,6 +39,7 @@ export type WorkOrderCompletion = Partial<
     | 'signatureUrl'
     | 'gpsLat'
     | 'gpsLng'
+    | 'completionNotes'
     | 'completedAt'
     | 'completedBy'
   >

@@ -32,6 +32,7 @@ const installWo: WorkOrder = {
   signatureUrl: null,
   gpsLat: null,
   gpsLng: null,
+  completionNotes: null,
   completedAt: null,
   completedBy: null,
   createdAt: new Date('2026-06-15T00:00:00.000Z'),
@@ -63,6 +64,7 @@ const noFieldEvidence = {
   signatureUrl: null,
   gpsLat: null,
   gpsLng: null,
+  completionNotes: null,
   completedBy: AUTHOR,
 };
 
@@ -365,6 +367,42 @@ describe('WorkOrdersService', () => {
         installWo.id,
         expect.objectContaining({ ...noFieldEvidence, completedAt: expect.any(Date) }),
       );
+    });
+
+    // completion_notes (0045) — the "Catatan" free-text field the technician
+    // enters on the completion form.
+    it('persists the completion note and echoes it back on the completed order', async () => {
+      repo.findById.mockResolvedValue(installWo);
+      customers.findById.mockResolvedValue(customerRow);
+      repo.markDone.mockResolvedValue({
+        ...installWo,
+        status: 'done',
+        completionNotes: 'ONT dipasang di lantai 2, sinyal stabil.',
+      });
+
+      const result = await service.complete(installWo.id, AUTHOR, {
+        notes: 'ONT dipasang di lantai 2, sinyal stabil.',
+      });
+
+      expect(repo.markDone).toHaveBeenCalledWith(
+        installWo.id,
+        expect.objectContaining({ completionNotes: 'ONT dipasang di lantai 2, sinyal stabil.' }),
+      );
+      expect(result.completionNotes).toBe('ONT dipasang di lantai 2, sinyal stabil.');
+    });
+
+    it('leaves completionNotes null when the technician submits no note', async () => {
+      repo.findById.mockResolvedValue(installWo);
+      customers.findById.mockResolvedValue(customerRow);
+      repo.markDone.mockResolvedValue({ ...installWo, status: 'done' });
+
+      const result = await service.complete(installWo.id, AUTHOR);
+
+      expect(repo.markDone).toHaveBeenCalledWith(
+        installWo.id,
+        expect.objectContaining({ completionNotes: null }),
+      );
+      expect(result.completionNotes).toBeNull();
     });
   });
 

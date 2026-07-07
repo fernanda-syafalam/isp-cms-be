@@ -332,9 +332,11 @@ function buildConnection(
 // Field-completion evidence written on the same UPDATE as the done
 // transition (P3.B.3). completedAt/completedBy are always set (every
 // completion has an author and a timestamp); the rest stay null when the
-// technician submitted no field kit. `technician`/`notes` on the input are
-// accepted for forward-compat with the field-completion form but are not
-// persisted yet — no column exists for free-text completion notes.
+// technician submitted no field kit. `technician` on the input is accepted
+// for forward-compat with the field-completion form but is not persisted
+// yet — no column exists for it. `notes` (the "Catatan" free-text field the
+// technician fills in on the completion form) IS persisted, into
+// completionNotes.
 function buildCompletion(author: string, data?: CompleteWorkOrderInput): WorkOrderCompletion {
   return {
     scannedOnuSerial: data?.onuSerial ?? null,
@@ -343,6 +345,7 @@ function buildCompletion(author: string, data?: CompleteWorkOrderInput): WorkOrd
     signatureUrl: data?.signatureUrl ?? null,
     gpsLat: data?.gps?.lat ?? null,
     gpsLng: data?.gps?.lng ?? null,
+    completionNotes: data?.notes ?? null,
     completedAt: new Date(),
     completedBy: author,
   };
@@ -366,6 +369,7 @@ function toWorkOrderResponse(row: WorkOrder): WorkOrderResponse {
     signatureUrl: row.signatureUrl,
     gpsLat: row.gpsLat,
     gpsLng: row.gpsLng,
+    completionNotes: row.completionNotes,
     completedAt: row.completedAt ? row.completedAt.toISOString() : null,
     completedBy: row.completedBy,
   };

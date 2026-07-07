@@ -26,6 +26,8 @@ export const WorkOrderResponseSchema = z.object({
   signatureUrl: z.string().nullable(),
   gpsLat: z.number().nullable(),
   gpsLng: z.number().nullable(),
+  // Free-text field notes the technician enters on completion ("Catatan").
+  completionNotes: z.string().nullable(),
   completedAt: z.iso.datetime().nullable(),
   completedBy: z.string().nullable(),
 });

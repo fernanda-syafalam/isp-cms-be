@@ -1,0 +1,1 @@
+ALTER TABLE "work_orders" ADD COLUMN "completion_notes" text;
