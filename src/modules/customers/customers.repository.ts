@@ -34,8 +34,16 @@ export type CustomerRow = Customer & { planName: string };
 export interface CustomerListFilter {
   q?: string;
   // Scope to one reseller's acquisitions — set server-side for mitra
-  // principals (P1.5), never taken from client input for them.
+  // principals (P1.5), never taken from client input for them. Staff/admin
+  // may also set this from the client (#26) to view one reseller's
+  // customers without filtering the full list.
   resellerId?: string;
+  // Ops diagnostic (#25): return only customers left with reseller_id IS
+  // NULL after migration 0031's backfill (ambiguous/no name match), so
+  // they can be found and reconciled. Takes precedence over resellerId if
+  // both are somehow set (the controller DTO already rejects that
+  // combination) — admin/staff only, same access boundary as resellerId.
+  unassignedReseller?: boolean;
   // KYC-safe projection (ADR-0010 amendment, SEC-4): when true, npwp/ktp
   // are never read off the real column — see baseSelectKycSafe(). Set
   // server-side by CustomersService for mitra principals only; never
@@ -202,7 +210,11 @@ export class CustomersRepository {
       filter.area && filter.area.length > 0
         ? or(inArray(customers.areaName, filter.area), isNull(customers.areaName))
         : undefined,
-      filter.resellerId ? eq(customers.resellerId, filter.resellerId) : undefined,
+      filter.unassignedReseller
+        ? isNull(customers.resellerId)
+        : filter.resellerId
+          ? eq(customers.resellerId, filter.resellerId)
+          : undefined,
     );
   }
 

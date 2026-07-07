@@ -276,6 +276,30 @@ describe('CustomersRepository (integration)', () => {
       expect(scoped.items[0]?.fullName).toBe('C1');
     });
 
+    // #25 ops diagnostic: surface customers left with reseller_id IS NULL
+    // after migration 0031's name-based backfill, for reconciliation.
+    it('unassignedReseller scope returns exactly the reseller_id IS NULL rows', async () => {
+      const [resellerA] = await db
+        .insert(resellers)
+        .values({ name: 'Loket Andi', area: 'Jepara' })
+        .returning();
+      if (!resellerA) throw new Error('reseller seed failed');
+
+      await repo.create({
+        fullName: 'Linked',
+        phone: '08',
+        address: 'Jl',
+        planId,
+        resellerId: resellerA.id,
+      });
+      await repo.create({ fullName: 'Unlinked1', phone: '08', address: 'Jl', planId });
+      await repo.create({ fullName: 'Unlinked2', phone: '08', address: 'Jl', planId });
+
+      const scoped = await repo.list({ unassignedReseller: true, limit: 50, offset: 0 });
+      expect(scoped.summary.total).toBe(2);
+      expect(scoped.items.map((c) => c.fullName).sort()).toEqual(['Unlinked1', 'Unlinked2']);
+    });
+
     it('zero-fills every status key and outstanding when the scope is empty', async () => {
       const result = await repo.list({ limit: 50, offset: 0 });
       expect(result.summary).toEqual({

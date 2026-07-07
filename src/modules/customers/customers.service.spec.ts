@@ -99,6 +99,19 @@ describe('CustomersService', () => {
       );
     });
 
+    // #25/#26 scope-escape guard: a mitra passing the ops
+    // unassignedReseller diagnostic flag must not see reseller-less
+    // customers — the forced own-resellerId scope must win.
+    it('clears a client-supplied unassignedReseller flag for a mitra (no scope escape)', async () => {
+      repo.list.mockResolvedValue({ items: [], total: 0 });
+
+      await service.list({ unassignedReseller: true, limit: 50, offset: 0 }, mitra);
+
+      expect(repo.list).toHaveBeenCalledWith(
+        expect.objectContaining({ resellerId: mitra.resellerId, unassignedReseller: false }),
+      );
+    });
+
     it('returns empty (with a zero-filled summary) for a mitra with no linked reseller', async () => {
       const result = await service.list({ limit: 50, offset: 0 }, { ...mitra, resellerId: null });
 
