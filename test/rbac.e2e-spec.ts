@@ -49,12 +49,64 @@ describe('Staff read-surface gate (e2e)', () => {
     byStatus: { prospek: 0, instalasi: 0, aktif: 0, isolir: 0, berhenti: 0 },
   };
 
+  const RESELLER_ID = '00000000-0000-0000-0000-0000000000r1';
+  const CUSTOMER_ID = '00000000-0000-0000-0000-0000000000c1';
+
+  // Full KYC-bearing row, used by the ADR-0010 amendment / ADR-0015 (SEC-4)
+  // detail-route tests below — findById() itself decides (per the
+  // { excludeKyc } opt passed by the service) whether to hand back the real
+  // npwp/ktp or a real repo would substitute NULL; this fake stands in for
+  // the repository so the KYC-safe projection is asserted at the SERVICE
+  // layer here (the repository's own SQL-level NULL substitution is
+  // covered in customers.repository.int-spec.ts against a real Postgres).
+  const kycCustomerRow = {
+    id: CUSTOMER_ID,
+    customerNo: 'CUST-9001',
+    fullName: 'Budi Santoso',
+    phone: '081234567890',
+    email: null,
+    userId: null,
+    address: 'Jl. Mawar 1',
+    areaId: null,
+    areaName: null,
+    lat: null,
+    lng: null,
+    odpId: null,
+    planId: '00000000-0000-0000-0000-0000000000b1',
+    status: 'aktif' as const,
+    holdReason: null,
+    outstanding: 0,
+    billingAnchorDay: null,
+    npwp: '01.234.567.8-901.000',
+    ktp: '3201xxxxxxxxxxxx',
+    consentAt: null,
+    dataDeletionRequestedAt: null,
+    resellerName: 'Loket Andi',
+    resellerId: RESELLER_ID,
+    connection: null,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    planName: 'Home 20',
+  };
+
   const fakeCustomersRepo = {
     list: vi.fn(async () => ({ items: [], total: 0, summary: emptyCustomerSummary })),
     // resolveForPortal fails closed on a miss (P0.3) — returning null here
     // makes /v1/portal/me a deterministic 404 for the customer probe below.
     findByEmail: vi.fn(async () => null),
     findByUserId: vi.fn(async () => null),
+    findById: vi.fn(async (id: string, opts: { excludeKyc?: boolean } = {}) =>
+      id === CUSTOMER_ID
+        ? {
+            ...kycCustomerRow,
+            // Mirrors the real repository's SQL-level NULL substitution
+            // (baseSelectKycSafe) so the mitra path is exercised the same
+            // way it is at runtime — the value is never real for a
+            // mitra caller, not merely stripped downstream.
+            ...(opts.excludeKyc ? { npwp: null, ktp: null } : {}),
+          }
+        : null,
+    ),
   };
 
   const fakeWorkOrdersRepo = {
@@ -226,6 +278,58 @@ describe('Staff read-surface gate (e2e)', () => {
       headers: { authorization: `Bearer ${await tokenFor('mitra')}` },
     });
     expect(res.statusCode).toBe(404);
+  });
+
+  // ADR-0010 amendment / ADR-0015 (SEC-4): mitra reads a customer's own
+  // reseller detail record without KYC identity fields; scoping to another
+  // reseller's customer still 404s.
+  describe('mitra customer detail: KYC-safe projection + reseller scoping', () => {
+    it('a mitra reading their own reseller customer gets it without npwp/ktp', async () => {
+      actor.resellerId = RESELLER_ID;
+      const res = await app.inject({
+        method: 'GET',
+        url: `/v1/customers/${CUSTOMER_ID}`,
+        headers: { authorization: `Bearer ${await tokenFor('mitra')}` },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body).not.toHaveProperty('npwp');
+      expect(body).not.toHaveProperty('ktp');
+      expect(body.id).toBe(CUSTOMER_ID);
+      expect(body.resellerName).toBe('Loket Andi');
+    });
+
+    it('staff reading the same customer still gets npwp/ktp (unaffected)', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/v1/customers/${CUSTOMER_ID}`,
+        headers: { authorization: `Bearer ${await tokenFor('staff')}` },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.npwp).toBe('01.234.567.8-901.000');
+      expect(body.ktp).toBe('3201xxxxxxxxxxxx');
+    });
+
+    it('404s a mitra reading a customer that is not their reseller’s (scoping regression guard)', async () => {
+      actor.resellerId = '00000000-0000-0000-0000-0000000000zz';
+      const res = await app.inject({
+        method: 'GET',
+        url: `/v1/customers/${CUSTOMER_ID}`,
+        headers: { authorization: `Bearer ${await tokenFor('mitra')}` },
+      });
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('404s a mitra with no linked reseller reading any customer by id', async () => {
+      actor.resellerId = null;
+      const res = await app.inject({
+        method: 'GET',
+        url: `/v1/customers/${CUSTOMER_ID}`,
+        headers: { authorization: `Bearer ${await tokenFor('mitra')}` },
+      });
+      expect(res.statusCode).toBe(404);
+    });
   });
 
   it('keeps mitra out of the staff-only surface', async () => {

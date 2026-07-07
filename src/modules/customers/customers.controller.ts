@@ -54,10 +54,15 @@ export class CustomersController {
     return this.customers.list(filter, user);
   }
 
+  // A mitra principal may read one of their own reseller's customers by
+  // id too — scoped (404 on another reseller's customer) and KYC-safe
+  // (npwp/ktp omitted), both enforced in the service (ADR-0010 amendment
+  // / ADR-0015, SEC-4). Mirrors the list() access policy above.
+  @Roles('admin', 'staff', 'mitra')
   @Get(':id')
   @ZodSerializerDto(CustomerResponseDto)
-  findOne(@Param('id') id: string) {
-    return this.customers.findById(id);
+  findOne(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.customers.findById(id, user);
   }
 
   // Operations + billing staff create and edit customers, not just admin.

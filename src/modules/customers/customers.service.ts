@@ -51,13 +51,39 @@ export class CustomersService {
       };
     }
     const { items, total, summary } = await this.repo.list(scoped);
-    return { items: items.map(toCustomerResponse), total, summary };
+    // KYC-safe projection (ADR-0010 amendment / ADR-0015, SEC-4): a mitra
+    // never sees npwp/ktp — the repository already never read the real
+    // column value (scoped.excludeKyc, set by scopeForUser), and the
+    // response mapper below omits the keys entirely (not merely null).
+    const includeKyc = user?.role !== 'mitra';
+    return { items: items.map((row) => toCustomerResponse(row, { includeKyc })), total, summary };
   }
 
-  async findById(id: string): Promise<CustomerResponse> {
-    const row = await this.repo.findById(id);
+  /**
+   * `user` is optional: the many internal cross-module callers of this
+   * method (tickets, work-orders, invoices, contracts, sla-credits,
+   * portal, vouchers, onboarding — none of them HTTP-facing on behalf of
+   * a mitra) never pass one and always get the full row, exactly as
+   * before this change. Only the HTTP `GET /v1/customers/:id` handler
+   * passes the caller's `AuthUser`.
+   *
+   * For a mitra principal (ADR-0010 amendment / ADR-0015, SEC-4):
+   * - the reseller-ownership check below is the detail-route counterpart
+   *   of the list() scoping (ADR-0010) — a mitra may only read their own
+   *   reseller's customers by id too. Fails closed with 404 (not 403) so
+   *   another reseller's customer id is not probeable (mirrors
+   *   ResellersService.assertResellerAccess).
+   * - the KYC fields (npwp/ktp) are excluded at the query layer and
+   *   omitted from the response entirely.
+   */
+  async findById(id: string, user?: AuthUser): Promise<CustomerResponse> {
+    const isMitra = user?.role === 'mitra';
+    const row = await this.repo.findById(id, { excludeKyc: isMitra });
     if (!row) throw new NotFoundException('customer not found');
-    return toCustomerResponse(row);
+    if (isMitra && (!user?.resellerId || row.resellerId !== user.resellerId)) {
+      throw new NotFoundException('customer not found');
+    }
+    return toCustomerResponse(row, { includeKyc: !isMitra });
   }
 
   /**
@@ -317,11 +343,18 @@ function normalizeEmail(email: string): string | null {
  * never widen this — the reseller constraint is overwritten, and a mitra
  * with no linked reseller gets null (callers return an empty result).
  * Staff/admin (and absent user, e.g. internal calls) pass through.
+ *
+ * `excludeKyc: true` (ADR-0010 amendment / ADR-0015, SEC-4) rides along
+ * with the same mitra branch: a mitra is both scoped to their own
+ * reseller AND denied the KYC columns at the query layer — the two are
+ * separate concerns (authorization boundary vs. data minimization) but
+ * both are set here, in the one place a mitra filter is built, so a
+ * future caller cannot apply one without the other.
  */
 function scopeForUser(filter: CustomerListFilter, user?: AuthUser): CustomerListFilter | null {
   if (!user || user.role !== 'mitra') return filter;
   if (!user.resellerId) return null;
-  return { ...filter, resellerId: user.resellerId };
+  return { ...filter, resellerId: user.resellerId, excludeKyc: true };
 }
 
 /**
@@ -337,8 +370,22 @@ function toActionResponse(row: CustomerRow, user?: AuthUser): CustomerResponse {
   return { ...full, ktp: null, npwp: null, outstanding: 0 };
 }
 
-function toCustomerResponse(row: CustomerRow): CustomerResponse {
-  return {
+/**
+ * KYC-safe projection (ADR-0010 amendment / ADR-0015, SEC-4): when
+ * `includeKyc` is false (a mitra caller), `npwp`/`ktp` are omitted from
+ * the returned object entirely — not merely set to null — so the
+ * serialized JSON never carries those keys. Defaults to `true`: every
+ * other caller (admin/staff endpoints, and every internal cross-module
+ * call to `CustomersService.findById()` that never passes a user) is
+ * unaffected. The repository has already replaced the real column value
+ * with a SQL NULL for the mitra case (`CustomersRepository.
+ * baseSelectKycSafe`), so this is defense in depth, not the only guard.
+ */
+function toCustomerResponse(
+  row: CustomerRow,
+  opts: { includeKyc?: boolean } = {},
+): CustomerResponse {
+  const base = {
     id: row.id,
     customerNo: row.customerNo,
     fullName: row.fullName,
@@ -352,11 +399,11 @@ function toCustomerResponse(row: CustomerRow): CustomerResponse {
     status: row.status,
     holdReason: row.holdReason,
     outstanding: row.outstanding,
-    npwp: row.npwp,
-    ktp: row.ktp,
     consentAt: row.consentAt ? row.consentAt.toISOString() : null,
     resellerName: row.resellerName,
     connection: row.connection ?? null,
     joinedAt: row.createdAt.toISOString(),
   };
+  if (opts.includeKyc === false) return base;
+  return { ...base, npwp: row.npwp, ktp: row.ktp };
 }

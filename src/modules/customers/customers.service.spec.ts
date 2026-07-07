@@ -123,6 +123,100 @@ describe('CustomersService', () => {
     });
   });
 
+  // ADR-0010 amendment / ADR-0015 (SEC-4): a mitra reads the KYC-safe
+  // projection — npwp/ktp omitted entirely, not merely null — on both the
+  // list and the detail surface. Admin/staff (and internal callers with no
+  // user) are unaffected.
+  describe('KYC-safe projection for mitra (ADR-0010 amendment / ADR-0015, SEC-4)', () => {
+    const mitra = {
+      id: 'u-1',
+      email: 'mitra@example.com',
+      fullName: 'Mira Mitra',
+      role: 'mitra' as const,
+      resellerId: '00000000-0000-0000-0000-0000000000r1',
+    };
+    const kycRow: CustomerRow = {
+      ...sampleRow,
+      resellerId: mitra.resellerId,
+      npwp: '01.234.567.8-901.000',
+      ktp: '3201xxxxxxxxxxxx',
+    };
+
+    describe('list', () => {
+      it('tells the repository to exclude KYC columns for a mitra', async () => {
+        repo.list.mockResolvedValue({ items: [], total: 0 });
+        await service.list({ limit: 50, offset: 0 }, mitra);
+        expect(repo.list).toHaveBeenCalledWith(expect.objectContaining({ excludeKyc: true }));
+      });
+
+      it('omits npwp/ktp keys entirely from a mitra list response', async () => {
+        repo.list.mockResolvedValue({ items: [kycRow], total: 1 });
+        const result = await service.list({ limit: 50, offset: 0 }, mitra);
+        expect(result.items[0]).not.toHaveProperty('npwp');
+        expect(result.items[0]).not.toHaveProperty('ktp');
+      });
+
+      it('does not set excludeKyc for staff/admin reads', async () => {
+        repo.list.mockResolvedValue({ items: [], total: 0 });
+        await service.list({ limit: 50, offset: 0 }, { ...mitra, role: 'staff' });
+        expect(repo.list).toHaveBeenCalledWith(
+          expect.not.objectContaining({ excludeKyc: expect.anything() }),
+        );
+      });
+
+      it('staff still receive npwp/ktp in the list response', async () => {
+        repo.list.mockResolvedValue({ items: [kycRow], total: 1 });
+        const result = await service.list({ limit: 50, offset: 0 }, { ...mitra, role: 'staff' });
+        expect(result.items[0]?.npwp).toBe(kycRow.npwp);
+        expect(result.items[0]?.ktp).toBe(kycRow.ktp);
+      });
+    });
+
+    describe('findById', () => {
+      it('asks the repository to exclude KYC columns for a mitra', async () => {
+        repo.findById.mockResolvedValue(kycRow);
+        await service.findById(kycRow.id, mitra);
+        expect(repo.findById).toHaveBeenCalledWith(kycRow.id, { excludeKyc: true });
+      });
+
+      it('omits npwp/ktp keys entirely from a mitra detail response', async () => {
+        repo.findById.mockResolvedValue(kycRow);
+        const result = await service.findById(kycRow.id, mitra);
+        expect(result).not.toHaveProperty('npwp');
+        expect(result).not.toHaveProperty('ktp');
+      });
+
+      it('admin/staff (and no-user internal callers) still get npwp/ktp', async () => {
+        repo.findById.mockResolvedValue(kycRow);
+        const asStaff = await service.findById(kycRow.id, { ...mitra, role: 'staff' });
+        expect(asStaff.npwp).toBe(kycRow.npwp);
+        expect(asStaff.ktp).toBe(kycRow.ktp);
+
+        const noUser = await service.findById(kycRow.id);
+        expect(noUser.npwp).toBe(kycRow.npwp);
+        expect(noUser.ktp).toBe(kycRow.ktp);
+        expect(repo.findById).toHaveBeenLastCalledWith(kycRow.id, { excludeKyc: false });
+      });
+
+      it('a mitra cannot read another reseller customer by id (scoping regression guard, 404)', async () => {
+        repo.findById.mockResolvedValue({ ...kycRow, resellerId: 'someone-elses-reseller' });
+        await expect(service.findById(kycRow.id, mitra)).rejects.toBeInstanceOf(NotFoundException);
+      });
+
+      it('a mitra with no linked reseller cannot read any customer by id (404)', async () => {
+        repo.findById.mockResolvedValue({ ...kycRow, resellerId: null });
+        await expect(
+          service.findById(kycRow.id, { ...mitra, resellerId: null }),
+        ).rejects.toBeInstanceOf(NotFoundException);
+      });
+
+      it('a mitra CAN read their own reseller customer by id', async () => {
+        repo.findById.mockResolvedValue(kycRow);
+        await expect(service.findById(kycRow.id, mitra)).resolves.toMatchObject({ id: kycRow.id });
+      });
+    });
+  });
+
   describe('resolveForPortal', () => {
     const session = { id: '00000000-0000-0000-0000-0000000000u1', email: 'budi@example.com' };
 
