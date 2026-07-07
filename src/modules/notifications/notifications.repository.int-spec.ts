@@ -12,7 +12,8 @@ import { NotificationsRepository } from './notifications.repository';
 
 /**
  * Real Postgres integration test for NotificationsRepository. Requires Docker.
- * Schema applied by hand (mirroring migration 0015).
+ * Schema applied by hand (mirroring migration 0015, extended by 0047 for the
+ * wo_scheduled/wo_done events).
  */
 describe('NotificationsRepository (integration)', () => {
   let container: StartedPostgreSqlContainer;
@@ -31,7 +32,7 @@ describe('NotificationsRepository (integration)', () => {
     db = drizzle(pool, { schema });
 
     await db.execute(`
-      CREATE TYPE notification_event AS ENUM ('invoice_created', 'due_soon', 'overdue', 'isolir', 'paid', 'ticket_update');
+      CREATE TYPE notification_event AS ENUM ('invoice_created', 'due_soon', 'overdue', 'isolir', 'paid', 'ticket_update', 'wo_scheduled', 'wo_done');
       CREATE TYPE notification_status AS ENUM ('sent', 'failed');
       CREATE TABLE notification_templates (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

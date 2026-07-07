@@ -5,6 +5,7 @@ import type { WorkOrder } from '../../infrastructure/database/schema/work-orders
 import { CustomersRepository } from '../customers/customers.repository';
 import { InventoryService } from '../inventory/inventory.service';
 import { InvoicesService } from '../invoices/invoices.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { ProfilesRepository } from '../router-resources/profiles.repository';
 import { SecretsRepository } from '../router-resources/secrets.repository';
 import { RoutersRepository } from '../routers/routers.repository';
@@ -53,6 +54,7 @@ const customerRow = {
   customerNo: 'CUST-9001',
   fullName: 'Budi Santoso',
   planName: 'Home 20',
+  phone: '0812000001',
 };
 
 // Completion evidence columns when no field-completion body was submitted
@@ -78,6 +80,7 @@ describe('WorkOrdersService', () => {
   let profiles: { listByRouter: ReturnType<typeof vi.fn> };
   let secrets: { create: ReturnType<typeof vi.fn> };
   let tickets: { resolveFromWorkOrder: ReturnType<typeof vi.fn> };
+  let notifications: { enqueue: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     repo = {
@@ -113,6 +116,7 @@ describe('WorkOrdersService', () => {
     };
     secrets = { create: vi.fn() };
     tickets = { resolveFromWorkOrder: vi.fn() };
+    notifications = { enqueue: vi.fn() };
 
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
@@ -125,6 +129,7 @@ describe('WorkOrdersService', () => {
         { provide: ProfilesRepository, useValue: profiles },
         { provide: SecretsRepository, useValue: secrets },
         { provide: TicketsService, useValue: tickets },
+        { provide: NotificationsService, useValue: notifications },
       ],
     }).compile();
     service = moduleRef.get(WorkOrdersService);
@@ -539,6 +544,199 @@ describe('WorkOrdersService', () => {
         scheduledAt,
       });
       expect(result.type).toBe('install');
+    });
+  });
+
+  describe('scheduleInstall (lead conversion)', () => {
+    it('creates a scheduled install order linked to the new subscriber', async () => {
+      repo.create.mockResolvedValue(installWo);
+      const result = await service.scheduleInstall({
+        customerId: CUSTOMER_ID,
+        customerName: 'Budi Santoso',
+      });
+      expect(repo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'install',
+          customerId: CUSTOMER_ID,
+          customerName: 'Budi Santoso',
+          technician: null,
+        }),
+      );
+      expect(result.type).toBe('install');
+    });
+  });
+
+  describe('notifications — wo_scheduled', () => {
+    it('enqueues wo_scheduled when an install is scheduled from onboarding', async () => {
+      repo.create.mockResolvedValue(installWo);
+      customers.findById.mockResolvedValue(customerRow);
+      const scheduledAt = new Date('2026-06-20T00:00:00.000Z');
+
+      await service.scheduleInstallForCustomer({
+        customerId: CUSTOMER_ID,
+        customerName: 'Budi Santoso',
+        technician: 'Teknisi Andi',
+        scheduledAt,
+      });
+
+      expect(notifications.enqueue).toHaveBeenCalledWith(
+        {
+          event: 'wo_scheduled',
+          to: '0812000001',
+          vars: {
+            nama: 'Budi Santoso',
+            tipe: 'instalasi',
+            kode: installWo.code,
+            jadwal: installWo.scheduledAt.toISOString(),
+          },
+        },
+        `wo_scheduled:${installWo.id}:${installWo.scheduledAt.toISOString()}`,
+      );
+    });
+
+    it('enqueues wo_scheduled when an install is scheduled from a converted lead', async () => {
+      repo.create.mockResolvedValue(installWo);
+      customers.findById.mockResolvedValue(customerRow);
+
+      await service.scheduleInstall({ customerId: CUSTOMER_ID, customerName: 'Budi Santoso' });
+
+      expect(notifications.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'wo_scheduled', to: '0812000001' }),
+        `wo_scheduled:${installWo.id}:${installWo.scheduledAt.toISOString()}`,
+      );
+    });
+
+    it('enqueues wo_scheduled when a repair is dispatched from a ticket with a linked customer', async () => {
+      repo.create.mockResolvedValue(repairWo);
+      customers.findById.mockResolvedValue(customerRow);
+
+      await service.createFromTicket({
+        ticketId: '00000000-0000-0000-0000-0000000000t1',
+        customerId: CUSTOMER_ID,
+        customerName: 'Budi Santoso',
+      });
+
+      expect(notifications.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'wo_scheduled',
+          to: '0812000001',
+          vars: expect.objectContaining({ tipe: 'perbaikan' }),
+        }),
+        `wo_scheduled:${repairWo.id}:${repairWo.scheduledAt.toISOString()}`,
+      );
+    });
+
+    it('skips wo_scheduled for a repair dispatched with no linked customer', async () => {
+      repo.create.mockResolvedValue({ ...repairWo, customerId: null });
+
+      await service.createFromTicket({
+        ticketId: '00000000-0000-0000-0000-0000000000t1',
+        customerId: null,
+        customerName: 'Belum ada subscriber',
+      });
+
+      expect(customers.findById).not.toHaveBeenCalled();
+      expect(notifications.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('skips wo_scheduled when the linked customer has no phone', async () => {
+      repo.create.mockResolvedValue(installWo);
+      customers.findById.mockResolvedValue({ ...customerRow, phone: null });
+
+      await service.scheduleInstall({ customerId: CUSTOMER_ID, customerName: 'Budi Santoso' });
+
+      expect(notifications.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('enqueues a fresh wo_scheduled (new jobId) on reschedule', async () => {
+      const scheduled = { ...installWo, status: 'scheduled' as const };
+      const newScheduledAt = new Date('2026-07-01T09:00:00.000Z');
+      repo.findById.mockResolvedValue(scheduled);
+      repo.patch.mockResolvedValue({ ...scheduled, scheduledAt: newScheduledAt });
+      customers.findById.mockResolvedValue(customerRow);
+
+      await service.reschedule(installWo.id, newScheduledAt);
+
+      expect(notifications.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'wo_scheduled' }),
+        `wo_scheduled:${installWo.id}:${newScheduledAt.toISOString()}`,
+      );
+    });
+
+    // Best-effort (matches the resilience of the #109 emits): a queue outage
+    // must never fail the WO write that already committed.
+    it('does not fail scheduleInstall when the notification enqueue rejects', async () => {
+      repo.create.mockResolvedValue(installWo);
+      customers.findById.mockResolvedValue(customerRow);
+      notifications.enqueue.mockRejectedValue(new Error('queue down'));
+
+      const result = await service.scheduleInstall({
+        customerId: CUSTOMER_ID,
+        customerName: 'Budi Santoso',
+      });
+
+      expect(result.type).toBe('install');
+    });
+  });
+
+  describe('notifications — wo_done', () => {
+    it('enqueues wo_done when a work order is completed', async () => {
+      repo.findById.mockResolvedValue(installWo);
+      customers.findById.mockResolvedValue(customerRow);
+      const done = {
+        ...installWo,
+        status: 'done' as const,
+        completedAt: new Date('2026-06-16T12:30:00.000Z'),
+        completedBy: AUTHOR,
+      };
+      repo.markDone.mockResolvedValue(done);
+
+      await service.complete(installWo.id, AUTHOR);
+
+      expect(notifications.enqueue).toHaveBeenCalledWith(
+        {
+          event: 'wo_done',
+          to: '0812000001',
+          vars: {
+            nama: 'Budi Santoso',
+            tipe: 'instalasi',
+            kode: done.code,
+            selesai: done.completedAt.toISOString(),
+          },
+        },
+        `wo_done:${installWo.id}`,
+      );
+    });
+
+    it('does not re-emit wo_done for an already-done order (idempotent)', async () => {
+      repo.findById.mockResolvedValue({ ...installWo, status: 'done' });
+
+      await service.complete(installWo.id, AUTHOR);
+
+      expect(notifications.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('skips wo_done when the linked customer has no phone', async () => {
+      repo.findById.mockResolvedValue(repairWo);
+      customers.findById.mockResolvedValue({ ...customerRow, phone: null });
+      repo.markDone.mockResolvedValue({ ...repairWo, status: 'done' });
+
+      await service.complete(repairWo.id, AUTHOR);
+
+      expect(notifications.enqueue).not.toHaveBeenCalled();
+    });
+
+    // Best-effort (matches the resilience of the #109 emits): a queue outage
+    // must never fail the completion that already committed.
+    it('does not fail complete() when the notification enqueue rejects', async () => {
+      repo.findById.mockResolvedValue(installWo);
+      customers.findById.mockResolvedValue(customerRow);
+      repo.markDone.mockResolvedValue({ ...installWo, status: 'done' });
+      notifications.enqueue.mockRejectedValue(new Error('queue down'));
+
+      const result = await service.complete(installWo.id, AUTHOR);
+
+      expect(result.status).toBe('done');
     });
   });
 

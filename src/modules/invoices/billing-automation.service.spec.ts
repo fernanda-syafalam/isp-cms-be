@@ -176,6 +176,22 @@ describe('BillingAutomationService', () => {
       expect(repo.markRemindedOverdue).toHaveBeenCalled();
       expect(result.reminded).toBe(5);
     });
+
+    // C1 follow-up (PR #109 review): dispatchDunning was the one notification
+    // emit NOT wrapped best-effort — a queue outage must never abort dunning.
+    it('does not fail the reminder run when the notification enqueue rejects (best-effort)', async () => {
+      repo.markRemindedOverdue.mockResolvedValue(1);
+      repo.customerIdsWithOverdue.mockResolvedValue(['c1']);
+      customers.findById.mockResolvedValue({ id: 'c1', phone: '0812', fullName: 'Budi' });
+      repo.sumUnpaidByCustomer.mockResolvedValue(247_000);
+      notifications.enqueue.mockRejectedValue(new Error('queue down'));
+
+      const result = await service.remind({});
+
+      // The reminder marking still completes even though the WhatsApp
+      // notice failed to enqueue.
+      expect(result).toEqual({ reminded: 1, channel: 'whatsapp' });
+    });
   });
 
   it('schedulerPreview counts to-bill (active without current invoice), dunning + isolir', async () => {
@@ -198,6 +214,32 @@ describe('BillingAutomationService', () => {
     repo.customerIdsWithOverdue.mockResolvedValue([]);
 
     const result = await service.schedulerRun();
+    expect(result).toEqual({
+      period: '2026-06',
+      created: 7,
+      remindedUpcoming: 3,
+      remindedOverdue: 2,
+      isolated: 0,
+    });
+  });
+
+  // C1 follow-up: a dunning queue outage must never abort the rest of the
+  // scheduled run — the invoices already created by invoices.run() (and the
+  // overdue/reminded marks) must still be reported back.
+  it('schedulerRun still completes (invoices created, marks recorded) when every dunning enqueue rejects', async () => {
+    invoicesService.run.mockResolvedValue({ period: '2026-06', created: 7 });
+    repo.markOverduePastDue.mockResolvedValue(2);
+    repo.markRemindedDueSoon.mockResolvedValue(3);
+    repo.markRemindedOverdue.mockResolvedValue(2);
+    repo.customerIdsWithOverdue.mockResolvedValue(['c1']);
+    repo.customerIdsWithPendingDueSoon.mockResolvedValue(['c2']);
+    customers.findById.mockResolvedValue({ id: 'c1', phone: '0812', fullName: 'Budi' });
+    repo.sumUnpaidByCustomer.mockResolvedValue(100_000);
+    notifications.enqueue.mockRejectedValue(new Error('queue down'));
+
+    const result = await service.schedulerRun();
+
+    expect(invoicesService.run).toHaveBeenCalledTimes(1);
     expect(result).toEqual({
       period: '2026-06',
       created: 7,

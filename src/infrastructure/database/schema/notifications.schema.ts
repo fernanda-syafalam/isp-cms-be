@@ -7,6 +7,8 @@ export const notificationEvent = pgEnum('notification_event', [
   'isolir',
   'paid',
   'ticket_update',
+  'wo_scheduled',
+  'wo_done',
 ]);
 export const notificationStatus = pgEnum('notification_status', ['sent', 'failed']);
 

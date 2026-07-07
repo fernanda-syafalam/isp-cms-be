@@ -330,6 +330,13 @@
       "when": 1783413302376,
       "tag": "0046_lovely_microchip",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1783415859318,
+      "tag": "0047_add_wo_notification_events",
+      "breakpoints": true
     }
   ]
 }
