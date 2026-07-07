@@ -36,6 +36,10 @@ export const CustomerResponseSchema = z.object({
   // Why the customer is held (P3.A.3): overdue vs voluntary (cuti); null when not held.
   holdReason: z.enum(['overdue', 'voluntary']).nullable(),
   outstanding: z.number().int().nonnegative(),
+  // Per-customer billing/due-date anchor day-of-month (1..28, P3.A.4). Null
+  // falls back to the global SettingsService dueDays policy. Included for
+  // every role — this is billing config, not KYC (ADR-0011 parity).
+  billingAnchorDay: z.number().int().min(1).max(28).nullable(),
   // Optional (not just nullable): a mitra's KYC-safe projection (ADR-0010
   // amendment / ADR-0015, SEC-4) omits these keys entirely rather than
   // sending them as null — admin/staff responses always include them.

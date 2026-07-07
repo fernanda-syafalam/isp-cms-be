@@ -46,11 +46,17 @@ export class BranchResponseDto extends createZodDto(BranchResponseSchema) {}
  * - branches: total branch count.
  * - customers: sum of customer_count across all branches.
  * - mrr: sum of mrr across all branches (whole IDR).
+ * - byStatus: per-status counts over ALL branches (FE status filter tabs,
+ *   ADR-0011 parity) — every status key always present, zero-filled.
  */
 export const BranchSummarySchema = z.object({
   branches: z.number().int().nonnegative(),
   customers: z.number().int().nonnegative(),
   mrr: z.number().int().nonnegative(),
+  byStatus: z.object({
+    active: z.number().int().nonnegative(),
+    inactive: z.number().int().nonnegative(),
+  }),
 });
 
 export type BranchSummaryResponse = z.infer<typeof BranchSummarySchema>;

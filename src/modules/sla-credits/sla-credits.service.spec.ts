@@ -24,9 +24,11 @@ const credit: SlaCredit = {
 
 // Default full-set summary returned by the mock repo
 const defaultSummary = {
+  total: 6,
   activeAmount: 150_000,
   pending: 3,
   applied: 2,
+  void: 1,
 };
 
 describe('SlaCreditsService', () => {
@@ -131,15 +133,26 @@ describe('SlaCreditsService', () => {
 
     it('summary activeAmount excludes void credits', async () => {
       const summaryWithVoid = {
+        total: 2,
         activeAmount: 50_000, // only non-void credits counted
         pending: 1,
         applied: 0,
+        void: 1,
       };
       repo.list.mockResolvedValue({ items: [], total: 0, summary: summaryWithVoid });
       const result = await service.list({ limit: 50, offset: 0 });
       expect(result.summary.activeAmount).toBe(50_000);
       expect(result.summary.pending).toBe(1);
       expect(result.summary.applied).toBe(0);
+    });
+
+    // ADR-0011 parity: total/void are passthrough from the repository's
+    // grouped-filter aggregate — the service must not recompute or drop them.
+    it('summary.total and summary.void pass through unchanged', async () => {
+      repo.list.mockResolvedValue({ items: [], total: 0, summary: defaultSummary });
+      const result = await service.list({ limit: 50, offset: 0 });
+      expect(result.summary.total).toBe(6);
+      expect(result.summary.void).toBe(1);
     });
   });
 

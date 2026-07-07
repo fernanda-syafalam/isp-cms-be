@@ -56,6 +56,7 @@ describe('Portal self-care (e2e)', () => {
     status: 'aktif',
     holdReason: null,
     outstanding: 0,
+    billingAnchorDay: null,
     npwp: null,
     ktp: null,
     consentAt: null,

@@ -135,6 +135,7 @@ describe('BranchesRepository (integration)', () => {
     expect(result.summary.branches).toBe(2); // full-set
     expect(result.summary.customers).toBe(150); // full-set sum
     expect(result.summary.mrr).toBe(15_000_000); // full-set sum
+    expect(result.summary.byStatus).toEqual({ active: 1, inactive: 1 }); // full-set, zero-filled
   });
 
   it('summary customers and mrr coalesce to 0 on an empty table', async () => {
@@ -143,6 +144,17 @@ describe('BranchesRepository (integration)', () => {
     expect(result.summary.branches).toBe(0);
     expect(result.summary.customers).toBe(0);
     expect(result.summary.mrr).toBe(0);
+    expect(result.summary.byStatus).toEqual({ active: 0, inactive: 0 });
+  });
+
+  it('summary.byStatus counts every branch regardless of the status/q filter', async () => {
+    await repo.create(newBranch({ name: 'Cabang Satu', status: 'active' }));
+    await repo.create(newBranch({ name: 'Cabang Dua', status: 'active' }));
+    await repo.create(newBranch({ name: 'Cabang Tiga', status: 'inactive' }));
+
+    const filtered = await repo.list({ status: 'active', q: 'Satu', limit: 50, offset: 0 });
+    expect(filtered.total).toBe(1); // filtered count
+    expect(filtered.summary.byStatus).toEqual({ active: 2, inactive: 1 }); // full-set
   });
 
   it('updates fields and rejects a missing branch', async () => {

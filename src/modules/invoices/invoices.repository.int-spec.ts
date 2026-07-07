@@ -232,11 +232,39 @@ describe('InvoicesRepository (integration)', () => {
       expect(filtered.summary.outstanding).toBe(all.summary.outstanding);
       expect(filtered.summary.overdue).toBe(all.summary.overdue);
       expect(filtered.summary.unpaidCount).toBe(all.summary.unpaidCount);
+      expect(filtered.summary.byStatus).toEqual(all.summary.byStatus);
     });
 
     it('summary is zero when no invoices exist', async () => {
       const result = await repo.list({ limit: 50, offset: 0 });
-      expect(result.summary).toEqual({ total: 0, outstanding: 0, overdue: 0, unpaidCount: 0 });
+      expect(result.summary).toEqual({
+        total: 0,
+        outstanding: 0,
+        overdue: 0,
+        unpaidCount: 0,
+        byStatus: { paid: 0, partial: 0, pending: 0, overdue: 0, draft: 0 },
+      });
+    });
+
+    // ADR-0011 parity: FE status filter tabs need a per-status count over
+    // the FULL set, independent of the status filter applied to `items`.
+    it('summary.byStatus counts every invoice regardless of the status filter, zero-filled', async () => {
+      await repo.create(newInvoice({ periodStart: '2026-06-01', status: 'pending' }));
+      await repo.create(
+        newInvoice({ periodStart: '2026-07-01', status: 'overdue', lateFee: 25_000 }),
+      );
+      await repo.create(newInvoice({ periodStart: '2026-08-01', status: 'paid' }));
+      await repo.create(newInvoice({ periodStart: '2026-09-01', status: 'paid' }));
+
+      const filtered = await repo.list({ status: 'paid', limit: 50, offset: 0 });
+      expect(filtered.total).toBe(2); // filtered count
+      expect(filtered.summary.byStatus).toEqual({
+        paid: 2,
+        partial: 0,
+        pending: 1,
+        overdue: 1,
+        draft: 0,
+      });
     });
   });
 

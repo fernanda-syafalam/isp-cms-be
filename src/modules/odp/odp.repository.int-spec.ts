@@ -63,6 +63,49 @@ describe('OdpRepository (integration)', () => {
     expect(summary.totalOdp).toBe(12);
     expect(summary.utilization).toBeGreaterThanOrEqual(0);
     expect(summary.utilization).toBeLessThanOrEqual(100);
+    // available + full must cover every ODP (each is one or the other).
+    expect(summary.available + summary.full).toBe(summary.totalOdp);
+  });
+
+  it('summary.available counts ODP with a free port, regardless of the view/q filter', async () => {
+    await db.insert(odpRecords).values([
+      {
+        id: 'odp-a',
+        name: 'ODP-A',
+        area: 'Jepara',
+        splitter: '1:8',
+        totalPorts: 8,
+        usedPorts: 2, // has a free port
+        avgRxPowerDbm: -18,
+        status: 'healthy',
+      },
+      {
+        id: 'odp-b',
+        name: 'ODP-B',
+        area: 'Jepara',
+        splitter: '1:8',
+        totalPorts: 8,
+        usedPorts: 8, // full, no free port
+        avgRxPowerDbm: -20,
+        status: 'healthy',
+      },
+      {
+        id: 'odp-c',
+        name: 'ODP-C',
+        area: 'Tahunan',
+        splitter: '1:16',
+        totalPorts: 16,
+        usedPorts: 10, // has a free port
+        avgRxPowerDbm: -22,
+        status: 'warning',
+      },
+    ] satisfies NewOdpRecord[]);
+
+    // Filter to view=full — items narrow to 1 row, but summary stays full-set.
+    const filtered = await repo.list({ view: 'full', limit: 100, offset: 0 });
+    expect(filtered.total).toBe(1); // filtered count
+    expect(filtered.summary.available).toBe(2); // full-set: ODP-A + ODP-C
+    expect(filtered.summary.full).toBe(1); // full-set: ODP-B
   });
 
   it('ensureSeeded is idempotent on the deterministic id/name', async () => {

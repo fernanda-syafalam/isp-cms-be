@@ -42,12 +42,22 @@ export class InvoiceResponseDto extends createZodDto(InvoiceResponseSchema) {}
  * - overdue: sum of grand total for invoices with status 'overdue' only.
  * - unpaidCount: count of invoices with status 'pending' OR 'overdue'.
  * - total: count of ALL invoices (every status).
+ * - byStatus: per-status counts over ALL invoices (drives the FE status
+ *   filter tabs, ADR-0011 parity) — every status key always present,
+ *   zero-filled.
  */
 export const InvoiceSummarySchema = z.object({
   outstanding: z.number().int().nonnegative(),
   overdue: z.number().int().nonnegative(),
   unpaidCount: z.number().int().nonnegative(),
   total: z.number().int().nonnegative(),
+  byStatus: z.object({
+    paid: z.number().int().nonnegative(),
+    partial: z.number().int().nonnegative(),
+    pending: z.number().int().nonnegative(),
+    overdue: z.number().int().nonnegative(),
+    draft: z.number().int().nonnegative(),
+  }),
 });
 
 export type InvoiceSummary = z.infer<typeof InvoiceSummarySchema>;

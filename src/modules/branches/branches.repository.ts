@@ -21,6 +21,10 @@ export interface BranchSummary {
   branches: number;
   customers: number;
   mrr: number;
+  byStatus: {
+    active: number;
+    inactive: number;
+  };
 }
 
 type BranchPatch = Partial<Pick<NewBranch, 'name' | 'city' | 'manager' | 'phone' | 'status'>>;
@@ -87,6 +91,8 @@ export class BranchesRepository {
         branchCount: count(),
         customers: sql<string>`coalesce(${sum(branches.customerCount)}, 0)`,
         mrr: sql<string>`coalesce(${sum(branches.mrr)}, 0)`,
+        active: sql<number>`count(*) filter (where ${branches.status} = 'active')`,
+        inactive: sql<number>`count(*) filter (where ${branches.status} = 'inactive')`,
       })
       .from(branches);
 
@@ -94,6 +100,10 @@ export class BranchesRepository {
       branches: summaryRow?.branchCount ?? 0,
       customers: Number(summaryRow?.customers ?? 0),
       mrr: Number(summaryRow?.mrr ?? 0),
+      byStatus: {
+        active: Number(summaryRow?.active ?? 0),
+        inactive: Number(summaryRow?.inactive ?? 0),
+      },
     };
 
     return { items, total: totals?.value ?? 0, summary };

@@ -92,6 +92,7 @@ export class OdpRepository {
         totalOdp: count(),
         sumUsed: sql<number>`coalesce(sum(${odpRecords.usedPorts}), 0)`,
         sumTotal: sql<number>`coalesce(sum(${odpRecords.totalPorts}), 0)`,
+        available: sql<number>`count(*) filter (where ${odpRecords.totalPorts} - ${odpRecords.usedPorts} > 0)`,
         full: sql<number>`count(*) filter (where ${odpRecords.totalPorts} - ${odpRecords.usedPorts} = 0)`,
         optical: sql<number>`count(*) filter (where ${odpRecords.status} <> 'healthy')`,
       })
@@ -102,6 +103,7 @@ export class OdpRepository {
     const summary: OdpSummary = {
       totalOdp: summaryRow?.totalOdp ?? 0,
       utilization: sumTotal > 0 ? Math.round((sumUsed / sumTotal) * 100) : 0,
+      available: Number(summaryRow?.available ?? 0),
       full: Number(summaryRow?.full ?? 0),
       optical: Number(summaryRow?.optical ?? 0),
     };

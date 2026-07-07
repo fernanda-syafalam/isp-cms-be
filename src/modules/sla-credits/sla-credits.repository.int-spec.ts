@@ -81,15 +81,30 @@ describe('SlaCreditsRepository (integration)', () => {
 
     // Summary is over all rows regardless of filters.
     // activeAmount = 50_000 (pending) + 30_000 (applied) = 80_000 (void excluded)
+    expect(all.summary.total).toBe(3);
     expect(all.summary.activeAmount).toBe(80_000);
     expect(all.summary.pending).toBe(1);
     expect(all.summary.applied).toBe(1);
+    expect(all.summary.void).toBe(1);
 
     // Paging: limit keeps items per page, but total + summary stay full-set
     const page = await repo.list({ limit: 1, offset: 0 });
     expect(page.items).toHaveLength(1);
     expect(page.total).toBe(3);
+    expect(page.summary.total).toBe(3);
     expect(page.summary.activeAmount).toBe(80_000);
+    expect(page.summary.void).toBe(1);
+  });
+
+  it('summary is zero when no credits exist', async () => {
+    const result = await repo.list({ limit: 50, offset: 0 });
+    expect(result.summary).toEqual({
+      total: 0,
+      activeAmount: 0,
+      pending: 0,
+      applied: 0,
+      void: 0,
+    });
   });
 
   it('q search filters items and total by customerName or reason; summary is invariant', async () => {

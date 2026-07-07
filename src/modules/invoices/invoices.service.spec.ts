@@ -40,6 +40,7 @@ const defaultSummary = {
   overdue: 222_000,
   unpaidCount: 2,
   total: 5,
+  byStatus: { paid: 3, partial: 0, pending: 1, overdue: 1, draft: 0 },
 };
 
 describe('InvoicesService', () => {
@@ -210,12 +211,27 @@ describe('InvoicesService', () => {
         overdue: 400_000,
         unpaidCount: 3,
         total: 10,
+        byStatus: { paid: 6, partial: 1, pending: 1, overdue: 2, draft: 0 },
       };
       repo.list.mockResolvedValue({ items: [], total: 0, summary: summaryWithMix });
       const result = await service.list({ limit: 50, offset: 0 });
       expect(result.summary.outstanding).toBe(700_000);
       expect(result.summary.overdue).toBe(400_000);
       expect(result.summary.unpaidCount).toBe(3);
+    });
+
+    // ADR-0011 parity: byStatus is a passthrough from the repository's
+    // grouped-filter aggregate — the service must not recompute or drop it.
+    it('summary.byStatus passes through every status key from the repo, zero-filled', async () => {
+      repo.list.mockResolvedValue({ items: [], total: 0, summary: defaultSummary });
+      const result = await service.list({ limit: 50, offset: 0 });
+      expect(result.summary.byStatus).toEqual({
+        paid: 3,
+        partial: 0,
+        pending: 1,
+        overdue: 1,
+        draft: 0,
+      });
     });
   });
 

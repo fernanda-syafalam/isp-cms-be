@@ -34,7 +34,7 @@ const makeVoucherRow = (overrides: Partial<VoucherRow> = {}): VoucherRow => ({
 const voucher = makeVoucher();
 
 // Default full-set summary returned by the mock repo
-const defaultSummary = { total: 10, unused: 7, used: 2, revenue: 10_000 };
+const defaultSummary = { total: 10, unused: 7, used: 2, expired: 1, revenue: 10_000 };
 
 describe('VouchersService', () => {
   let service: VouchersService;
@@ -219,6 +219,7 @@ describe('VouchersService', () => {
       expect(result.summary.total).toBe(10);
       expect(result.summary.unused).toBe(7);
       expect(result.summary.used).toBe(2);
+      expect(result.summary.expired).toBe(1);
       expect(result.summary.revenue).toBe(10_000);
     });
 
@@ -274,12 +275,20 @@ describe('VouchersService', () => {
 
     it('revenue sums only used vouchers priceIdr in summary', async () => {
       // Three vouchers: 2 used at 5_000 + 10_000, 1 unused at 3_000
-      const summaryWithRevenue = { total: 3, unused: 1, used: 2, revenue: 15_000 };
+      const summaryWithRevenue = { total: 3, unused: 1, used: 2, expired: 0, revenue: 15_000 };
       repo.list.mockResolvedValue({ items: [], total: 0, summary: summaryWithRevenue });
       const result = await service.list({ limit: 50, offset: 0 });
       expect(result.summary.revenue).toBe(15_000);
       expect(result.summary.used).toBe(2);
       expect(result.summary.unused).toBe(1);
+    });
+
+    // ADR-0011 parity: expired is a passthrough from the repository's
+    // grouped-filter aggregate — the service must not recompute or drop it.
+    it('summary.expired passes through unchanged', async () => {
+      repo.list.mockResolvedValue({ items: [], total: 0, summary: defaultSummary });
+      const result = await service.list({ limit: 50, offset: 0 });
+      expect(result.summary.expired).toBe(1);
     });
   });
 });

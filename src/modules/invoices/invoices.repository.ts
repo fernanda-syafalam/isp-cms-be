@@ -120,6 +120,13 @@ export class InvoicesRepository {
         unpaidCount: sql<number>`count(*) filter (where ${invoices.status} in ('pending', 'partial', 'overdue'))`,
         outstanding: sql<string>`coalesce(sum(case when ${invoices.status} in ('pending', 'partial', 'overdue') then ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount} else 0 end), 0)`,
         overdue: sql<string>`coalesce(sum(case when ${invoices.status} = 'overdue' then ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount} else 0 end), 0)`,
+        // Per-status counts (FE status filter tabs, ADR-0011 parity) — a
+        // single grouped-filter aggregate avoids 5 separate COUNT queries.
+        paidStatus: sql<number>`count(*) filter (where ${invoices.status} = 'paid')`,
+        partialStatus: sql<number>`count(*) filter (where ${invoices.status} = 'partial')`,
+        pendingStatus: sql<number>`count(*) filter (where ${invoices.status} = 'pending')`,
+        overdueStatus: sql<number>`count(*) filter (where ${invoices.status} = 'overdue')`,
+        draftStatus: sql<number>`count(*) filter (where ${invoices.status} = 'draft')`,
       })
       .from(invoices);
 
@@ -128,6 +135,13 @@ export class InvoicesRepository {
       unpaidCount: Number(summaryRow?.unpaidCount ?? 0),
       outstanding: Number(summaryRow?.outstanding ?? 0),
       overdue: Number(summaryRow?.overdue ?? 0),
+      byStatus: {
+        paid: Number(summaryRow?.paidStatus ?? 0),
+        partial: Number(summaryRow?.partialStatus ?? 0),
+        pending: Number(summaryRow?.pendingStatus ?? 0),
+        overdue: Number(summaryRow?.overdueStatus ?? 0),
+        draft: Number(summaryRow?.draftStatus ?? 0),
+      },
     };
 
     return { items, total: filteredCount?.value ?? 0, summary };
