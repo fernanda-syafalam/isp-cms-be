@@ -36,8 +36,11 @@ export const CustomerResponseSchema = z.object({
   // Why the customer is held (P3.A.3): overdue vs voluntary (cuti); null when not held.
   holdReason: z.enum(['overdue', 'voluntary']).nullable(),
   outstanding: z.number().int().nonnegative(),
-  npwp: z.string().nullable(),
-  ktp: z.string().nullable(),
+  // Optional (not just nullable): a mitra's KYC-safe projection (ADR-0010
+  // amendment / ADR-0015, SEC-4) omits these keys entirely rather than
+  // sending them as null — admin/staff responses always include them.
+  npwp: z.string().nullable().optional(),
+  ktp: z.string().nullable().optional(),
   consentAt: z.iso.datetime().nullable(),
   resellerName: z.string().nullable(),
   connection: ConnectionResponseSchema.nullable(),

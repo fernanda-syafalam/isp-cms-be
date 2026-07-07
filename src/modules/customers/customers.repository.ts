@@ -36,6 +36,11 @@ export interface CustomerListFilter {
   // Scope to one reseller's acquisitions — set server-side for mitra
   // principals (P1.5), never taken from client input for them.
   resellerId?: string;
+  // KYC-safe projection (ADR-0010 amendment, SEC-4): when true, npwp/ktp
+  // are never read off the real column — see baseSelectKycSafe(). Set
+  // server-side by CustomersService for mitra principals only; never
+  // taken from client input.
+  excludeKyc?: boolean;
   status?: Customer['status'];
   // Repeatable area filter: return customers whose areaName is IN this list
   // OR whose areaName IS NULL (unassigned customers are always visible).
@@ -97,6 +102,29 @@ export class CustomersRepository {
       .leftJoin(resellers, eq(customers.resellerId, resellers.id));
   }
 
+  // KYC-safe projection (ADR-0010 amendment / ADR-0015, SEC-4): npwp/ktp
+  // are replaced with a literal SQL NULL instead of the real column, so
+  // the identity values are never read out of Postgres for this query —
+  // not merely nulled after the fact in the response mapper. Used by
+  // list()/findById() only when the caller has been established as a
+  // mitra principal (CustomersService); every other read path
+  // (admin/staff, and the many internal cross-module callers of
+  // CustomersService.findById that never pass a user) keeps using
+  // baseSelect() above, unchanged.
+  private baseSelectKycSafe() {
+    return this.db
+      .select({
+        ...getTableColumns(customers),
+        planName: plans.name,
+        resellerName: resellers.name,
+        npwp: sql<string | null>`NULL`,
+        ktp: sql<string | null>`NULL`,
+      })
+      .from(customers)
+      .innerJoin(plans, eq(customers.planId, plans.id))
+      .leftJoin(resellers, eq(customers.resellerId, resellers.id));
+  }
+
   async list(
     filter: CustomerListFilter,
   ): Promise<{ items: CustomerRow[]; total: number; summary: CustomerSummary }> {
@@ -120,7 +148,7 @@ export class CustomersRepository {
       asc(customers.fullName),
     );
 
-    const items = await this.baseSelect()
+    const items = await (filter.excludeKyc ? this.baseSelectKycSafe() : this.baseSelect())
       .where(where)
       .orderBy(orderBy)
       .limit(filter.limit)
@@ -178,8 +206,16 @@ export class CustomersRepository {
     );
   }
 
-  async findById(id: string): Promise<CustomerRow | null> {
-    const [row] = await this.baseSelect().where(eq(customers.id, id)).limit(1);
+  // `excludeKyc` (ADR-0010 amendment / ADR-0015, SEC-4): pass `true` only
+  // from a caller that has already established the requester is a mitra
+  // principal — see baseSelectKycSafe(). Defaults to false (full row) so
+  // every existing internal caller (the many cross-module
+  // `CustomersService.findById(id)` call sites that pass no user) is
+  // unaffected.
+  async findById(id: string, opts: { excludeKyc?: boolean } = {}): Promise<CustomerRow | null> {
+    const [row] = await (opts.excludeKyc ? this.baseSelectKycSafe() : this.baseSelect())
+      .where(eq(customers.id, id))
+      .limit(1);
     return row ?? null;
   }
 

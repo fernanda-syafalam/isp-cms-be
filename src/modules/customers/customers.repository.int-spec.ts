@@ -340,6 +340,52 @@ describe('CustomersRepository (integration)', () => {
     expect(overdue.holdReason).toBe('overdue');
   });
 
+  // ---------------------------------------------------------------------------
+  // KYC-safe projection (ADR-0010 amendment / ADR-0015, SEC-4): the mitra
+  // read path replaces npwp/ktp with a real SQL NULL rather than reading the
+  // stored column value.
+  // ---------------------------------------------------------------------------
+
+  describe('KYC-safe projection', () => {
+    it('findById(excludeKyc: true) returns null npwp/ktp even though the row has values', async () => {
+      const created = await repo.create({
+        fullName: 'Budi',
+        phone: '0811',
+        address: 'Jl. A',
+        planId,
+      });
+      await repo.updateKyc(created.id, { ktp: '3201abc', npwp: '01.234.567.8-901.000' });
+
+      const full = await repo.findById(created.id);
+      expect(full?.ktp).toBe('3201abc');
+      expect(full?.npwp).toBe('01.234.567.8-901.000');
+
+      const safe = await repo.findById(created.id, { excludeKyc: true });
+      expect(safe?.ktp).toBeNull();
+      expect(safe?.npwp).toBeNull();
+      // Every other field is unaffected by the projection.
+      expect(safe?.fullName).toBe('Budi');
+    });
+
+    it('list({ excludeKyc: true }) returns null npwp/ktp for every row', async () => {
+      const created = await repo.create({
+        fullName: 'Ani',
+        phone: '0812',
+        address: 'Jl. B',
+        planId,
+      });
+      await repo.updateKyc(created.id, { ktp: '3202def', npwp: null });
+
+      const safe = await repo.list({ excludeKyc: true, limit: 50, offset: 0 });
+      expect(safe.items).toHaveLength(1);
+      expect(safe.items[0]?.ktp).toBeNull();
+      expect(safe.items[0]?.fullName).toBe('Ani');
+
+      const full = await repo.list({ limit: 50, offset: 0 });
+      expect(full.items[0]?.ktp).toBe('3202def');
+    });
+  });
+
   it('records consent and KYC', async () => {
     const created = await repo.create({
       fullName: 'Budi',
