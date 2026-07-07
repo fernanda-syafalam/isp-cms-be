@@ -73,10 +73,12 @@ export class AuthService {
   /**
    * `totpCode` is optional and only consulted once the password has
    * already checked out (Pilar: never leak "you'd need a 2FA code" to an
-   * attacker guessing passwords). ADR-0002 documents the two error
-   * markers this can throw: `totp_required` (2FA on, no/blank code sent —
-   * client should prompt) and `totp_invalid` (2FA on, code sent but
-   * wrong). No token is issued in either case.
+   * attacker guessing passwords). ADR-0002 documents the error markers
+   * this can throw: `totp_required` (2FA on, no/blank code sent — client
+   * should prompt), `totp_invalid` (2FA on, code sent but wrong), and
+   * `totp_locked` (F1 brute-force lockout — 5 consecutive failures blocks
+   * further attempts, correct code included, for ~15 minutes). No token
+   * is issued in any of the three cases.
    */
   async login(email: string, password: string, totpCode?: string): Promise<LoginResult> {
     const user = await this.usersRepo.findByEmail(email);
@@ -102,6 +104,12 @@ export class AuthService {
       throw new UnauthorizedException({
         message: 'invalid two-factor authentication code',
         code: 'totp_invalid',
+      });
+    }
+    if (challenge === 'locked') {
+      throw new UnauthorizedException({
+        message: 'too many failed two-factor attempts — try again later',
+        code: 'totp_locked',
       });
     }
 

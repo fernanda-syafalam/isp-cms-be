@@ -1,4 +1,5 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { type AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -34,7 +35,14 @@ export class SecurityController {
     return this.security.beginEnroll(user.id, user.email);
   }
 
-  /** Step 2/2 — verify the code from the authenticator app, flip the flag on. */
+  /**
+   * Step 2/2 — verify the code from the authenticator app, flip the flag
+   * on. F1: throttled tighter than the global default — this is the
+   * endpoint an attacker with a stolen-but-unconfirmed secret would
+   * brute force; also gated per-user by `TotpLockoutService` inside
+   * `SecurityService.confirmEnroll`.
+   */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Audit('security.2fa.confirm')
   @Post('2fa/confirm')
   @HttpCode(HttpStatus.OK)
@@ -43,6 +51,8 @@ export class SecurityController {
     return this.security.confirmEnroll(user.id, body.code);
   }
 
+  /** F1: same rationale as `confirm` above — this is the other endpoint that checks a TOTP code. */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Audit('security.2fa.disable')
   @Post('2fa/disable')
   @HttpCode(HttpStatus.OK)

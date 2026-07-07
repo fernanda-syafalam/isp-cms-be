@@ -109,6 +109,14 @@ describe('Two-factor authentication (e2e)', () => {
               return v;
             },
             del: async (k: string) => (store.delete(k) ? 1 : 0),
+            // TotpLockoutService (F1) — incr/expire back the per-user
+            // failed-attempt counter.
+            incr: async (k: string) => {
+              const v = Number(store.get(k) ?? '0') + 1;
+              store.set(k, String(v));
+              return v;
+            },
+            expire: async () => 1,
           };
         })(),
         ping: async () => true,
@@ -245,5 +253,38 @@ describe('Two-factor authentication (e2e)', () => {
     });
     expect(cancel.statusCode).toBe(200);
     expect((cancel.json() as { twoFactorEnabled: boolean }).twoFactorEnabled).toBe(false);
+  });
+
+  it('locks out /2fa/confirm after 5 consecutive wrong codes, blocking even the correct one (F1)', async () => {
+    const loginRes = await login();
+    const accessToken = (loginRes.json() as { accessToken: string }).accessToken;
+    const auth = { authorization: `Bearer ${accessToken}` };
+
+    const enroll = await app.inject({
+      method: 'POST',
+      url: '/v1/security/2fa/enroll',
+      headers: auth,
+    });
+    const { twoFactorSecret } = enroll.json() as { twoFactorSecret: string };
+
+    for (let i = 0; i < 5; i++) {
+      const wrong = await app.inject({
+        method: 'POST',
+        url: '/v1/security/2fa/confirm',
+        payload: { code: '000000' },
+        headers: { ...auth, 'content-type': 'application/json' },
+      });
+      expect(wrong.statusCode).toBe(401);
+    }
+
+    // The account is now locked — even the objectively correct code is rejected.
+    const lockedAttempt = await app.inject({
+      method: 'POST',
+      url: '/v1/security/2fa/confirm',
+      payload: { code: authenticator.generate(twoFactorSecret) },
+      headers: { ...auth, 'content-type': 'application/json' },
+    });
+    expect(lockedAttempt.statusCode).toBe(401);
+    expect(lockedAttempt.json()).toMatchObject({ code: 'totp_locked' });
   });
 });

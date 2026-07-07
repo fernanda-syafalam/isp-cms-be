@@ -138,6 +138,20 @@ describe('AuthService', () => {
         expect(refresh.mint).not.toHaveBeenCalled();
       });
 
+      it('rejects with totp_locked when the account is brute-force locked out (F1), even with a code', async () => {
+        repo.findByEmail.mockResolvedValue(user);
+        security.verifyLoginChallenge.mockResolvedValue('locked');
+
+        const err = await service.login(user.email, password, '123456').catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(UnauthorizedException);
+        expect((err as UnauthorizedException).getResponse()).toMatchObject({
+          code: 'totp_locked',
+        });
+        expect(jwt.signAsync).not.toHaveBeenCalled();
+        expect(refresh.mint).not.toHaveBeenCalled();
+      });
+
       it('issues tokens when the code checks out (verification itself is SecurityService.verifyLoginChallenge — mocked here)', async () => {
         repo.findByEmail.mockResolvedValue(user);
         security.verifyLoginChallenge.mockResolvedValue('ok');
