@@ -78,11 +78,14 @@ export class PortalController {
     return this.portal.createPayIntent(user, body);
   }
 
-  @Audit('portal.pay_intent.confirm')
-  @Post('pay-intent/:id/confirm')
+  // Status poll only (SEC-H1 interim fix, was `POST pay-intent/:id/confirm`):
+  // a customer may watch their own intent settle, but can never flip it —
+  // settlement is staff/admin-only (or, P4 future, a signed gateway
+  // webhook). See payment-intents.service.findForCustomer.
+  @Get('pay-intent/:id')
   @ZodSerializerDto(PaymentIntentResponseDto)
-  confirmPayIntent(@CurrentUser() user: AuthUser, @Param('id') id: string) {
-    return this.portal.confirmPayIntent(user, id);
+  getPayIntent(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.portal.getPayIntent(user, id);
   }
 
   // --- Self-care: usage / WiFi / announcements (P3.C.4) ---------------------

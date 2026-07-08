@@ -255,31 +255,33 @@ describe('PaymentIntentsService', () => {
       expect(repo.create).not.toHaveBeenCalled();
     });
 
-    it('confirmForCustomer settles the customer own intent', async () => {
-      repo.findById.mockResolvedValue(intentRow());
-      repo.markPaid.mockResolvedValue(intentRow({ status: 'paid', paidAt: new Date() }));
-      invoices.findById.mockResolvedValue(invoice({ customerId: OWNER_ID }));
-
-      const result = await service.confirmForCustomer(OWNER_ID, INTENT_ID);
-
-      expect(result.status).toBe('paid');
-      expect(invoices.pay).toHaveBeenCalledWith(INVOICE_ID, { method: 'qris' });
-    });
-
-    it('confirmForCustomer 404s on someone else intent without settling', async () => {
+    // findForCustomer (SEC-H1 interim fix): a customer may only poll the
+    // status of their own intent — settlement (`confirm`) is no longer
+    // reachable through any customer-scoped method at all.
+    it('findForCustomer returns the customer own intent without settling anything', async () => {
       repo.findById.mockResolvedValue(intentRow());
       invoices.findById.mockResolvedValue(invoice({ customerId: OWNER_ID }));
 
-      await expect(service.confirmForCustomer(STRANGER_ID, INTENT_ID)).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
+      const result = await service.findForCustomer(OWNER_ID, INTENT_ID);
+
+      expect(result.status).toBe('pending');
       expect(invoices.pay).not.toHaveBeenCalled();
       expect(repo.markPaid).not.toHaveBeenCalled();
     });
 
-    it('confirmForCustomer 404s on an unknown intent', async () => {
+    it('findForCustomer 404s on someone else intent', async () => {
+      repo.findById.mockResolvedValue(intentRow());
+      invoices.findById.mockResolvedValue(invoice({ customerId: OWNER_ID }));
+
+      await expect(service.findForCustomer(STRANGER_ID, INTENT_ID)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(invoices.pay).not.toHaveBeenCalled();
+    });
+
+    it('findForCustomer 404s on an unknown intent', async () => {
       repo.findById.mockResolvedValue(null);
-      await expect(service.confirmForCustomer(OWNER_ID, 'missing')).rejects.toBeInstanceOf(
+      await expect(service.findForCustomer(OWNER_ID, 'missing')).rejects.toBeInstanceOf(
         NotFoundException,
       );
     });
