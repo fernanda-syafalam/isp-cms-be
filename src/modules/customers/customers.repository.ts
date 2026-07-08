@@ -37,14 +37,16 @@ type DbTx = Parameters<Parameters<Db['transaction']>[0]>[0];
 // Statuses that still owe money — the exact same tuple
 // `InvoicesRepository` uses for `sumUnpaidByCustomer` / `UNPAID_STATUSES`.
 // Duplicated locally (not imported) so this money-critical transaction is
-// self-contained and auditable within this one file, same convention as
-// `InvoicesService.formatIdr` being deliberately duplicated rather than
-// shared across modules.
+// self-contained and auditable within this one file, unlike pure formatting
+// helpers (e.g. `formatIdr`), which are extracted to `src/common` since they
+// carry no cross-module coupling risk.
 const UNPAID_STATUSES = ['pending', 'partial', 'overdue'] as const;
 
-// A customer row joined with its plan's display name. planName is never
-// stored on the customer (single source of truth lives in plans).
-export type CustomerRow = Customer & { planName: string };
+// A customer row joined with its plan's display name and its reseller's
+// name. Neither is stored on the customer (single source of truth lives in
+// plans / resellers) — planName is NOT NULL (inner join, planId is
+// required), resellerName is nullable (left join, resellerId is optional).
+export type CustomerRow = Customer & { planName: string; resellerName: string | null };
 
 export interface CustomerListFilter {
   q?: string;
@@ -107,16 +109,15 @@ export class CustomersRepository {
   // Every read returns the customer columns plus the joined plan name.
   // planId is NOT NULL with an FK, so an inner join never drops a row.
   //
-  // resellerName is DERIVED here from resellers.name via a LEFT JOIN, not
-  // read from the stored customers.reseller_name column: no create/update
-  // path ever writes that column (M1 prod-only bug — mitra reads/KPIs key
-  // off resellerName and saw it permanently empty), and a stored copy would
-  // drift whenever a reseller is renamed anyway. The LEFT JOIN (not INNER)
+  // resellerName is DERIVED here from resellers.name via a LEFT JOIN — never
+  // read from a stored column (M1 prod-only bug: no create/update path ever
+  // wrote one, so mitra reads/KPIs keyed off resellerName saw it permanently
+  // empty, and a stored copy would drift whenever a reseller is renamed
+  // anyway). The dead `customers.reseller_name` column this replaced was
+  // dropped in the ARCH-7 cleanup once this join-based derivation was
+  // confirmed to be the only source of the value. The LEFT JOIN (not INNER)
   // is required so a customer with no reseller (reseller_id IS NULL) is
-  // still returned, with resellerName: null. The explicit `resellerName:
-  // resellers.name` key below overrides the stale spread column from
-  // getTableColumns(customers) — object literal key order means the later
-  // key wins.
+  // still returned, with resellerName: null.
   private baseSelect() {
     return this.db
       .select({ ...getTableColumns(customers), planName: plans.name, resellerName: resellers.name })

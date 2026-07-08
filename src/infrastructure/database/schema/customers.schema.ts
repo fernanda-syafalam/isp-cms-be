@@ -111,9 +111,6 @@ export const customers = pgTable(
       withTimezone: true,
       precision: 3,
     }),
-    // Transitional display string; resellerId (below) is the real link.
-    // Contract the string once every consumer reads through the FK.
-    resellerName: varchar('reseller_name', { length: 120 }),
     // Acquisition channel (ADR-0010): which reseller/mitra brought this
     // subscriber. Mitra reads are scoped to this server-side (P1.5).
     resellerId: uuid('reseller_id').references(() => resellers.id),

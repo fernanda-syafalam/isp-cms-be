@@ -100,6 +100,11 @@ src/
 └── main.ts                      # FastifyAdapter bootstrap
 ```
 
+A repository is the sole DB gate for its table. Cross-table writes inside
+one repository method are allowed **only** inside a single money-path
+settle/pay transaction (e.g. `VouchersRepository` settle, `InvoicesRepository`
+`recordPayment`, `CustomersRepository` proration) — never for ordinary CRUD.
+
 ## Common commands
 
 | Task        | Command                                       |

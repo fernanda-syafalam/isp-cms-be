@@ -351,6 +351,20 @@
       "when": 1783505344401,
       "tag": "0049_classy_satana",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1783510790796,
+      "tag": "0050_add_work_orders_technician_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1783510798337,
+      "tag": "0051_drop_customers_reseller_name",
+      "breakpoints": true
     }
   ]
 }

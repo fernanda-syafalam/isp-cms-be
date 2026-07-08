@@ -6,6 +6,7 @@ import {
   NotFoundException,
   forwardRef,
 } from '@nestjs/common';
+import { notifyBestEffort } from '../../common/notifications/notify-best-effort';
 import type { CustomerConnection } from '../../infrastructure/database/schema/customers.schema';
 import type { WorkOrder } from '../../infrastructure/database/schema/work-orders.schema';
 import { type CustomerRow, CustomersRepository } from '../customers/customers.repository';
@@ -319,7 +320,8 @@ export class WorkOrdersService {
    * committed.
    */
   private async notifyWoScheduled(wo: WorkOrder): Promise<void> {
-    await this.notifyBestEffort(
+    await notifyBestEffort(
+      this.logger,
       async () => {
         if (!wo.customerId) return;
         const customer = await this.customers.findById(wo.customerId);
@@ -349,7 +351,8 @@ export class WorkOrdersService {
    * no extra component is needed. Best-effort: see `notifyWoScheduled`.
    */
   private async notifyWoDone(wo: WorkOrder): Promise<void> {
-    await this.notifyBestEffort(
+    await notifyBestEffort(
+      this.logger,
       async () => {
         if (!wo.customerId) return;
         const customer = await this.customers.findById(wo.customerId);
@@ -370,20 +373,6 @@ export class WorkOrdersService {
       },
       { event: 'wo_done', workOrderId: wo.id },
     );
-  }
-
-  // A notification enqueue failure (e.g. Redis unavailable) must never break
-  // the WO write that already committed — log and swallow rather than
-  // rethrow. Mirrors `InvoicesService.notifyBestEffort` (ADR-0012).
-  private async notifyBestEffort(
-    fn: () => Promise<void>,
-    context: Record<string, unknown>,
-  ): Promise<void> {
-    try {
-      await fn();
-    } catch (err) {
-      this.logger.warn({ ...context, err }, 'notification enqueue failed');
-    }
   }
 }
 
