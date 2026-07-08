@@ -62,6 +62,7 @@ describe('CustomersService', () => {
       requestDataDeletion: vi.fn(),
       relocate: vi.fn(),
       setBilling: vi.fn(),
+      applyProration: vi.fn(),
     };
     plans = { findById: vi.fn() };
     notifications = { send: vi.fn() };
@@ -624,7 +625,16 @@ describe('CustomersService', () => {
     });
 
     describe('changePlan', () => {
-      it('adds the price delta to outstanding on an upgrade', async () => {
+      // Regression (outstanding-integrity fix): the price delta is now
+      // backed by a REAL invoice line via `CustomersRepository
+      // .applyProration` — never a hand-computed delta written straight
+      // onto `outstanding` (that was the silent-wipe bug: the next
+      // billing recompute would erase it since `outstanding` is a
+      // DERIVED column). `applyProration` itself is covered end-to-end
+      // in `customers.repository.int-spec.ts`; here we only assert the
+      // service calls it with the right delta/note, never touches
+      // `setBilling` for this path, and never hand-computes `outstanding`.
+      it('applies an upgrade as a proration CHARGE via applyProration', async () => {
         repo.findById.mockResolvedValue({ ...sampleRow, outstanding: 0, planId: PLAN_ID });
         plans.findById.mockImplementation((id: string) =>
           Promise.resolve(
@@ -634,16 +644,21 @@ describe('CustomersService', () => {
           ),
         );
         repo.updateProfile.mockResolvedValue(sampleRow);
-        repo.setBilling.mockResolvedValue(undefined);
+        repo.applyProration.mockResolvedValue(undefined);
 
         await service.changePlan(sampleRow.id, { planId: 'plan-new' });
 
         expect(repo.updateProfile).toHaveBeenCalledWith(sampleRow.id, { planId: 'plan-new' });
-        // delta 300k added to outstanding
-        expect(repo.setBilling).toHaveBeenCalledWith(sampleRow.id, { outstanding: 300_000 });
+        // delta 300k (500k - 200k), never a direct outstanding write.
+        expect(repo.applyProration).toHaveBeenCalledWith(sampleRow.id, {
+          delta: 300_000,
+          customerName: sampleRow.fullName,
+          note: expect.stringContaining('Home 20'),
+        });
+        expect(repo.setBilling).not.toHaveBeenCalled();
       });
 
-      it('does not touch outstanding on a downgrade', async () => {
+      it('applies a downgrade as a proration CREDIT via applyProration (negative delta)', async () => {
         repo.findById.mockResolvedValue({ ...sampleRow, outstanding: 0 });
         plans.findById.mockImplementation((id: string) =>
           Promise.resolve(
@@ -653,7 +668,28 @@ describe('CustomersService', () => {
           ),
         );
         repo.updateProfile.mockResolvedValue(sampleRow);
+        repo.applyProration.mockResolvedValue(undefined);
+
         await service.changePlan(sampleRow.id, { planId: 'plan-cheap' });
+
+        // delta -100k (100k - 200k) — applyProration itself turns this into
+        // a discount on the customer's oldest unpaid invoice.
+        expect(repo.applyProration).toHaveBeenCalledWith(sampleRow.id, {
+          delta: -100_000,
+          customerName: sampleRow.fullName,
+          note: expect.any(String),
+        });
+        expect(repo.setBilling).not.toHaveBeenCalled();
+      });
+
+      it('same-price plan change (delta 0) never calls applyProration', async () => {
+        repo.findById.mockResolvedValue({ ...sampleRow, outstanding: 0, planId: PLAN_ID });
+        plans.findById.mockResolvedValue({ id: PLAN_ID, name: 'Home 20', priceMonthly: 200_000 });
+        repo.updateProfile.mockResolvedValue(sampleRow);
+
+        await service.changePlan(sampleRow.id, { planId: PLAN_ID });
+
+        expect(repo.applyProration).not.toHaveBeenCalled();
         expect(repo.setBilling).not.toHaveBeenCalled();
       });
 

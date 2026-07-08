@@ -262,9 +262,13 @@ export class CustomersService {
   }
 
   /**
-   * Change the plan. planName re-derives from the join; an upgrade adds the
-   * monthly price delta to the outstanding balance (proration). A formal
-   * proration invoice line is a follow-up.
+   * Change the plan. planName re-derives from the join. An upgrade (delta
+   * > 0) or downgrade (delta < 0) prorates the monthly price difference —
+   * backed by a REAL invoice line via `CustomersRepository.applyProration`
+   * (a charge invoice for an upgrade, a discount on the oldest unpaid
+   * invoice for a downgrade), never a hand-computed delta on `outstanding`
+   * directly (that was the silent-wipe bug: the next billing recompute
+   * would erase it — see `applyProration`'s doc).
    */
   async changePlan(id: string, input: ChangePlanInput): Promise<CustomerResponse> {
     const customer = await this.requireById(id);
@@ -272,11 +276,15 @@ export class CustomersService {
     if (!newPlan) throw new BadRequestException('plan not found');
 
     const oldPlan = await this.plans.findById(customer.planId);
-    const delta = oldPlan ? Math.max(0, newPlan.priceMonthly - oldPlan.priceMonthly) : 0;
+    const delta = oldPlan ? newPlan.priceMonthly - oldPlan.priceMonthly : 0;
 
     await this.repo.updateProfile(id, { planId: input.planId });
-    if (delta > 0) {
-      await this.repo.setBilling(id, { outstanding: customer.outstanding + delta });
+    if (delta !== 0) {
+      await this.repo.applyProration(id, {
+        delta,
+        customerName: customer.fullName,
+        note: `Proration plan change: ${customer.planName} -> ${newPlan.name}`,
+      });
     }
     this.logger.log({ customerId: id, planId: input.planId, delta }, 'customer plan changed');
     return this.findById(id);

@@ -107,11 +107,13 @@ describe('VouchersRepository (integration)', () => {
       -- real, so (unlike the payments.invoice_id stub pattern elsewhere) this
       -- suite needs the whole table, not a minimal FK-target stub.
       CREATE TYPE invoice_status AS ENUM ('draft', 'pending', 'partial', 'overdue', 'paid');
+      CREATE TYPE invoice_type AS ENUM ('regular', 'adjustment');
       CREATE TABLE invoices (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         invoice_no varchar(32) NOT NULL UNIQUE,
         customer_id uuid NOT NULL REFERENCES customers(id),
         customer_name varchar(120) NOT NULL,
+        type invoice_type NOT NULL DEFAULT 'regular', note varchar(200),
         period_start date NOT NULL, period_end date NOT NULL,
         amount integer NOT NULL, late_fee integer NOT NULL DEFAULT 0,
         tax_amount integer NOT NULL DEFAULT 0, discount_amount integer NOT NULL DEFAULT 0,

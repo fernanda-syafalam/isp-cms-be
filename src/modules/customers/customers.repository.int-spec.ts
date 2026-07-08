@@ -1,11 +1,12 @@
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { type NodePgDatabase, drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import * as schema from '../../infrastructure/database/schema';
 import { customers } from '../../infrastructure/database/schema/customers.schema';
+import { invoices } from '../../infrastructure/database/schema/invoices.schema';
 import { plans } from '../../infrastructure/database/schema/plans.schema';
 import { resellers } from '../../infrastructure/database/schema/resellers.schema';
 import { CustomersRepository } from './customers.repository';
@@ -80,6 +81,31 @@ describe('CustomersRepository (integration)', () => {
       CREATE INDEX customers_full_name_idx ON customers (full_name);
       CREATE INDEX customers_plan_id_idx ON customers (plan_id);
       CREATE INDEX customers_reseller_id_idx ON customers (reseller_id);
+
+      -- Full invoices table — applyProration (outstanding-integrity fix)
+      -- reads/writes amount/lateFee/taxAmount/discountAmount/paidAmount/
+      -- status/type for real, so (unlike a minimal FK-target stub) this
+      -- suite needs the whole table.
+      CREATE TYPE invoice_status AS ENUM ('draft', 'pending', 'partial', 'overdue', 'paid');
+      CREATE TYPE invoice_type AS ENUM ('regular', 'adjustment');
+      CREATE SEQUENCE invoice_no_seq START WITH 100;
+      CREATE TABLE invoices (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        invoice_no varchar(32) NOT NULL UNIQUE
+          DEFAULT ('INV-' || to_char(now(), 'YYYY') || '-' || nextval('invoice_no_seq')),
+        customer_id uuid NOT NULL REFERENCES customers(id),
+        customer_name varchar(120) NOT NULL,
+        type invoice_type NOT NULL DEFAULT 'regular', note varchar(200),
+        period_start date NOT NULL, period_end date NOT NULL,
+        amount integer NOT NULL, late_fee integer NOT NULL DEFAULT 0,
+        tax_amount integer NOT NULL DEFAULT 0, discount_amount integer NOT NULL DEFAULT 0,
+        paid_amount integer NOT NULL DEFAULT 0, tax_invoice_no varchar(40),
+        status invoice_status NOT NULL DEFAULT 'pending', due_date date NOT NULL,
+        paid_at timestamptz(3), last_reminded_at timestamptz(3),
+        created_at timestamptz(3) NOT NULL DEFAULT now(),
+        updated_at timestamptz(3) NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX invoices_customer_period_idx ON invoices (customer_id, period_start) WHERE type = 'regular';
     `);
 
     const [plan] = await db
@@ -98,6 +124,7 @@ describe('CustomersRepository (integration)', () => {
   });
 
   beforeEach(async () => {
+    await db.delete(invoices);
     await db.delete(customers);
     await db.delete(resellers);
   });
@@ -650,6 +677,192 @@ describe('CustomersRepository (integration)', () => {
     const byId = new Map(counts.map((c) => [c.resellerId, c.count]));
     expect(byId.get(resellerA.id)).toBe(2);
     expect(byId.get(resellerB.id)).toBe(1);
+  });
+
+  // ---------------------------------------------------------------------------
+  // applyProration (outstanding-integrity fix): plan-change proration is now
+  // backed by a REAL invoice line, never a hand-computed delta on
+  // `outstanding` directly.
+  // ---------------------------------------------------------------------------
+
+  describe('applyProration', () => {
+    // The exact `sumUnpaidByCustomer` expression (InvoicesRepository) —
+    // duplicated here so the assertion is independent of any single
+    // repository's own bookkeeping: it proves the invoice ROWS themselves
+    // carry the balance, so ANY correct recompute reproduces the same
+    // number, not just `customers.outstanding` as currently persisted.
+    async function sumUnpaidRaw(customerId: string): Promise<number> {
+      const [row] = await db
+        .select({
+          total: sql<string>`coalesce(sum(${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount}), 0)`,
+        })
+        .from(invoices)
+        .where(
+          and(
+            eq(invoices.customerId, customerId),
+            inArray(invoices.status, ['pending', 'partial', 'overdue']),
+          ),
+        );
+      return Number(row?.total ?? 0);
+    }
+
+    it('upgrade (delta > 0) inserts an adjustment invoice charge and refreshes outstanding', async () => {
+      const customer = await repo.create({ fullName: 'Budi', phone: '08', address: 'Jl', planId });
+
+      await repo.applyProration(customer.id, {
+        delta: 100_000,
+        customerName: customer.fullName,
+        note: 'Proration plan change: Home 20 -> Home 50',
+      });
+
+      const [invoice] = await db
+        .select()
+        .from(invoices)
+        .where(eq(invoices.customerId, customer.id));
+      expect(invoice?.type).toBe('adjustment');
+      expect(invoice?.amount).toBe(100_000);
+      expect(invoice?.status).toBe('pending');
+      expect(invoice?.note).toBe('Proration plan change: Home 20 -> Home 50');
+
+      const updated = await repo.findById(customer.id);
+      expect(updated?.outstanding).toBe(100_000);
+    });
+
+    it('downgrade (delta < 0) discounts the oldest unpaid invoice and refreshes outstanding', async () => {
+      const customer = await repo.create({ fullName: 'Ani', phone: '08', address: 'Jl', planId });
+      await db.insert(invoices).values({
+        customerId: customer.id,
+        customerName: customer.fullName,
+        periodStart: '2026-06-01',
+        periodEnd: '2026-06-30',
+        amount: 200_000,
+        dueDate: '2026-06-10',
+        status: 'pending',
+      });
+      await db.update(customers).set({ outstanding: 200_000 }).where(eq(customers.id, customer.id));
+
+      await repo.applyProration(customer.id, {
+        delta: -50_000,
+        customerName: customer.fullName,
+        note: 'Proration plan change: Home 50 -> Home 20',
+      });
+
+      const [invoice] = await db
+        .select()
+        .from(invoices)
+        .where(eq(invoices.customerId, customer.id));
+      expect(invoice?.discountAmount).toBe(50_000);
+
+      const updated = await repo.findById(customer.id);
+      expect(updated?.outstanding).toBe(150_000);
+    });
+
+    it('downgrade credit exceeding the invoice balance is capped — balanceDue never goes negative', async () => {
+      const customer = await repo.create({ fullName: 'Citra', phone: '08', address: 'Jl', planId });
+      await db.insert(invoices).values({
+        customerId: customer.id,
+        customerName: customer.fullName,
+        periodStart: '2026-06-01',
+        periodEnd: '2026-06-30',
+        amount: 30_000,
+        dueDate: '2026-06-10',
+        status: 'pending',
+      });
+      await db.update(customers).set({ outstanding: 30_000 }).where(eq(customers.id, customer.id));
+
+      // Credit of 50k against a 30k invoice — only 30k can be absorbed.
+      await repo.applyProration(customer.id, {
+        delta: -50_000,
+        customerName: customer.fullName,
+        note: 'Proration credit',
+      });
+
+      const [invoice] = await db
+        .select()
+        .from(invoices)
+        .where(eq(invoices.customerId, customer.id));
+      expect(invoice?.discountAmount).toBe(30_000); // capped, not 50_000
+
+      const updated = await repo.findById(customer.id);
+      expect(updated?.outstanding).toBe(0); // never negative
+    });
+
+    it('downgrade credit with no unpaid invoice is a no-op — nothing to discount', async () => {
+      const customer = await repo.create({ fullName: 'Dedi', phone: '08', address: 'Jl', planId });
+
+      await repo.applyProration(customer.id, {
+        delta: -50_000,
+        customerName: customer.fullName,
+        note: 'Proration credit',
+      });
+
+      expect(await db.select().from(invoices).where(eq(invoices.customerId, customer.id))).toEqual(
+        [],
+      );
+      const updated = await repo.findById(customer.id);
+      expect(updated?.outstanding).toBe(0);
+    });
+
+    it('delta 0 is a total no-op', async () => {
+      const customer = await repo.create({ fullName: 'Eka', phone: '08', address: 'Jl', planId });
+      await repo.applyProration(customer.id, { delta: 0, customerName: 'Eka', note: 'x' });
+      expect(await db.select().from(invoices).where(eq(invoices.customerId, customer.id))).toEqual(
+        [],
+      );
+    });
+
+    // Regression for the silent-wipe bug: the adjustment is backed by a
+    // real invoice row, so re-deriving `outstanding` from
+    // `sumUnpaidByCustomer`'s exact expression — exactly what a SUBSEQUENT
+    // billing run / payment recompute does — reproduces the SAME number,
+    // never zero. Before this fix, `outstanding` was a bare in-memory delta
+    // with no backing row, so this recompute would have erased it.
+    it('regression: the proration charge survives a subsequent outstanding recompute', async () => {
+      const customer = await repo.create({ fullName: 'Fajar', phone: '08', address: 'Jl', planId });
+      await repo.applyProration(customer.id, {
+        delta: 75_000,
+        customerName: customer.fullName,
+        note: 'Proration',
+      });
+
+      const persisted = await repo.findById(customer.id);
+      expect(persisted?.outstanding).toBe(75_000);
+
+      // Simulate a later, independent recompute (what InvoicesService.run /
+      // recordPayment do) — it must reproduce the exact same figure, not
+      // wipe it, because the adjustment is a real invoice row.
+      const recomputed = await sumUnpaidRaw(customer.id);
+      expect(recomputed).toBe(75_000);
+    });
+
+    // Concurrency (mirrors the recordPayment / VouchersRepository.settle
+    // lock discipline): two concurrent proration writes against the SAME
+    // customer must both land — the customer-row FOR UPDATE lock
+    // serializes the read-recompute-write critical section so neither
+    // commit clobbers the other (the exact lost-update race the old
+    // hand-delta `setBilling` write was vulnerable to).
+    it('concurrency: two concurrent applyProration calls against the same customer never lose either delta', async () => {
+      const customer = await repo.create({ fullName: 'Gita', phone: '08', address: 'Jl', planId });
+
+      await Promise.all([
+        repo.applyProration(customer.id, {
+          delta: 40_000,
+          customerName: customer.fullName,
+          note: 'Upgrade A',
+        }),
+        repo.applyProration(customer.id, {
+          delta: 60_000,
+          customerName: customer.fullName,
+          note: 'Upgrade B',
+        }),
+      ]);
+
+      const rows = await db.select().from(invoices).where(eq(invoices.customerId, customer.id));
+      expect(rows).toHaveLength(2); // both adjustment invoices landed
+
+      const updated = await repo.findById(customer.id);
+      expect(updated?.outstanding).toBe(100_000); // 40k + 60k — neither lost
+    });
   });
 
   // Insert helper for the month-grouping aggregates (explicit timestamps).

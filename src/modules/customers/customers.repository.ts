@@ -16,16 +16,30 @@ import {
   sql,
 } from 'drizzle-orm';
 import { buildOrderBy } from '../../common/utils/list-sort';
-import { DrizzleService } from '../../infrastructure/database/drizzle.service';
+import { type Db, DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type Customer,
   type CustomerConnection,
   type NewCustomer,
   customers,
 } from '../../infrastructure/database/schema/customers.schema';
+import { invoices } from '../../infrastructure/database/schema/invoices.schema';
 import { plans } from '../../infrastructure/database/schema/plans.schema';
 import { resellers } from '../../infrastructure/database/schema/resellers.schema';
 import type { CustomerSummary } from './dto/customer-response.dto';
+
+// The transaction handle drizzle hands its callback — used to type
+// `applyProration`'s private write helpers without an `any` (mirrors
+// InvoicesRepository / VouchersRepository's identical local alias).
+type DbTx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
+// Statuses that still owe money — the exact same tuple
+// `InvoicesRepository` uses for `sumUnpaidByCustomer` / `UNPAID_STATUSES`.
+// Duplicated locally (not imported) so this money-critical transaction is
+// self-contained and auditable within this one file, same convention as
+// `InvoicesService.formatIdr` being deliberately duplicated rather than
+// shared across modules.
+const UNPAID_STATUSES = ['pending', 'partial', 'overdue'] as const;
 
 // A customer row joined with its plan's display name. planName is never
 // stored on the customer (single source of truth lives in plans).
@@ -294,6 +308,140 @@ export class CustomersRepository {
   async updateProfile(id: string, patch: ProfilePatch): Promise<CustomerRow> {
     const updated = await this.applyUpdate(id, { ...patch });
     return updated;
+  }
+
+  /**
+   * Apply a plan-change proration to a customer's balance via a REAL
+   * invoice line — never a hand-computed delta written straight onto
+   * `outstanding` (that was the silent-wipe bug: `outstanding` is a
+   * DERIVED column, recomputed from unpaid invoices on every billing event
+   * — see `InvoicesRepository.sumUnpaidByCustomer` — so a bare delta with
+   * no backing invoice row gets silently erased by the next recompute).
+   *
+   * `delta > 0` (upgrade): inserts a new `type: 'adjustment'` invoice for
+   * the delta — a real charge with its own balanceDue, due immediately
+   * (periodStart/periodEnd/dueDate = today). Its period is today's date,
+   * not the billing-cycle month, so it can never collide with the
+   * customer's regular monthly invoice under `invoices_customer_period_idx`
+   * — that index is now partial (`WHERE type = 'regular'`) precisely so
+   * adjustment lines are exempt from the one-invoice-per-period rule.
+   *
+   * `delta < 0` (downgrade): the credit is applied as a `discountAmount`
+   * bump on the customer's oldest unpaid invoice, capped at that invoice's
+   * own balance due — the same single-invoice, no-carry-over
+   * simplification `InvoicesService.resolveSlaDiscount` already uses at
+   * billing time (if the credit exceeds that one invoice's balance due,
+   * the excess is simply not applied to anything — there's nothing left to
+   * discount it against). No-op when the customer has no unpaid invoice.
+   *
+   * Either way, `customers.outstanding` is refreshed at the end from the
+   * exact same expression `sumUnpaidByCustomer` uses, in the SAME
+   * transaction — so the adjustment can never be wiped by a later
+   * recompute.
+   *
+   * This is the same deliberate "one repository per table" exception
+   * `InvoicesRepository.recordPayment` / `VouchersRepository.settle`
+   * document: `CustomersRepository` reaches into `invoices` directly so the
+   * adjustment line and the outstanding refresh share one transaction. The
+   * lock order is INVOICE (when the credit branch touches one) THEN
+   * CUSTOMER LAST, right before the recompute — the exact order
+   * `InvoicesRepository.recordPayment` / `refreshOutstandingTx` use — so a
+   * concurrent payment/credit against the same customer can only ever
+   * serialize on the shared customer-row lock, never deadlock against this
+   * method (neither side ever acquires an invoice lock AFTER a customer
+   * lock it already holds).
+   */
+  async applyProration(
+    id: string,
+    input: { delta: number; customerName: string; note: string },
+  ): Promise<void> {
+    if (input.delta === 0) return;
+    await this.db.transaction(async (tx) => {
+      if (input.delta > 0) {
+        const today = isoToday();
+        await tx.insert(invoices).values({
+          customerId: id,
+          customerName: input.customerName,
+          type: 'adjustment',
+          note: input.note,
+          periodStart: today,
+          periodEnd: today,
+          dueDate: today,
+          amount: input.delta,
+          status: 'pending',
+        });
+      } else {
+        await this.creditOldestUnpaidInvoiceTx(tx, id, Math.abs(input.delta));
+      }
+      await this.refreshOutstandingTx(tx, id);
+    });
+  }
+
+  /**
+   * Apply a credit to the customer's single oldest unpaid invoice (by due
+   * date), capped at that invoice's current balance due — see
+   * `applyProration`'s doc for why this never spreads across multiple
+   * invoices. `SELECT ... FOR UPDATE` locks the chosen invoice row so a
+   * concurrent payment/credit against it serializes instead of racing.
+   * No-op when the customer has no unpaid invoice, or its balance due is
+   * already zero.
+   */
+  private async creditOldestUnpaidInvoiceTx(
+    tx: DbTx,
+    customerId: string,
+    amount: number,
+  ): Promise<void> {
+    const [invoice] = await tx
+      .select()
+      .from(invoices)
+      .where(
+        and(eq(invoices.customerId, customerId), inArray(invoices.status, [...UNPAID_STATUSES])),
+      )
+      .orderBy(asc(invoices.dueDate))
+      .for('update')
+      .limit(1);
+    if (!invoice) return;
+
+    const total = invoice.amount + invoice.lateFee + invoice.taxAmount - invoice.discountAmount;
+    const balanceDue = total - invoice.paidAmount;
+    if (balanceDue <= 0) return;
+
+    const applied = Math.min(amount, balanceDue);
+    await tx
+      .update(invoices)
+      .set({ discountAmount: sql`${invoices.discountAmount} + ${applied}`, updatedAt: sql`now()` })
+      .where(eq(invoices.id, invoice.id));
+  }
+
+  /**
+   * Recompute `customers.outstanding` from the exact same expression
+   * `InvoicesRepository.sumUnpaidByCustomer` uses and persist it, inside
+   * the caller's transaction — mirrors
+   * `InvoicesRepository.refreshOutstandingTx`. The customer row is locked
+   * FOR UPDATE immediately before the recompute (the LAST lock this
+   * transaction takes) so a concurrent write following the same
+   * lock-then-recompute discipline can only serialize against this one,
+   * never deadlock.
+   */
+  private async refreshOutstandingTx(tx: DbTx, customerId: string): Promise<void> {
+    await tx
+      .select({ id: customers.id })
+      .from(customers)
+      .where(eq(customers.id, customerId))
+      .for('update')
+      .limit(1);
+    const [sumRow] = await tx
+      .select({
+        total: sql<string>`coalesce(sum(${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount}), 0)`,
+      })
+      .from(invoices)
+      .where(
+        and(eq(invoices.customerId, customerId), inArray(invoices.status, [...UNPAID_STATUSES])),
+      );
+    await tx
+      .update(customers)
+      .set({ outstanding: Number(sumRow?.total ?? 0), updatedAt: sql`now()` })
+      .where(eq(customers.id, customerId));
   }
 
   /** Move the customer: new address + service area. */
@@ -574,4 +722,13 @@ export class CustomersRepository {
     }
     return row;
   }
+}
+
+// Whole-day UTC 'YYYY-MM-DD' for the day a proration adjustment invoice is
+// raised on — mirrors `InvoicesService`'s local date helpers.
+function isoToday(): string {
+  const now = new Date();
+  const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(now.getUTCDate()).padStart(2, '0');
+  return `${now.getUTCFullYear()}-${mm}-${dd}`;
 }

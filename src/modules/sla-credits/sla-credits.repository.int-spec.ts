@@ -1,24 +1,32 @@
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { type NodePgDatabase, drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import * as schema from '../../infrastructure/database/schema';
+import { customers } from '../../infrastructure/database/schema/customers.schema';
+import { invoices } from '../../infrastructure/database/schema/invoices.schema';
+import { plans } from '../../infrastructure/database/schema/plans.schema';
 import { slaCredits } from '../../infrastructure/database/schema/sla-credits.schema';
 import { SlaCreditsRepository } from './sla-credits.repository';
 
 /**
  * Real Postgres integration test for SlaCreditsRepository. Requires Docker.
- * The customer_id / ticket_id FKs are left nullable in these tests, so only
- * the sla_credits table is created (mirroring migration 0010 minus the FKs,
- * which are exercised in the customers/tickets suites).
+ * `sla_credits.customer_id` / `ticket_id` are left as bare uuid (no FK, no
+ * NOT NULL) so most tests below can use arbitrary fake ids, mirroring
+ * migration 0010 minus those FKs. `customers` / `plans` / `invoices` ARE
+ * created for real (mirroring migrations 0002-0004, 0043, 0048), because
+ * `applyWithInvoiceCredit` (outstanding-integrity fix) reads/writes them for
+ * real — its own describe block below seeds an actual customer + invoice
+ * rather than a fake id.
  */
 describe('SlaCreditsRepository (integration)', () => {
   let container: StartedPostgreSqlContainer;
   let pool: Pool;
   let db: NodePgDatabase<typeof schema>;
   let repo: SlaCreditsRepository;
+  let planId: string;
 
   beforeAll(async () => {
     container = await new PostgreSqlContainer('postgres:16-alpine').start();
@@ -27,6 +35,51 @@ describe('SlaCreditsRepository (integration)', () => {
 
     await db.execute(`
       CREATE TYPE sla_credit_status AS ENUM ('pending', 'applied', 'void');
+      CREATE TYPE plan_status AS ENUM ('active', 'archived');
+      CREATE TABLE plans (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        name varchar(80) NOT NULL, speed_mbps integer NOT NULL,
+        price_monthly integer NOT NULL, status plan_status NOT NULL DEFAULT 'active',
+        created_at timestamptz(3) NOT NULL DEFAULT now(),
+        updated_at timestamptz(3) NOT NULL DEFAULT now()
+      );
+      CREATE TYPE customer_status AS ENUM ('prospek', 'instalasi', 'aktif', 'isolir', 'berhenti');
+      CREATE TYPE customer_hold_reason AS ENUM ('overdue', 'voluntary');
+      CREATE SEQUENCE customer_no_seq START WITH 9001;
+      CREATE TABLE customers (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        lat double precision, lng double precision, odp_id varchar(60), billing_anchor_day smallint,
+        customer_no varchar(32) NOT NULL UNIQUE DEFAULT ('CUST-' || nextval('customer_no_seq')),
+        full_name varchar(120) NOT NULL, phone varchar(20) NOT NULL, email varchar(255), user_id uuid UNIQUE,
+        address varchar(255) NOT NULL, area_id uuid, area_name varchar(120),
+        plan_id uuid NOT NULL REFERENCES plans(id),
+        status customer_status NOT NULL DEFAULT 'prospek', hold_reason customer_hold_reason,
+        outstanding integer NOT NULL DEFAULT 0, npwp varchar(40), ktp varchar(32),
+        consent_at timestamptz(3), data_deletion_requested_at timestamptz(3),
+        reseller_name varchar(120), reseller_id uuid, connection jsonb,
+        created_at timestamptz(3) NOT NULL DEFAULT now(),
+        updated_at timestamptz(3) NOT NULL DEFAULT now()
+      );
+      CREATE TYPE invoice_status AS ENUM ('draft', 'pending', 'partial', 'overdue', 'paid');
+      CREATE TYPE invoice_type AS ENUM ('regular', 'adjustment');
+      CREATE SEQUENCE invoice_no_seq START WITH 100;
+      CREATE TABLE invoices (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        invoice_no varchar(32) NOT NULL UNIQUE
+          DEFAULT ('INV-' || to_char(now(), 'YYYY') || '-' || nextval('invoice_no_seq')),
+        customer_id uuid NOT NULL REFERENCES customers(id),
+        customer_name varchar(120) NOT NULL,
+        type invoice_type NOT NULL DEFAULT 'regular', note varchar(200),
+        period_start date NOT NULL, period_end date NOT NULL,
+        amount integer NOT NULL, late_fee integer NOT NULL DEFAULT 0,
+        tax_amount integer NOT NULL DEFAULT 0, discount_amount integer NOT NULL DEFAULT 0,
+        paid_amount integer NOT NULL DEFAULT 0, tax_invoice_no varchar(40),
+        status invoice_status NOT NULL DEFAULT 'pending', due_date date NOT NULL,
+        paid_at timestamptz(3), last_reminded_at timestamptz(3),
+        created_at timestamptz(3) NOT NULL DEFAULT now(),
+        updated_at timestamptz(3) NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX invoices_customer_period_idx ON invoices (customer_id, period_start) WHERE type = 'regular';
       CREATE TABLE sla_credits (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
         customer_id uuid,
@@ -35,12 +88,20 @@ describe('SlaCreditsRepository (integration)', () => {
         reason varchar(200) NOT NULL,
         ticket_id uuid,
         ticket_code varchar(40),
-        status sla_credit_status NOT NULL DEFAULT 'pending', applied_invoice_id uuid,
+        status sla_credit_status NOT NULL DEFAULT 'pending',
+        applied_invoice_id uuid,
         applied_at timestamptz(3),
         created_at timestamptz(3) NOT NULL DEFAULT now(),
         updated_at timestamptz(3) NOT NULL DEFAULT now()
       );
     `);
+
+    const [plan] = await db
+      .insert(plans)
+      .values({ name: 'Home 20', speedMbps: 20, priceMonthly: 200_000 })
+      .returning();
+    if (!plan) throw new Error('plan seed failed');
+    planId = plan.id;
 
     repo = new SlaCreditsRepository({ db } as unknown as DrizzleService);
   }, 60_000);
@@ -52,6 +113,8 @@ describe('SlaCreditsRepository (integration)', () => {
 
   beforeEach(async () => {
     await db.delete(slaCredits);
+    await db.delete(invoices);
+    await db.delete(customers);
   });
 
   const newCredit = (over: Partial<typeof slaCredits.$inferInsert> = {}) => ({
@@ -244,6 +307,140 @@ describe('SlaCreditsRepository (integration)', () => {
       expect(count).toBe(0);
       const [row] = await db.select().from(slaCredits).where(eq(slaCredits.id, applied.id));
       expect(row?.appliedInvoiceId).toBeNull();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // applyWithInvoiceCredit (outstanding-integrity fix): a credit that resolves
+  // to a customer is now applied via a REAL discount line on a real invoice —
+  // never a hand-computed `outstanding - amount` write.
+  // ---------------------------------------------------------------------------
+
+  describe('applyWithInvoiceCredit', () => {
+    async function seedCustomerWithUnpaidInvoice(balance: number): Promise<string> {
+      const [customer] = await db
+        .insert(customers)
+        .values({ fullName: 'Budi', phone: '08', address: 'Jl', planId })
+        .returning();
+      if (!customer) throw new Error('customer seed failed');
+      await db.insert(invoices).values({
+        customerId: customer.id,
+        customerName: customer.fullName,
+        periodStart: '2026-06-01',
+        periodEnd: '2026-06-30',
+        amount: balance,
+        dueDate: '2026-06-10',
+        status: 'pending',
+      });
+      await db.update(customers).set({ outstanding: balance }).where(eq(customers.id, customer.id));
+      return customer.id;
+    }
+
+    it('deducts a real invoice discount line and refreshes outstanding', async () => {
+      const customerId = await seedCustomerWithUnpaidInvoice(200_000);
+      const credit = await repo.create(newCredit({ customerId, amount: 50_000 }));
+
+      const applied = await repo.applyWithInvoiceCredit(credit.id, customerId);
+      expect(applied.status).toBe('applied');
+      expect(applied.appliedAt).toBeInstanceOf(Date);
+      expect(applied.appliedInvoiceId).not.toBeNull();
+
+      const [invoice] = await db.select().from(invoices).where(eq(invoices.customerId, customerId));
+      expect(invoice?.discountAmount).toBe(50_000);
+      expect(applied.appliedInvoiceId).toBe(invoice?.id);
+
+      const [customer] = await db.select().from(customers).where(eq(customers.id, customerId));
+      expect(customer?.outstanding).toBe(150_000);
+    });
+
+    it('caps the discount at the invoice balance due — never a negative balance', async () => {
+      const customerId = await seedCustomerWithUnpaidInvoice(30_000);
+      const credit = await repo.create(newCredit({ customerId, amount: 50_000 }));
+
+      await repo.applyWithInvoiceCredit(credit.id, customerId);
+
+      const [invoice] = await db.select().from(invoices).where(eq(invoices.customerId, customerId));
+      expect(invoice?.discountAmount).toBe(30_000); // capped, not 50_000
+
+      const [customer] = await db.select().from(customers).where(eq(customers.id, customerId));
+      expect(customer?.outstanding).toBe(0);
+    });
+
+    it('transitions to applied with a null appliedInvoiceId when the customer has no unpaid invoice', async () => {
+      const [customer] = await db
+        .insert(customers)
+        .values({ fullName: 'Ani', phone: '08', address: 'Jl', planId })
+        .returning();
+      if (!customer) throw new Error('customer seed failed');
+      const credit = await repo.create(newCredit({ customerId: customer.id, amount: 50_000 }));
+
+      const applied = await repo.applyWithInvoiceCredit(credit.id, customer.id);
+      expect(applied.status).toBe('applied');
+      expect(applied.appliedInvoiceId).toBeNull();
+    });
+
+    it('is idempotent — re-applying an already-applied credit is a no-op', async () => {
+      const customerId = await seedCustomerWithUnpaidInvoice(200_000);
+      const credit = await repo.create(newCredit({ customerId, amount: 50_000 }));
+      await repo.applyWithInvoiceCredit(credit.id, customerId);
+
+      const second = await repo.applyWithInvoiceCredit(credit.id, customerId);
+      expect(second.status).toBe('applied');
+
+      // Discount was only ever applied once.
+      const [invoice] = await db.select().from(invoices).where(eq(invoices.customerId, customerId));
+      expect(invoice?.discountAmount).toBe(50_000);
+    });
+
+    // Regression for the silent-wipe bug: the credit is backed by a real
+    // discount line on a real invoice row, so re-deriving `outstanding` from
+    // `sumUnpaidByCustomer`'s exact expression — exactly what a SUBSEQUENT
+    // billing run / payment recompute does — reproduces the SAME number,
+    // never the pre-credit balance. Before this fix, the deduction was a
+    // bare in-memory delta with no backing row, so this recompute would
+    // have erased it.
+    it('regression: the credit survives a subsequent outstanding recompute', async () => {
+      const customerId = await seedCustomerWithUnpaidInvoice(200_000);
+      const credit = await repo.create(newCredit({ customerId, amount: 50_000 }));
+      await repo.applyWithInvoiceCredit(credit.id, customerId);
+
+      const [customer] = await db.select().from(customers).where(eq(customers.id, customerId));
+      expect(customer?.outstanding).toBe(150_000);
+
+      const [recomputed] = await db
+        .select({
+          total: sql<string>`coalesce(sum(${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount}), 0)`,
+        })
+        .from(invoices)
+        .where(
+          and(
+            eq(invoices.customerId, customerId),
+            inArray(invoices.status, ['pending', 'partial', 'overdue']),
+          ),
+        );
+      expect(Number(recomputed?.total ?? 0)).toBe(150_000);
+    });
+
+    // Concurrency (mirrors the recordPayment / CustomersRepository
+    // .applyProration lock discipline): two DIFFERENT pending credits for the
+    // SAME customer applied concurrently must both land against the invoice
+    // — the customer-row FOR UPDATE lock serializes the final recompute so
+    // neither commit clobbers the other.
+    it('concurrency: two concurrent applies for the same customer never lose either deduction', async () => {
+      const customerId = await seedCustomerWithUnpaidInvoice(200_000);
+      const creditA = await repo.create(newCredit({ customerId, amount: 40_000 }));
+      const creditB = await repo.create(newCredit({ customerId, amount: 60_000 }));
+
+      await Promise.all([
+        repo.applyWithInvoiceCredit(creditA.id, customerId),
+        repo.applyWithInvoiceCredit(creditB.id, customerId),
+      ]);
+
+      const [invoice] = await db.select().from(invoices).where(eq(invoices.customerId, customerId));
+      expect(invoice?.discountAmount).toBe(100_000); // 40k + 60k — neither lost
+
+      const [customer] = await db.select().from(customers).where(eq(customers.id, customerId));
+      expect(customer?.outstanding).toBe(100_000); // 200k - 100k
     });
   });
 });

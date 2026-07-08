@@ -43,6 +43,20 @@ export const paymentSource = pgEnum('payment_source', ['invoice', 'voucher']);
 // billing runs never collide.
 export const invoiceNoSeq = pgSequence('invoice_no_seq', { startWith: 100 });
 
+// regular: a normal billing-cycle invoice (`InvoicesService.run` /
+// `generateFirstInvoice`), one per customer per period_start — enforced by
+// the partial unique index below.
+// adjustment: a standalone money-adjustment line backing a plan-change
+// proration CHARGE (`CustomersRepository.applyProration`, delta > 0) that
+// has no natural billing period of its own — periodStart/periodEnd are the
+// day it was raised, not a billing month, so it is deliberately excluded
+// from the period-uniqueness invariant (a customer can get more than one
+// adjustment invoice on the same day). A proration/SLA CREDIT never creates
+// a row of this type — it is applied as a `discountAmount` bump on an
+// existing regular invoice instead (see `applyProration` /
+// `SlaCreditsRepository.apply`).
+export const invoiceType = pgEnum('invoice_type', ['regular', 'adjustment']);
+
 export const invoices = pgTable(
   'invoices',
   {
@@ -57,6 +71,10 @@ export const invoices = pgTable(
     // Snapshot of the customer name at issue time (denormalized on purpose
     // — a later rename must not rewrite history).
     customerName: varchar('customer_name', { length: 120 }).notNull(),
+    type: invoiceType('type').notNull().default('regular'),
+    // Human-readable reason for an 'adjustment' invoice (e.g. "Proration:
+    // Home 20 -> Home 50"). Null for every 'regular' invoice.
+    note: varchar('note', { length: 200 }),
     periodStart: date('period_start').notNull(),
     periodEnd: date('period_end').notNull(),
     // All money is whole IDR. amount = plan price (DPP); lateFee = denda;
@@ -85,10 +103,17 @@ export const invoices = pgTable(
   (t) => [
     index('invoices_customer_id_idx').on(t.customerId),
     index('invoices_status_idx').on(t.status),
-    // One invoice per customer per billing period — enforces the
-    // "no duplicate period" invariant at the DB, so a re-run of billing
-    // is naturally idempotent.
-    uniqueIndex('invoices_customer_period_idx').on(t.customerId, t.periodStart),
+    index('invoices_type_idx').on(t.type),
+    // One REGULAR invoice per customer per billing period — enforces the
+    // "no duplicate period" invariant at the DB, so a re-run of billing is
+    // naturally idempotent. Partial (`WHERE type = 'regular'`) so a
+    // proration 'adjustment' invoice — which shares a periodStart with
+    // whatever day it was raised on, not a billing month — never collides
+    // with the customer's regular invoice for that period, or with another
+    // adjustment invoice raised the same day.
+    uniqueIndex('invoices_customer_period_idx')
+      .on(t.customerId, t.periodStart)
+      .where(sql`${t.type} = 'regular'`),
   ],
 );
 
