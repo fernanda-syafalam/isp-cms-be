@@ -65,6 +65,10 @@ export class WorkOrdersService {
    *   3. provision a PPPoE secret on the default router,
    *   4. issue the first invoice.
    * Idempotent — a done order returns unchanged with no re-provisioning.
+   * The cascade itself is not wrapped in a transaction, so a retry after a
+   * mid-cascade failure (e.g. `generateFirstInvoice` throwing) re-enters
+   * every step; `provisionSecret` and `generateFirstInvoice` each guard on
+   * existing state so a retry never double-provisions.
    *
    * Each external step degrades gracefully: with no ONU in stock the
    * connection falls back to a synthetic serial; with no router/profile the
@@ -211,7 +215,24 @@ export class WorkOrdersService {
 
   // Create the subscriber's PPPoE secret on the default router, matching the
   // plan profile when present. Skipped (logged) when no router/profile exists.
+  //
+  // Idempotency guard: `complete()`'s install cascade is not wrapped in a
+  // transaction, so a retry (e.g. `generateFirstInvoice` throwing after this
+  // step already committed) re-enters this method for the same customer. A WO
+  // only reaches `done` — the one status `complete()` checks up front — after
+  // the whole cascade succeeds, so without this guard a retry would INSERT a
+  // second secret and double-increment the router's `secretCount`. Checking
+  // for an existing secret first makes the step safe to re-run.
   private async provisionSecret(customer: CustomerRow): Promise<void> {
+    const existing = await this.secrets.findByCustomerId(customer.id);
+    if (existing) {
+      this.logger.log(
+        { customerId: customer.id, secretId: existing.id },
+        'PPPoE secret already provisioned — skipping (cascade retry)',
+      );
+      return;
+    }
+
     const router = await this.routers.findFirst();
     if (!router) {
       this.logger.warn({ customerId: customer.id }, 'no router — skipping PPPoE secret');

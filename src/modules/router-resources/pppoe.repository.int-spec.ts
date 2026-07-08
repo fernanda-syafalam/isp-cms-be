@@ -4,6 +4,8 @@ import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import * as schema from '../../infrastructure/database/schema';
+import { customers } from '../../infrastructure/database/schema/customers.schema';
+import { plans } from '../../infrastructure/database/schema/plans.schema';
 import { pppSecrets } from '../../infrastructure/database/schema/pppoe.schema';
 import { routers } from '../../infrastructure/database/schema/routers.schema';
 import { ProfilesRepository } from './profiles.repository';
@@ -21,6 +23,7 @@ describe('PPPoE repositories (integration)', () => {
   let secretsRepo: SecretsRepository;
   let routerId: string;
   let profileId: string;
+  let customerId: string;
 
   beforeAll(async () => {
     container = await new PostgreSqlContainer('postgres:16-alpine').start();
@@ -96,6 +99,18 @@ describe('PPPoE repositories (integration)', () => {
 
     const profile = await profilesRepo.create({ routerId, name: 'Home20', rateLimit: '20M/20M' });
     profileId = profile.id;
+
+    const [plan] = await db
+      .insert(plans)
+      .values({ name: 'Home20', speedMbps: 20, priceMonthly: 200_000 })
+      .returning();
+    if (!plan) throw new Error('plan seed failed');
+    const [customer] = await db
+      .insert(customers)
+      .values({ fullName: 'Budi', phone: '0811', address: 'Jl. A', planId: plan.id })
+      .returning();
+    if (!customer) throw new Error('customer seed failed');
+    customerId = customer.id;
   }, 60_000);
 
   afterAll(async () => {
@@ -141,5 +156,28 @@ describe('PPPoE repositories (integration)', () => {
     await secretsRepo.remove(created.id);
     expect(await secretsRepo.findById(created.id)).toBeNull();
     await expect(secretsRepo.remove('00000000-0000-0000-0000-0000000000ff')).rejects.toThrow();
+  });
+
+  // Backs the install-cascade idempotency guard in WorkOrdersService: a
+  // retry of complete() must see the secret created on a prior attempt and
+  // skip re-provisioning instead of inserting a duplicate.
+  it('findByCustomerId: null when unprovisioned, the row once created', async () => {
+    expect(await secretsRepo.findByCustomerId(customerId)).toBeNull();
+
+    const created = await secretsRepo.create({
+      routerId,
+      username: 'cust9001',
+      profileId,
+      profileName: 'Home20',
+      customerId,
+      customerName: 'Budi',
+    });
+
+    const found = await secretsRepo.findByCustomerId(customerId);
+    expect(found?.id).toBe(created.id);
+
+    // A retry that only reads must not have inserted a second row.
+    const list = await secretsRepo.listByRouter(routerId);
+    expect(list.total).toBe(1);
   });
 });

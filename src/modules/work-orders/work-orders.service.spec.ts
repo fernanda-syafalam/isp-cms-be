@@ -78,7 +78,7 @@ describe('WorkOrdersService', () => {
   let inventory: Record<string, ReturnType<typeof vi.fn>>;
   let routers: Record<string, ReturnType<typeof vi.fn>>;
   let profiles: { listByRouter: ReturnType<typeof vi.fn> };
-  let secrets: { create: ReturnType<typeof vi.fn> };
+  let secrets: { create: ReturnType<typeof vi.fn>; findByCustomerId: ReturnType<typeof vi.fn> };
   let tickets: { resolveFromWorkOrder: ReturnType<typeof vi.fn> };
   let notifications: { enqueue: ReturnType<typeof vi.fn> };
 
@@ -114,7 +114,9 @@ describe('WorkOrdersService', () => {
         total: 1,
       }),
     };
-    secrets = { create: vi.fn() };
+    // No secret provisioned yet by default — the happy-path cascade inserts
+    // one. Retry-idempotency tests override this to an already-existing row.
+    secrets = { create: vi.fn(), findByCustomerId: vi.fn().mockResolvedValue(null) };
     tickets = { resolveFromWorkOrder: vi.fn() };
     notifications = { enqueue: vi.fn() };
 
@@ -292,6 +294,56 @@ describe('WorkOrdersService', () => {
       await service.complete(repairWo.id, AUTHOR);
 
       expect(tickets.resolveFromWorkOrder).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('complete — install cascade retry idempotency', () => {
+    // Simulates a retry of complete() after a mid-cascade failure (e.g.
+    // generateFirstInvoice throwing on the first attempt, after the PPPoE
+    // secret already committed). The WO only reaches `done` once the whole
+    // cascade succeeds, so the top-level early-return on wo.status==='done'
+    // does not protect this case — provisionSecret must guard itself.
+    it('does not duplicate the PPPoE secret or double-count the router when provisionSecret runs twice for the same customer', async () => {
+      repo.findById.mockResolvedValue(installWo);
+      customers.findById.mockResolvedValue(customerRow);
+      repo.markDone.mockResolvedValue({ ...installWo, status: 'done' });
+
+      // First attempt: no secret exists yet — cascade provisions one.
+      secrets.findByCustomerId.mockResolvedValueOnce(null);
+      await service.complete(installWo.id, AUTHOR);
+      expect(secrets.create).toHaveBeenCalledTimes(1);
+      expect(routers.adjustSecretCount).toHaveBeenCalledTimes(1);
+
+      // Retry (e.g. invoice generation threw after the secret committed, and
+      // the WO is still not 'done' so complete() re-enters the cascade):
+      // findByCustomerId now reports the secret created on the first attempt.
+      secrets.findByCustomerId.mockResolvedValueOnce({
+        id: 'sec-1',
+        customerId: CUSTOMER_ID,
+      });
+      await service.complete(installWo.id, AUTHOR);
+
+      // No second insert, no second increment — exactly once each.
+      expect(secrets.create).toHaveBeenCalledTimes(1);
+      expect(routers.adjustSecretCount).toHaveBeenCalledTimes(1);
+      // The rest of the cascade still re-runs on retry (activation + billing
+      // are independently idempotent — see invoices.service.spec.ts).
+      expect(invoices.generateFirstInvoice).toHaveBeenCalledTimes(2);
+    });
+
+    it('skips insert and adjustSecretCount when a secret already exists for the customer', async () => {
+      repo.findById.mockResolvedValue(installWo);
+      customers.findById.mockResolvedValue(customerRow);
+      repo.markDone.mockResolvedValue({ ...installWo, status: 'done' });
+      secrets.findByCustomerId.mockResolvedValue({ id: 'sec-existing', customerId: CUSTOMER_ID });
+
+      await service.complete(installWo.id, AUTHOR);
+
+      expect(secrets.create).not.toHaveBeenCalled();
+      expect(routers.adjustSecretCount).not.toHaveBeenCalled();
+      // The rest of the cascade is unaffected.
+      expect(customers.markInstalled).toHaveBeenCalledTimes(1);
+      expect(invoices.generateFirstInvoice).toHaveBeenCalledWith(CUSTOMER_ID);
     });
   });
 
