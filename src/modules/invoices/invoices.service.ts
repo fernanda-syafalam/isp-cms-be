@@ -5,6 +5,8 @@ import {
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
+import { notifyBestEffort } from '../../common/notifications/notify-best-effort';
+import { formatIdr } from '../../common/utils/format-idr';
 import type { Invoice, Payment } from '../../infrastructure/database/schema/invoices.schema';
 import { CustomersRepository } from '../customers/customers.repository';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -320,7 +322,8 @@ export class InvoicesService {
    * never fail a billing run (see `notifyBestEffort`).
    */
   private async notifyInvoiceCreated(invoice: Invoice): Promise<void> {
-    await this.notifyBestEffort(
+    await notifyBestEffort(
+      this.logger,
       async () => {
         const customer = await this.customers.findById(invoice.customerId);
         if (!customer?.phone) return;
@@ -352,7 +355,8 @@ export class InvoicesService {
    * idempotency. Best-effort: see `notifyBestEffort`.
    */
   private async notifyPaid(invoice: Invoice, total: number): Promise<void> {
-    await this.notifyBestEffort(
+    await notifyBestEffort(
+      this.logger,
       async () => {
         const customer = await this.customers.findById(invoice.customerId);
         if (!customer?.phone) return;
@@ -372,33 +376,10 @@ export class InvoicesService {
       { event: 'paid', invoiceId: invoice.id },
     );
   }
-
-  // A notification enqueue failure (e.g. Redis unavailable) must never
-  // break the billing/payment write that already committed — log and
-  // swallow rather than rethrow. Mirrors the same best-effort resilience
-  // BillingAutomationService applies to dispatchDunning/notifyIsolir
-  // (ADR-0012).
-  private async notifyBestEffort(
-    fn: () => Promise<void>,
-    context: Record<string, unknown>,
-  ): Promise<void> {
-    try {
-      await fn();
-    } catch (err) {
-      this.logger.warn({ ...context, err }, 'notification enqueue failed');
-    }
-  }
 }
 
 function ppnOf(amount: number, rate: number): number {
   return Math.round(amount * rate);
-}
-
-// Whole-rupiah formatting for notification template variables, e.g.
-// "Rp250.000". Duplicated from billing-automation.service.ts's identical
-// helper (same module, kept local rather than extracted — see PR notes).
-function formatIdr(amount: number): string {
-  return `Rp${amount.toLocaleString('id-ID')}`;
 }
 
 // --- date helpers (whole-day, UTC) ------------------------------------

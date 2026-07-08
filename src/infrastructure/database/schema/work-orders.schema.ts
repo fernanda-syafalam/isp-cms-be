@@ -75,6 +75,9 @@ export const workOrders = pgTable(
     index('work_orders_status_idx').on(t.status),
     index('work_orders_customer_id_idx').on(t.customerId),
     index('work_orders_ticket_id_idx').on(t.ticketId),
+    // Backs the teknisi "Tugas saya" filter, an exact-match lookup on this
+    // free-text column (ARCH-6).
+    index('work_orders_technician_idx').on(t.technician),
   ],
 );
 

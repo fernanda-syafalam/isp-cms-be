@@ -1,0 +1,1 @@
+CREATE INDEX "work_orders_technician_idx" ON "work_orders" USING btree ("technician");

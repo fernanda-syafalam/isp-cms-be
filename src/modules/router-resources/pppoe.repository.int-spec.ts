@@ -47,7 +47,7 @@ describe('PPPoE repositories (integration)', () => {
         plan_id uuid NOT NULL REFERENCES plans(id), status customer_status NOT NULL DEFAULT 'prospek', hold_reason customer_hold_reason,
         outstanding integer NOT NULL DEFAULT 0, npwp varchar(40), ktp varchar(32),
         consent_at timestamptz(3), data_deletion_requested_at timestamptz(3),
-        reseller_name varchar(120), reseller_id uuid, connection jsonb,
+        reseller_id uuid, connection jsonb,
         created_at timestamptz(3) NOT NULL DEFAULT now(), updated_at timestamptz(3) NOT NULL DEFAULT now()
       );
       CREATE TYPE router_status AS ENUM ('online', 'offline');

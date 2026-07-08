@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { formatIdr } from '../../common/utils/format-idr';
 import { CustomersRepository } from '../customers/customers.repository';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SecretEnforcementService } from '../router-resources/secret-enforcement.service';
@@ -192,9 +193,4 @@ function currentPeriodStart(): string {
   const now = new Date();
   const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
   return `${now.getUTCFullYear()}-${mm}-01`;
-}
-
-// Whole-rupiah formatting for dunning message variables, e.g. "Rp250.000".
-function formatIdr(amount: number): string {
-  return `Rp${amount.toLocaleString('id-ID')}`;
 }

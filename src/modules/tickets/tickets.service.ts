@@ -6,6 +6,7 @@ import {
   UnprocessableEntityException,
   forwardRef,
 } from '@nestjs/common';
+import { notifyBestEffort } from '../../common/notifications/notify-best-effort';
 import type { Ticket, TicketEvent } from '../../infrastructure/database/schema/tickets.schema';
 import { CustomersRepository } from '../customers/customers.repository';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -286,20 +287,23 @@ export class TicketsService {
     status: Ticket['status'],
   ): Promise<void> {
     if (!customerId) return;
-    try {
-      const customer = await this.customers.findById(customerId);
-      if (!customer?.phone) return;
-      await this.notifications.enqueue(
-        {
-          event: 'ticket_update',
-          to: customer.phone,
-          vars: { nama: customer.fullName },
-        },
-        `ticket_update:${ticketId}:${status}`,
-      );
-    } catch (err) {
-      this.logger.warn({ ticketId, status, err }, 'ticket_update notification enqueue failed');
-    }
+    await notifyBestEffort(
+      this.logger,
+      async () => {
+        const customer = await this.customers.findById(customerId);
+        if (!customer?.phone) return;
+        await this.notifications.enqueue(
+          {
+            event: 'ticket_update',
+            to: customer.phone,
+            vars: { nama: customer.fullName },
+          },
+          `ticket_update:${ticketId}:${status}`,
+        );
+      },
+      { ticketId, status },
+      'ticket_update notification enqueue failed',
+    );
   }
 }
 
