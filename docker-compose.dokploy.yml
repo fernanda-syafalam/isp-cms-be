@@ -1,0 +1,102 @@
+# Dokploy deployment compose for isp-cms-be.
+#
+# Deploy this as a Dokploy "Compose" application (NOT the local
+# docker-compose.yml — that one only spins up Postgres/Redis for local
+# dev). Postgres and Redis here are Dokploy *managed* databases; their
+# internal connection strings are injected as environment variables
+# (DATABASE_URL / REDIS_URL) via the Dokploy UI — see
+# docs/DEPLOYMENT-DOKPLOY.md.
+#
+# Three workloads share ONE image (built once on the `api` service):
+#   - migrate : one-shot `node dist/migrate.js`, runs pending Drizzle
+#               migrations, then exits 0. The pipeline gate (Pilar 8).
+#   - api     : the HTTP server (`dist/main.js`, port 3000). Exposed to
+#               the internet through Dokploy's Traefik.
+#   - worker  : the BullMQ consumer (`dist/worker.js`). Internal only.
+#
+# api and worker WAIT for migrate to finish successfully, so every
+# deploy applies migrations before new code serves traffic.
+
+# Environment shared by all three workloads. Values come from the
+# Dokploy environment settings (compose interpolates ${VAR}); the full
+# list and how to generate secrets is in .env.dokploy.example.
+x-app-env: &app-env
+  NODE_ENV: production
+  PORT: "3000"
+  DATABASE_URL: ${DATABASE_URL}
+  DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
+  REDIS_URL: ${REDIS_URL}
+  JWT_SECRET: ${JWT_SECRET}
+  JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-15m}
+  REFRESH_TOKEN_TTL_SECONDS: ${REFRESH_TOKEN_TTL_SECONDS:-604800}
+  TWOFA_ENC_KEY: ${TWOFA_ENC_KEY}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  THROTTLER_TTL_MS: ${THROTTLER_TTL_MS:-60000}
+  THROTTLER_LIMIT: ${THROTTLER_LIMIT:-100}
+  # Cross-site cookie: FE (app.*) and BE (api.*) are different origins,
+  # so the refresh cookie needs SameSite=None + Secure (HTTPS via Traefik).
+  CORS_ORIGINS: ${CORS_ORIGINS}
+  COOKIE_SECURE: ${COOKIE_SECURE:-true}
+  COOKIE_SAMESITE: ${COOKIE_SAMESITE:-none}
+  OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-isp-cms-be}
+  SERVICE_VERSION: ${SERVICE_VERSION:-0.0.0}
+  ROUTEROS_MODE: ${ROUTEROS_MODE:-simulation}
+
+services:
+  migrate:
+    image: isp-cms-be:dokploy
+    command: ["dist/migrate.js"]
+    restart: "no"
+    environment: *app-env
+    networks:
+      - dokploy-network
+
+  api:
+    # The image is built here and reused by migrate + worker.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: isp-cms-be:dokploy
+    restart: unless-stopped
+    command: ["dist/main.js"]
+    environment: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # Distroless has no shell/curl — probe with the bundled node binary.
+    healthcheck:
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "require('http').get('http://127.0.0.1:3000/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 40s
+    networks:
+      - dokploy-network
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      - traefik.http.routers.isp-cms-be.rule=Host(`api.isp.astaweda.com`)
+      - traefik.http.routers.isp-cms-be.entrypoints=websecure
+      - traefik.http.routers.isp-cms-be.tls.certresolver=letsencrypt
+      - traefik.http.services.isp-cms-be.loadbalancer.server.port=3000
+
+  worker:
+    image: isp-cms-be:dokploy
+    restart: unless-stopped
+    command: ["dist/worker.js"]
+    environment: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - dokploy-network
+
+# Dokploy's shared Traefik network. Managed Postgres/Redis attach here
+# too, so the app reaches them by their internal service hostname.
+networks:
+  dokploy-network:
+    external: true
