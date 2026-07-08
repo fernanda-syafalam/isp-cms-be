@@ -9,6 +9,7 @@ import { customers } from '../../infrastructure/database/schema/customers.schema
 import { invoices } from '../../infrastructure/database/schema/invoices.schema';
 import { plans } from '../../infrastructure/database/schema/plans.schema';
 import { resellers } from '../../infrastructure/database/schema/resellers.schema';
+import { slaCredits } from '../../infrastructure/database/schema/sla-credits.schema';
 import { CustomersRepository } from './customers.repository';
 
 /**
@@ -106,6 +107,25 @@ describe('CustomersRepository (integration)', () => {
         updated_at timestamptz(3) NOT NULL DEFAULT now()
       );
       CREATE UNIQUE INDEX invoices_customer_period_idx ON invoices (customer_id, period_start) WHERE type = 'regular';
+
+      -- applyCreditTx defers an unabsorbable proration credit into a
+      -- pending sla_credits row (MED #3, PR #121 money review) — this
+      -- suite needs the table to assert that deferral for real.
+      CREATE TYPE sla_credit_status AS ENUM ('pending', 'applied', 'void');
+      CREATE TABLE sla_credits (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        customer_id uuid REFERENCES customers(id),
+        customer_name varchar(120) NOT NULL,
+        amount integer NOT NULL,
+        reason varchar(200) NOT NULL,
+        ticket_id uuid,
+        ticket_code varchar(40),
+        status sla_credit_status NOT NULL DEFAULT 'pending',
+        applied_invoice_id uuid REFERENCES invoices(id),
+        applied_at timestamptz(3),
+        created_at timestamptz(3) NOT NULL DEFAULT now(),
+        updated_at timestamptz(3) NOT NULL DEFAULT now()
+      );
     `);
 
     const [plan] = await db
@@ -124,6 +144,7 @@ describe('CustomersRepository (integration)', () => {
   });
 
   beforeEach(async () => {
+    await db.delete(slaCredits);
     await db.delete(invoices);
     await db.delete(customers);
     await db.delete(resellers);
@@ -686,6 +707,8 @@ describe('CustomersRepository (integration)', () => {
   // ---------------------------------------------------------------------------
 
   describe('applyProration', () => {
+    const DUE_DAYS = 7;
+
     // The exact `sumUnpaidByCustomer` expression (InvoicesRepository) —
     // duplicated here so the assertion is independent of any single
     // repository's own bookkeeping: it proves the invoice ROWS themselves
@@ -706,13 +729,14 @@ describe('CustomersRepository (integration)', () => {
       return Number(row?.total ?? 0);
     }
 
-    it('upgrade (delta > 0) inserts an adjustment invoice charge and refreshes outstanding', async () => {
+    it('upgrade (delta > 0) inserts an adjustment invoice charge, due today+dueDays, and refreshes outstanding', async () => {
       const customer = await repo.create({ fullName: 'Budi', phone: '08', address: 'Jl', planId });
 
       await repo.applyProration(customer.id, {
         delta: 100_000,
         customerName: customer.fullName,
         note: 'Proration plan change: Home 20 -> Home 50',
+        dueDays: DUE_DAYS,
       });
 
       const [invoice] = await db
@@ -723,12 +747,21 @@ describe('CustomersRepository (integration)', () => {
       expect(invoice?.amount).toBe(100_000);
       expect(invoice?.status).toBe('pending');
       expect(invoice?.note).toBe('Proration plan change: Home 20 -> Home 50');
+      // MED #4: same grace period a regular invoice gets — NOT dueDate=today
+      // (which used to let `markOverduePastDue` isolir the customer the
+      // very next day for a proration charge with zero grace).
+      const today = new Date();
+      const expectedDue = new Date(today);
+      expectedDue.setUTCDate(expectedDue.getUTCDate() + DUE_DAYS);
+      const isoDue = expectedDue.toISOString().slice(0, 10);
+      expect(invoice?.dueDate).toBe(isoDue);
+      expect(invoice?.dueDate).not.toBe(today.toISOString().slice(0, 10));
 
       const updated = await repo.findById(customer.id);
       expect(updated?.outstanding).toBe(100_000);
     });
 
-    it('downgrade (delta < 0) discounts the oldest unpaid invoice and refreshes outstanding', async () => {
+    it('downgrade (delta < 0) discounts the oldest unpaid invoice in full and refreshes outstanding', async () => {
       const customer = await repo.create({ fullName: 'Ani', phone: '08', address: 'Jl', planId });
       await db.insert(invoices).values({
         customerId: customer.id,
@@ -745,6 +778,7 @@ describe('CustomersRepository (integration)', () => {
         delta: -50_000,
         customerName: customer.fullName,
         note: 'Proration plan change: Home 50 -> Home 20',
+        dueDays: DUE_DAYS,
       });
 
       const [invoice] = await db
@@ -757,7 +791,12 @@ describe('CustomersRepository (integration)', () => {
       expect(updated?.outstanding).toBe(150_000);
     });
 
-    it('downgrade credit exceeding the invoice balance is capped — balanceDue never goes negative', async () => {
+    // MED #3 (PR #121 money review — "credit vanishes"): a credit that
+    // can't be FULLY absorbed by the oldest unpaid invoice right now is
+    // never partially applied — it is deferred WHOLE into a pending
+    // `sla_credits` row, so the existing billing-run absorption picks it
+    // up later instead of the excess silently disappearing.
+    it('downgrade credit exceeding the invoice balance is deferred WHOLE as a pending sla_credit — never partially applied', async () => {
       const customer = await repo.create({ fullName: 'Citra', phone: '08', address: 'Jl', planId });
       await db.insert(invoices).values({
         customerId: customer.id,
@@ -770,42 +809,66 @@ describe('CustomersRepository (integration)', () => {
       });
       await db.update(customers).set({ outstanding: 30_000 }).where(eq(customers.id, customer.id));
 
-      // Credit of 50k against a 30k invoice — only 30k can be absorbed.
+      // Credit of 50k against a 30k invoice — cannot be fully covered now.
       await repo.applyProration(customer.id, {
         delta: -50_000,
         customerName: customer.fullName,
         note: 'Proration credit',
+        dueDays: DUE_DAYS,
       });
 
       const [invoice] = await db
         .select()
         .from(invoices)
         .where(eq(invoices.customerId, customer.id));
-      expect(invoice?.discountAmount).toBe(30_000); // capped, not 50_000
+      expect(invoice?.discountAmount).toBe(0); // untouched — no partial application
 
+      // The credit itself was never dropped — it now exists as a pending
+      // sla_credits row for a future billing run to absorb.
+      const [deferred] = await db
+        .select()
+        .from(slaCredits)
+        .where(eq(slaCredits.customerId, customer.id));
+      expect(deferred?.status).toBe('pending');
+      expect(deferred?.amount).toBe(50_000);
+
+      // outstanding is unchanged — nothing was actually deducted yet.
       const updated = await repo.findById(customer.id);
-      expect(updated?.outstanding).toBe(0); // never negative
+      expect(updated?.outstanding).toBe(30_000);
     });
 
-    it('downgrade credit with no unpaid invoice is a no-op — nothing to discount', async () => {
+    it('downgrade credit with no unpaid invoice is deferred WHOLE as a pending sla_credit — never dropped', async () => {
       const customer = await repo.create({ fullName: 'Dedi', phone: '08', address: 'Jl', planId });
 
       await repo.applyProration(customer.id, {
         delta: -50_000,
         customerName: customer.fullName,
         note: 'Proration credit',
+        dueDays: DUE_DAYS,
       });
 
       expect(await db.select().from(invoices).where(eq(invoices.customerId, customer.id))).toEqual(
         [],
       );
+      const [deferred] = await db
+        .select()
+        .from(slaCredits)
+        .where(eq(slaCredits.customerId, customer.id));
+      expect(deferred?.status).toBe('pending');
+      expect(deferred?.amount).toBe(50_000);
+
       const updated = await repo.findById(customer.id);
       expect(updated?.outstanding).toBe(0);
     });
 
     it('delta 0 is a total no-op', async () => {
       const customer = await repo.create({ fullName: 'Eka', phone: '08', address: 'Jl', planId });
-      await repo.applyProration(customer.id, { delta: 0, customerName: 'Eka', note: 'x' });
+      await repo.applyProration(customer.id, {
+        delta: 0,
+        customerName: 'Eka',
+        note: 'x',
+        dueDays: DUE_DAYS,
+      });
       expect(await db.select().from(invoices).where(eq(invoices.customerId, customer.id))).toEqual(
         [],
       );
@@ -823,6 +886,7 @@ describe('CustomersRepository (integration)', () => {
         delta: 75_000,
         customerName: customer.fullName,
         note: 'Proration',
+        dueDays: DUE_DAYS,
       });
 
       const persisted = await repo.findById(customer.id);
@@ -849,11 +913,13 @@ describe('CustomersRepository (integration)', () => {
           delta: 40_000,
           customerName: customer.fullName,
           note: 'Upgrade A',
+          dueDays: DUE_DAYS,
         }),
         repo.applyProration(customer.id, {
           delta: 60_000,
           customerName: customer.fullName,
           note: 'Upgrade B',
+          dueDays: DUE_DAYS,
         }),
       ]);
 
@@ -862,6 +928,117 @@ describe('CustomersRepository (integration)', () => {
 
       const updated = await repo.findById(customer.id);
       expect(updated?.outstanding).toBe(100_000); // 40k + 60k — neither lost
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // changePlan (MUST-FIX #1/#5, PR #121 money review): atomic + idempotent.
+  // ---------------------------------------------------------------------------
+
+  describe('changePlan', () => {
+    const DUE_DAYS = 7;
+
+    it('upgrade: writes the new planId and creates ONE adjustment invoice charge, atomically', async () => {
+      const cheapPlan = planId; // 200_000/mo, from the outer beforeAll seed
+      const [proPlan] = await db
+        .insert(plans)
+        .values({ name: 'Pro 100', speedMbps: 100, priceMonthly: 500_000 })
+        .returning();
+      if (!proPlan) throw new Error('plan seed failed');
+
+      const customer = await repo.create({
+        fullName: 'Hadi',
+        phone: '08',
+        address: 'Jl',
+        planId: cheapPlan,
+      });
+
+      const result = await repo.changePlan(customer.id, {
+        targetPlanId: proPlan.id,
+        dueDays: DUE_DAYS,
+      });
+      expect(result).toEqual({ applied: true, delta: 300_000 });
+
+      const updated = await repo.findById(customer.id);
+      expect(updated?.planId).toBe(proPlan.id);
+      expect(updated?.outstanding).toBe(300_000);
+
+      const rows = await db.select().from(invoices).where(eq(invoices.customerId, customer.id));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.type).toBe('adjustment');
+      expect(rows[0]?.amount).toBe(300_000);
+    });
+
+    it('same-plan target (already-applied planId) is an idempotent no-op — no second adjustment', async () => {
+      const customer = await repo.create({ fullName: 'Indah', phone: '08', address: 'Jl', planId });
+
+      const result = await repo.changePlan(customer.id, {
+        targetPlanId: planId,
+        dueDays: DUE_DAYS,
+      });
+      expect(result).toEqual({ applied: false, delta: 0 });
+
+      expect(await db.select().from(invoices).where(eq(invoices.customerId, customer.id))).toEqual(
+        [],
+      );
+      const updated = await repo.findById(customer.id);
+      expect(updated?.outstanding).toBe(0);
+    });
+
+    // Regression for MUST-FIX #1 (double-charge on concurrent/retry): two
+    // CONCURRENT changePlan calls to the SAME target plan must create
+    // exactly ONE adjustment invoice, not two — the customer-row lock,
+    // taken FIRST and re-read under the lock, makes the second call see
+    // its own target plan already applied and no-op.
+    it('concurrency: two concurrent changePlan calls to the SAME target plan create exactly ONE adjustment invoice', async () => {
+      const [proPlan] = await db
+        .insert(plans)
+        .values({ name: 'Pro 100b', speedMbps: 100, priceMonthly: 500_000 })
+        .returning();
+      if (!proPlan) throw new Error('plan seed failed');
+
+      const customer = await repo.create({
+        fullName: 'Joko',
+        phone: '08',
+        address: 'Jl',
+        planId,
+      });
+
+      const [resultA, resultB] = await Promise.all([
+        repo.changePlan(customer.id, { targetPlanId: proPlan.id, dueDays: DUE_DAYS }),
+        repo.changePlan(customer.id, { targetPlanId: proPlan.id, dueDays: DUE_DAYS }),
+      ]);
+
+      // Exactly one of the two calls actually applied the delta.
+      const appliedCount = [resultA, resultB].filter((r) => r.applied).length;
+      expect(appliedCount).toBe(1);
+
+      const rows = await db.select().from(invoices).where(eq(invoices.customerId, customer.id));
+      expect(rows).toHaveLength(1); // NOT two — the old bug would double-charge here.
+      expect(rows[0]?.amount).toBe(300_000);
+
+      const updated = await repo.findById(customer.id);
+      expect(updated?.planId).toBe(proPlan.id);
+      expect(updated?.outstanding).toBe(300_000); // NOT 600_000
+    });
+
+    it('rejects an unknown target plan (404 — the service pre-validates 400 before calling in)', async () => {
+      const customer = await repo.create({ fullName: 'Kiki', phone: '08', address: 'Jl', planId });
+      await expect(
+        repo.changePlan(customer.id, {
+          targetPlanId: '00000000-0000-0000-0000-0000000000ff',
+          dueDays: DUE_DAYS,
+        }),
+      ).rejects.toThrow();
+    });
+
+    it('rejects a missing customer', async () => {
+      await expect(
+        repo.changePlan('00000000-0000-0000-0000-0000000000ff', {
+          targetPlanId: planId,
+          dueDays: DUE_DAYS,
+        }),
+      ).rejects.toThrow();
     });
   });
 

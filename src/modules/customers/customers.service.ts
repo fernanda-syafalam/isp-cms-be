@@ -4,6 +4,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PlansRepository } from '../plans/plans.repository';
 import { ResellersRepository } from '../resellers/resellers.repository';
 import { SecretEnforcementService } from '../router-resources/secret-enforcement.service';
+import { SettingsService } from '../settings/settings.service';
 import {
   type CustomerListFilter,
   type CustomerRow,
@@ -22,7 +23,10 @@ export class CustomersService {
   constructor(
     private readonly repo: CustomersRepository,
     // Plans is the source of truth for a customer's plan. We only read it
-    // (validate the FK + read price for proration), so depend on the repo.
+    // to validate the FK (400 on a bad id) before handing off to the
+    // repository's atomic changePlan — the repo does the actual price
+    // lookups + delta math itself, under its own lock (MUST-FIX #1/#5,
+    // PR #121 review).
     private readonly plans: PlansRepository,
     // WhatsApp dunning reminders go through the notifications module.
     private readonly notifications: NotificationsService,
@@ -34,6 +38,9 @@ export class CustomersService {
     // Validates the resellerId FK on onboard (P3.D.2) — a bad id fails
     // explicit (400) instead of surfacing as a DB-level 500.
     private readonly resellers: ResellersRepository,
+    // Billing policy (dueDays) for a proration adjustment invoice's grace
+    // period — same grace a regular invoice gets (MED #4, PR #121 review).
+    private readonly settings: SettingsService,
   ) {}
 
   async list(filter: CustomerListFilter, user?: AuthUser): Promise<CustomerListResponse> {
@@ -264,29 +271,28 @@ export class CustomersService {
   /**
    * Change the plan. planName re-derives from the join. An upgrade (delta
    * > 0) or downgrade (delta < 0) prorates the monthly price difference —
-   * backed by a REAL invoice line via `CustomersRepository.applyProration`
-   * (a charge invoice for an upgrade, a discount on the oldest unpaid
-   * invoice for a downgrade), never a hand-computed delta on `outstanding`
-   * directly (that was the silent-wipe bug: the next billing recompute
-   * would erase it — see `applyProration`'s doc).
+   * backed by a REAL invoice line, atomically, via
+   * `CustomersRepository.changePlan` (MUST-FIX #1/#5, PR #121 review): the
+   * plan write, the delta computation, and the charge/credit all happen
+   * inside ONE transaction there, under a customer-row lock that also
+   * makes two concurrent/retried calls to the SAME target plan idempotent
+   * (only the first one actually applies a delta — see that method's doc).
+   * This service method does no money math itself: it only validates the
+   * target plan exists (400 on a bad id) and reads the billing policy's
+   * `dueDays` for the adjustment invoice's grace period (MED #4).
    */
   async changePlan(id: string, input: ChangePlanInput): Promise<CustomerResponse> {
-    const customer = await this.requireById(id);
+    await this.requireById(id); // 404 first — the atomic repo call re-validates for real under its own lock.
     const newPlan = await this.plans.findById(input.planId);
     if (!newPlan) throw new BadRequestException('plan not found');
 
-    const oldPlan = await this.plans.findById(customer.planId);
-    const delta = oldPlan ? newPlan.priceMonthly - oldPlan.priceMonthly : 0;
+    const { dueDays } = await this.settings.getBillingPolicy();
+    const result = await this.repo.changePlan(id, { targetPlanId: input.planId, dueDays });
 
-    await this.repo.updateProfile(id, { planId: input.planId });
-    if (delta !== 0) {
-      await this.repo.applyProration(id, {
-        delta,
-        customerName: customer.fullName,
-        note: `Proration plan change: ${customer.planName} -> ${newPlan.name}`,
-      });
-    }
-    this.logger.log({ customerId: id, planId: input.planId, delta }, 'customer plan changed');
+    this.logger.log(
+      { customerId: id, planId: input.planId, applied: result.applied, delta: result.delta },
+      'customer plan changed',
+    );
     return this.findById(id);
   }
 

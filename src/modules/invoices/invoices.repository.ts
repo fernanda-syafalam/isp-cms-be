@@ -169,13 +169,26 @@ export class InvoicesRepository {
     return row;
   }
 
-  // True if the customer already has an invoice for this period — the
-  // unique index guarantees it, this lets a billing run skip cleanly.
+  // True if the customer already has a REGULAR invoice for this period —
+  // the partial unique index (`WHERE type = 'regular'`) guarantees it, this
+  // lets a billing run skip cleanly. MUST-FIX #2 (PR #121 money review):
+  // this MUST filter on type — a proration 'adjustment' invoice raised on
+  // the 1st shares that same-day periodStart with the month's regular
+  // invoice (`currentPeriod()` in InvoicesService), so without the type
+  // filter `run()` / `generateFirstInvoice()` would see "already invoiced
+  // this period" from the adjustment alone and skip billing the customer
+  // for the month entirely (free month / lost revenue).
   async existsForPeriod(customerId: string, periodStart: string): Promise<boolean> {
     const [row] = await this.db
       .select({ id: invoices.id })
       .from(invoices)
-      .where(and(eq(invoices.customerId, customerId), eq(invoices.periodStart, periodStart)))
+      .where(
+        and(
+          eq(invoices.customerId, customerId),
+          eq(invoices.periodStart, periodStart),
+          eq(invoices.type, 'regular'),
+        ),
+      )
       .limit(1);
     return Boolean(row);
   }

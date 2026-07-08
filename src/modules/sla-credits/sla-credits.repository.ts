@@ -147,22 +147,32 @@ export class SlaCreditsRepository {
 
   /**
    * Apply a credit that resolves to a real customer, in ONE transaction:
-   * transition it to 'applied' AND deduct it from the customer's oldest
-   * unpaid invoice's `discountAmount` — never a hand-computed delta on
-   * `customers.outstanding` directly (that was the silent-wipe bug:
-   * `outstanding` is a DERIVED column, recomputed from unpaid invoices on
-   * every billing event, so a bare delta with no backing invoice row gets
-   * silently erased by the next recompute).
+   * if — and ONLY if — its oldest unpaid invoice can absorb the credit IN
+   * FULL right now, deduct it via `discountAmount` and transition to
+   * 'applied'. Otherwise LEAVE IT PENDING (see below) — never a
+   * hand-computed delta on `customers.outstanding` directly (that was the
+   * silent-wipe bug: `outstanding` is a DERIVED column, recomputed from
+   * unpaid invoices on every billing event, so a bare delta with no
+   * backing invoice row gets silently erased by the next recompute).
    *
    * The deduction targets a SINGLE invoice — the customer's oldest unpaid
-   * one by due date — capped at that invoice's own balance due, the same
-   * single-invoice, no-carry-over simplification
-   * `InvoicesService.resolveSlaDiscount` already uses at billing time (so
-   * `appliedInvoiceId`, a single FK, stays unambiguous). If the credit
-   * exceeds that invoice's balance due, the excess is simply not applied
-   * to anything. If the customer has no unpaid invoice at all, the credit
-   * still transitions to 'applied' (matches the prior behavior: nothing to
-   * deduct), but `appliedInvoiceId` stays null.
+   * one by due date — so `appliedInvoiceId` (a single FK) stays
+   * unambiguous, mirroring `InvoicesService.resolveSlaDiscount`'s
+   * single-invoice absorption at billing time.
+   *
+   * MED #3 (PR #121 money review — "credit vanishes"): if the customer has
+   * NO unpaid invoice, or the credit is LARGER than that invoice's balance
+   * due, this does NOT mark the credit 'applied' with nothing (or only
+   * part of it) deducted — a partial-now / remainder-later split would
+   * double count, because a LATER billing run's absorption
+   * (`resolveSlaDiscount`) has no concept of "this credit was already
+   * partly spent," and re-marking an 'applied' credit's amount toward a
+   * future invoice is not a code path that exists. Instead the credit is
+   * left `status: 'pending'`, UNTOUCHED — the exact same pending-absorption
+   * mechanism (`findPendingByCustomer` -> `resolveSlaDiscount` ->
+   * `absorbSlaCredits`, `invoices.service.ts`) a newly-created credit
+   * already relies on, so a future billing run picks it up in full. A
+   * credit the customer earned is never silently consumed for nothing.
    *
    * `SELECT ... FOR UPDATE` locks this credit row first (idempotency
    * re-check, defense in depth — the service already guards this), then
@@ -187,17 +197,43 @@ export class SlaCreditsRepository {
         return credit; // idempotent no-op — see method doc.
       }
 
-      const appliedInvoiceId = await this.creditOldestUnpaidInvoiceTx(
-        tx,
-        customerId,
-        credit.amount,
-      );
+      const [invoice] = await tx
+        .select()
+        .from(invoices)
+        .where(
+          and(eq(invoices.customerId, customerId), inArray(invoices.status, [...UNPAID_STATUSES])),
+        )
+        .orderBy(asc(invoices.dueDate))
+        .for('update')
+        .limit(1);
+
+      const balanceDue = invoice
+        ? invoice.amount +
+          invoice.lateFee +
+          invoice.taxAmount -
+          invoice.discountAmount -
+          invoice.paidAmount
+        : 0;
+
+      if (!invoice || balanceDue < credit.amount) {
+        // Defer — see method doc (MED #3). Left exactly as-is (still
+        // 'pending'); nothing on `invoices`/`customers` changes.
+        return credit;
+      }
+
+      await tx
+        .update(invoices)
+        .set({
+          discountAmount: sql`${invoices.discountAmount} + ${credit.amount}`,
+          updatedAt: sql`now()`,
+        })
+        .where(eq(invoices.id, invoice.id));
 
       const [applied] = await tx
         .update(slaCredits)
         .set({
           status: 'applied',
-          appliedInvoiceId,
+          appliedInvoiceId: invoice.id,
           appliedAt: sql`now()`,
           updatedAt: sql`now()`,
         })
@@ -210,44 +246,6 @@ export class SlaCreditsRepository {
       await this.refreshOutstandingTx(tx, customerId);
       return applied;
     });
-  }
-
-  /**
-   * Deduct `amount` from the customer's single oldest unpaid invoice's
-   * `discountAmount` (by due date), capped at that invoice's current
-   * balance due — see `applyWithInvoiceCredit`'s doc for why this never
-   * spreads across multiple invoices. `SELECT ... FOR UPDATE` locks the
-   * chosen invoice row so a concurrent payment/credit against it
-   * serializes instead of racing. Returns the invoice id that absorbed the
-   * credit, or null when the customer has no unpaid invoice (or its
-   * balance due is already zero) — nothing to discount.
-   */
-  private async creditOldestUnpaidInvoiceTx(
-    tx: DbTx,
-    customerId: string,
-    amount: number,
-  ): Promise<string | null> {
-    const [invoice] = await tx
-      .select()
-      .from(invoices)
-      .where(
-        and(eq(invoices.customerId, customerId), inArray(invoices.status, [...UNPAID_STATUSES])),
-      )
-      .orderBy(asc(invoices.dueDate))
-      .for('update')
-      .limit(1);
-    if (!invoice) return null;
-
-    const total = invoice.amount + invoice.lateFee + invoice.taxAmount - invoice.discountAmount;
-    const balanceDue = total - invoice.paidAmount;
-    if (balanceDue <= 0) return null;
-
-    const discount = Math.min(amount, balanceDue);
-    await tx
-      .update(invoices)
-      .set({ discountAmount: sql`${invoices.discountAmount} + ${discount}`, updatedAt: sql`now()` })
-      .where(eq(invoices.id, invoice.id));
-    return invoice.id;
   }
 
   /**

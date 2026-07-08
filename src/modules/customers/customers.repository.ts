@@ -26,6 +26,7 @@ import {
 import { invoices } from '../../infrastructure/database/schema/invoices.schema';
 import { plans } from '../../infrastructure/database/schema/plans.schema';
 import { resellers } from '../../infrastructure/database/schema/resellers.schema';
+import { slaCredits } from '../../infrastructure/database/schema/sla-credits.schema';
 import type { CustomerSummary } from './dto/customer-response.dto';
 
 // The transaction handle drizzle hands its callback — used to type
@@ -311,28 +312,127 @@ export class CustomersRepository {
   }
 
   /**
-   * Apply a plan-change proration to a customer's balance via a REAL
+   * Atomically change a customer's plan AND apply the resulting proration —
+   * MUST-FIX #1/#5 (PR #121 money review): the plan write and the delta
+   * charge/credit succeed or fail together, and the whole decision is made
+   * under ONE lock so two concurrent OR retried calls to the SAME target
+   * plan can never both apply the delta (double-charge / double-credit).
+   *
+   * Locks the customer row `FOR UPDATE` FIRST, then RE-READS `planId`
+   * under that lock — never a caller's outer, pre-lock snapshot (the old
+   * bug: `CustomersService.changePlan` read `planId` via `requireById()`
+   * OUTSIDE any transaction, so two concurrent submits both saw the OLD
+   * plan, both computed the same delta, and both created their own
+   * adjustment invoice). If the locked row's `planId` already equals
+   * `targetPlanId`, this is a pure no-op — a concurrent call (or a retried
+   * request) already won this race and committed; `{ applied: false,
+   * delta: 0 }` is returned so the caller can tell idempotent-no-op apart
+   * from a genuine change. Only the winner computes the delta, from plan
+   * prices read inside this SAME transaction, and applies it via
+   * `applyDeltaTx`.
+   *
+   * `dueDays` (the billing policy's grace period) is threaded through to
+   * the adjustment invoice's due date — see `applyDeltaTx` / MED #4.
+   */
+  async changePlan(
+    id: string,
+    input: { targetPlanId: string; dueDays: number },
+  ): Promise<{ applied: boolean; delta: number }> {
+    return this.db.transaction(async (tx) => {
+      const [locked] = await tx
+        .select({ planId: customers.planId, fullName: customers.fullName })
+        .from(customers)
+        .where(eq(customers.id, id))
+        .for('update')
+        .limit(1);
+      if (!locked) {
+        throw new NotFoundException('customer not found');
+      }
+      if (locked.planId === input.targetPlanId) {
+        return { applied: false, delta: 0 }; // idempotent no-op — see method doc.
+      }
+
+      const [newPlan] = await tx
+        .select({ id: plans.id, name: plans.name, priceMonthly: plans.priceMonthly })
+        .from(plans)
+        .where(eq(plans.id, input.targetPlanId))
+        .limit(1);
+      if (!newPlan) {
+        // The service already validates this before calling in — a miss
+        // here means the plan vanished between that check and this lock
+        // (extremely rare). Surfaced the same way `requireById` surfaces a
+        // vanished row: a real invariant violation, not routine input.
+        throw new NotFoundException('plan not found');
+      }
+      const [oldPlan] = await tx
+        .select({ id: plans.id, name: plans.name, priceMonthly: plans.priceMonthly })
+        .from(plans)
+        .where(eq(plans.id, locked.planId))
+        .limit(1);
+      const delta = oldPlan ? newPlan.priceMonthly - oldPlan.priceMonthly : 0;
+
+      await tx
+        .update(customers)
+        .set({ planId: input.targetPlanId, updatedAt: sql`now()` })
+        .where(eq(customers.id, id));
+
+      if (delta !== 0) {
+        await this.applyDeltaTx(tx, id, {
+          delta,
+          customerName: locked.fullName,
+          note: `Proration plan change: ${oldPlan?.name ?? 'unknown'} -> ${newPlan.name}`,
+          dueDays: input.dueDays,
+        });
+      }
+
+      return { applied: true, delta };
+    });
+  }
+
+  /**
+   * Apply a standalone money delta to a customer's balance via a REAL
    * invoice line — never a hand-computed delta written straight onto
    * `outstanding` (that was the silent-wipe bug: `outstanding` is a
    * DERIVED column, recomputed from unpaid invoices on every billing event
    * — see `InvoicesRepository.sumUnpaidByCustomer` — so a bare delta with
    * no backing invoice row gets silently erased by the next recompute).
+   * Kept as its own entry point (over and above `changePlan`, which calls
+   * the same underlying `applyDeltaTx`) for any future caller that already
+   * knows a correct, race-free delta — e.g. a manual admin adjustment.
+   * `changePlan` is the one to use for a plan-change specifically: it
+   * computes the delta itself, atomically, under the customer lock (see
+   * its own doc for why calling this method with an externally
+   * pre-computed delta is exactly the race MUST-FIX #1 closed).
    *
-   * `delta > 0` (upgrade): inserts a new `type: 'adjustment'` invoice for
-   * the delta — a real charge with its own balanceDue, due immediately
-   * (periodStart/periodEnd/dueDate = today). Its period is today's date,
-   * not the billing-cycle month, so it can never collide with the
-   * customer's regular monthly invoice under `invoices_customer_period_idx`
-   * — that index is now partial (`WHERE type = 'regular'`) precisely so
+   * See `applyDeltaTx` for the charge/credit modeling.
+   */
+  async applyProration(
+    id: string,
+    input: { delta: number; customerName: string; note: string; dueDays: number },
+  ): Promise<void> {
+    if (input.delta === 0) return;
+    await this.db.transaction(async (tx) => {
+      await this.applyDeltaTx(tx, id, input);
+    });
+  }
+
+  /**
+   * `delta > 0` (charge, e.g. an upgrade): inserts a new `type:
+   * 'adjustment'` invoice for the delta — a real charge with its own
+   * balanceDue. `periodStart`/`periodEnd` are today's date, not the
+   * billing-cycle month, so it can never collide with the customer's
+   * regular monthly invoice under `invoices_customer_period_idx` — that
+   * index is now partial (`WHERE type = 'regular'`) precisely so
    * adjustment lines are exempt from the one-invoice-per-period rule.
+   * `dueDate = today + dueDays` — the SAME grace period a regular invoice
+   * gets (MED #4, PR #121 review): a bare `dueDate = today` let
+   * `markOverduePastDue` flip it overdue the very next day and
+   * `isolateActiveDebtors` cut service for a small proration charge with
+   * zero grace.
    *
-   * `delta < 0` (downgrade): the credit is applied as a `discountAmount`
-   * bump on the customer's oldest unpaid invoice, capped at that invoice's
-   * own balance due — the same single-invoice, no-carry-over
-   * simplification `InvoicesService.resolveSlaDiscount` already uses at
-   * billing time (if the credit exceeds that one invoice's balance due,
-   * the excess is simply not applied to anything — there's nothing left to
-   * discount it against). No-op when the customer has no unpaid invoice.
+   * `delta < 0` (credit, e.g. a downgrade): applied via `applyCreditTx` —
+   * see that method's doc for the full-coverage-or-defer modeling (MED
+   * #3).
    *
    * Either way, `customers.outstanding` is refreshed at the end from the
    * exact same expression `sumUnpaidByCustomer` uses, in the SAME
@@ -341,55 +441,67 @@ export class CustomersRepository {
    *
    * This is the same deliberate "one repository per table" exception
    * `InvoicesRepository.recordPayment` / `VouchersRepository.settle`
-   * document: `CustomersRepository` reaches into `invoices` directly so the
-   * adjustment line and the outstanding refresh share one transaction. The
-   * lock order is INVOICE (when the credit branch touches one) THEN
-   * CUSTOMER LAST, right before the recompute — the exact order
-   * `InvoicesRepository.recordPayment` / `refreshOutstandingTx` use — so a
-   * concurrent payment/credit against the same customer can only ever
-   * serialize on the shared customer-row lock, never deadlock against this
-   * method (neither side ever acquires an invoice lock AFTER a customer
-   * lock it already holds).
+   * document: `CustomersRepository` reaches into `invoices` (and, via
+   * `applyCreditTx`, `sla_credits`) directly so the adjustment line and the
+   * outstanding refresh share one transaction. The lock order is INVOICE
+   * (when the credit branch touches one) THEN CUSTOMER LAST, right before
+   * the recompute — the exact order `InvoicesRepository.recordPayment` /
+   * `refreshOutstandingTx` use — so a concurrent payment/credit against the
+   * same customer can only ever serialize on the shared customer-row lock,
+   * never deadlock against this method (neither side ever acquires an
+   * invoice lock AFTER a customer lock it already holds).
    */
-  async applyProration(
+  private async applyDeltaTx(
+    tx: DbTx,
     id: string,
-    input: { delta: number; customerName: string; note: string },
+    input: { delta: number; customerName: string; note: string; dueDays: number },
   ): Promise<void> {
-    if (input.delta === 0) return;
-    await this.db.transaction(async (tx) => {
-      if (input.delta > 0) {
-        const today = isoToday();
-        await tx.insert(invoices).values({
-          customerId: id,
-          customerName: input.customerName,
-          type: 'adjustment',
-          note: input.note,
-          periodStart: today,
-          periodEnd: today,
-          dueDate: today,
-          amount: input.delta,
-          status: 'pending',
-        });
-      } else {
-        await this.creditOldestUnpaidInvoiceTx(tx, id, Math.abs(input.delta));
-      }
-      await this.refreshOutstandingTx(tx, id);
-    });
+    if (input.delta > 0) {
+      const today = isoToday();
+      await tx.insert(invoices).values({
+        customerId: id,
+        customerName: input.customerName,
+        type: 'adjustment',
+        note: input.note,
+        periodStart: today,
+        periodEnd: today,
+        dueDate: isoPlusDays(input.dueDays),
+        amount: input.delta,
+        status: 'pending',
+      });
+    } else {
+      await this.applyCreditTx(tx, id, Math.abs(input.delta), input.customerName, input.note);
+    }
+    await this.refreshOutstandingTx(tx, id);
   }
 
   /**
-   * Apply a credit to the customer's single oldest unpaid invoice (by due
-   * date), capped at that invoice's current balance due — see
-   * `applyProration`'s doc for why this never spreads across multiple
+   * Apply a credit (downgrade proration, or a future caller's) to the
+   * customer's single oldest unpaid invoice, by due date — see
+   * `applyDeltaTx`'s doc for why this never spreads across multiple
    * invoices. `SELECT ... FOR UPDATE` locks the chosen invoice row so a
    * concurrent payment/credit against it serializes instead of racing.
-   * No-op when the customer has no unpaid invoice, or its balance due is
-   * already zero.
+   *
+   * MED #3 (PR #121 money review — "credit vanishes"): if the customer has
+   * no unpaid invoice at all, OR the credit is LARGER than that invoice's
+   * balance due, this does NOT partially discount it — a partial-now /
+   * implicit-remainder-later split would double count, because a future
+   * billing run's SLA-credit absorption (`InvoicesService
+   * .resolveSlaDiscount`) has no concept of "this credit was already
+   * partly spent." Instead the WHOLE credit is deferred by inserting a
+   * pending `sla_credits` row — the exact same pending-absorption
+   * mechanism a real SLA credit already uses
+   * (`findPendingByCustomer` -> `resolveSlaDiscount` -> `absorbSlaCredits`),
+   * so a future billing run picks it up in full. The credit the customer
+   * earned is never silently dropped — only ever fully applied now, or
+   * fully deferred.
    */
-  private async creditOldestUnpaidInvoiceTx(
+  private async applyCreditTx(
     tx: DbTx,
     customerId: string,
     amount: number,
+    customerName: string,
+    reason: string,
   ): Promise<void> {
     const [invoice] = await tx
       .select()
@@ -400,17 +512,31 @@ export class CustomersRepository {
       .orderBy(asc(invoices.dueDate))
       .for('update')
       .limit(1);
-    if (!invoice) return;
 
-    const total = invoice.amount + invoice.lateFee + invoice.taxAmount - invoice.discountAmount;
-    const balanceDue = total - invoice.paidAmount;
-    if (balanceDue <= 0) return;
+    const balanceDue = invoice
+      ? invoice.amount +
+        invoice.lateFee +
+        invoice.taxAmount -
+        invoice.discountAmount -
+        invoice.paidAmount
+      : 0;
 
-    const applied = Math.min(amount, balanceDue);
-    await tx
-      .update(invoices)
-      .set({ discountAmount: sql`${invoices.discountAmount} + ${applied}`, updatedAt: sql`now()` })
-      .where(eq(invoices.id, invoice.id));
+    if (invoice && balanceDue >= amount) {
+      await tx
+        .update(invoices)
+        .set({ discountAmount: sql`${invoices.discountAmount} + ${amount}`, updatedAt: sql`now()` })
+        .where(eq(invoices.id, invoice.id));
+      return;
+    }
+
+    // Defer the WHOLE credit — see method doc.
+    await tx.insert(slaCredits).values({
+      customerId,
+      customerName,
+      amount,
+      reason,
+      status: 'pending',
+    });
   }
 
   /**
@@ -727,7 +853,14 @@ export class CustomersRepository {
 // Whole-day UTC 'YYYY-MM-DD' for the day a proration adjustment invoice is
 // raised on — mirrors `InvoicesService`'s local date helpers.
 function isoToday(): string {
+  return isoPlusDays(0);
+}
+
+// Whole-day UTC 'YYYY-MM-DD', `days` from today — used for an adjustment
+// invoice's dueDate (today + the billing policy's grace days, MED #4).
+function isoPlusDays(days: number): string {
   const now = new Date();
+  now.setUTCDate(now.getUTCDate() + days);
   const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
   const dd = String(now.getUTCDate()).padStart(2, '0');
   return `${now.getUTCFullYear()}-${mm}-${dd}`;

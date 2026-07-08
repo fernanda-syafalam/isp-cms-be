@@ -353,20 +353,28 @@ describe('SlaCreditsRepository (integration)', () => {
       expect(customer?.outstanding).toBe(150_000);
     });
 
-    it('caps the discount at the invoice balance due — never a negative balance', async () => {
+    // MED #3 (PR #121 money review — "credit vanishes"): a credit LARGER
+    // than the oldest unpaid invoice's balance due is never partially
+    // applied — that would silently strand the remainder (a future billing
+    // run's absorption has no concept of "already partly spent"). Instead
+    // it is left `pending`, untouched, for the existing billing-run
+    // absorption to pick up in full later.
+    it('a credit larger than the invoice balance due is left pending — never partially applied', async () => {
       const customerId = await seedCustomerWithUnpaidInvoice(30_000);
       const credit = await repo.create(newCredit({ customerId, amount: 50_000 }));
 
-      await repo.applyWithInvoiceCredit(credit.id, customerId);
+      const result = await repo.applyWithInvoiceCredit(credit.id, customerId);
+      expect(result.status).toBe('pending'); // NOT 'applied' — see method doc.
+      expect(result.appliedInvoiceId).toBeNull();
 
       const [invoice] = await db.select().from(invoices).where(eq(invoices.customerId, customerId));
-      expect(invoice?.discountAmount).toBe(30_000); // capped, not 50_000
+      expect(invoice?.discountAmount).toBe(0); // untouched — no partial application
 
       const [customer] = await db.select().from(customers).where(eq(customers.id, customerId));
-      expect(customer?.outstanding).toBe(0);
+      expect(customer?.outstanding).toBe(30_000); // unchanged — nothing deducted
     });
 
-    it('transitions to applied with a null appliedInvoiceId when the customer has no unpaid invoice', async () => {
+    it('leaves the credit pending (not applied) when the customer has no unpaid invoice at all', async () => {
       const [customer] = await db
         .insert(customers)
         .values({ fullName: 'Ani', phone: '08', address: 'Jl', planId })
@@ -374,9 +382,9 @@ describe('SlaCreditsRepository (integration)', () => {
       if (!customer) throw new Error('customer seed failed');
       const credit = await repo.create(newCredit({ customerId: customer.id, amount: 50_000 }));
 
-      const applied = await repo.applyWithInvoiceCredit(credit.id, customer.id);
-      expect(applied.status).toBe('applied');
-      expect(applied.appliedInvoiceId).toBeNull();
+      const result = await repo.applyWithInvoiceCredit(credit.id, customer.id);
+      expect(result.status).toBe('pending'); // MED #3 — deferred, never dropped.
+      expect(result.appliedInvoiceId).toBeNull();
     });
 
     it('is idempotent — re-applying an already-applied credit is a no-op', async () => {

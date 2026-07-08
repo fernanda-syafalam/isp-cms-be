@@ -149,6 +149,35 @@ describe('InvoicesRepository (integration)', () => {
     await expect(repo.create(newInvoice())).rejects.toThrow();
   });
 
+  // MUST-FIX #2 (PR #121 money review — "free month / lost revenue"):
+  // existsForPeriod MUST filter on type = 'regular'. A proration
+  // 'adjustment' invoice raised on the 1st shares that same-day
+  // periodStart with the month's regular invoice — without the type
+  // filter, `existsForPeriod` would see the adjustment alone and report
+  // "already invoiced this period", so `InvoicesService.run()` /
+  // `generateFirstInvoice()` would skip billing the customer for the whole
+  // month.
+  it('existsForPeriod ignores an adjustment invoice for the same period — the regular invoice can still be created', async () => {
+    await repo.create(
+      newInvoice({
+        type: 'adjustment',
+        periodStart: '2026-06-01',
+        periodEnd: '2026-06-01',
+        amount: 50_000,
+      }),
+    );
+
+    // An adjustment invoice alone must NOT count as "already invoiced".
+    expect(await repo.existsForPeriod(customerId, '2026-06-01')).toBe(false);
+
+    // The regular monthly invoice for the SAME period must still be
+    // createable — the partial unique index (`WHERE type = 'regular'`)
+    // does not see the adjustment row as a conflict.
+    const regular = await repo.create(newInvoice({ periodStart: '2026-06-01' }));
+    expect(regular.type).toBe('regular');
+    expect(await repo.existsForPeriod(customerId, '2026-06-01')).toBe(true);
+  });
+
   it('lists by status with a real total and limit/offset', async () => {
     await repo.create(newInvoice());
     await repo.create(newInvoice({ periodStart: '2026-07-01', status: 'overdue' }));
