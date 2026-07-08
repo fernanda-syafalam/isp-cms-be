@@ -344,6 +344,13 @@
       "when": 1783496932269,
       "tag": "0048_add_invoice_type_adjustment",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1783505344401,
+      "tag": "0049_classy_satana",
+      "breakpoints": true
     }
   ]
 }

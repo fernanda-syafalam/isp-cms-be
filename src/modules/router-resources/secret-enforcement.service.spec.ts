@@ -25,8 +25,20 @@ describe('SecretEnforcementService', () => {
 
   it('writes the DB flag and pushes to each affected router', async () => {
     repo.findRouterTargetsByCustomerId.mockResolvedValue([
-      { secretUsername: 'cust1001', host: '10.0.0.1', apiPort: 8728, routerUser: 'api' },
-      { secretUsername: 'cust1002', host: '10.0.0.2', apiPort: 8728, routerUser: 'api' },
+      {
+        secretUsername: 'cust1001',
+        host: '10.0.0.1',
+        apiPort: 8728,
+        routerUser: 'api',
+        apiPasswordEncrypted: null,
+      },
+      {
+        secretUsername: 'cust1002',
+        host: '10.0.0.2',
+        apiPort: 8728,
+        routerUser: 'api',
+        apiPasswordEncrypted: null,
+      },
     ]);
     repo.setDisabledByCustomerId.mockResolvedValue(2);
 
@@ -36,7 +48,13 @@ describe('SecretEnforcementService', () => {
     expect(repo.setDisabledByCustomerId).toHaveBeenCalledWith('cust-1', true);
     expect(adapter.setSecretDisabled).toHaveBeenCalledTimes(2);
     expect(adapter.setSecretDisabled).toHaveBeenCalledWith(
-      { host: '10.0.0.1', apiPort: 8728, routerUser: 'api', secretUsername: 'cust1001' },
+      {
+        host: '10.0.0.1',
+        apiPort: 8728,
+        routerUser: 'api',
+        apiPasswordEncrypted: null,
+        secretUsername: 'cust1001',
+      },
       true,
     );
   });
@@ -53,7 +71,13 @@ describe('SecretEnforcementService', () => {
 
   it('re-enables (disabled=false) on reactivation', async () => {
     repo.findRouterTargetsByCustomerId.mockResolvedValue([
-      { secretUsername: 'cust1001', host: '10.0.0.1', apiPort: 8728, routerUser: 'api' },
+      {
+        secretUsername: 'cust1001',
+        host: '10.0.0.1',
+        apiPort: 8728,
+        routerUser: 'api',
+        apiPasswordEncrypted: null,
+      },
     ]);
     repo.setDisabledByCustomerId.mockResolvedValue(1);
 

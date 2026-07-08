@@ -15,6 +15,8 @@ export type SecretRouterTarget = {
   host: string;
   apiPort: number;
   routerUser: string;
+  /** SEC-M1: encrypted per-router API password, or null (adapter falls back to shared env). */
+  apiPasswordEncrypted: string | null;
 };
 
 type SecretPatch = Partial<
@@ -163,7 +165,10 @@ export class SecretsRepository {
         secretUsername: pppSecrets.username,
         host: routers.address,
         apiPort: routers.apiPort,
-        routerUser: routers.username,
+        // SEC-M1: prefer the router's dedicated API login user; fall back
+        // to its general `username` when no override is set.
+        routerUser: sql<string>`coalesce(${routers.apiUsername}, ${routers.username})`,
+        apiPasswordEncrypted: routers.apiPasswordEncrypted,
       })
       .from(pppSecrets)
       .innerJoin(routers, eq(pppSecrets.routerId, routers.id))

@@ -1,7 +1,18 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { z } from 'zod';
 import { Audit } from '../../common/decorators/audit.decorator';
+import { type AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { ConnectRouterDto } from './dto/connect-router.dto';
 import {
@@ -9,6 +20,7 @@ import {
   RouterResponseDto,
   TestConnectionResultDto,
 } from './dto/router-response.dto';
+import { UpdateRouterDto } from './dto/update-router.dto';
 import { RoutersService } from './routers.service';
 
 const ListQuerySchema = z.object({
@@ -53,6 +65,18 @@ export class RoutersController {
   @ZodSerializerDto(RouterResponseDto)
   findOne(@Param('id') id: string) {
     return this.routers.findById(id);
+  }
+
+  // SEC-M1: also the write path for the per-router API credential
+  // (apiUsername/password) and, notably, `host` — a host-change is audited
+  // both generically here (@Audit) and with a dedicated warning log in the
+  // service when it actually changes.
+  @Roles('admin', 'staff')
+  @Audit('router.update')
+  @Patch(':id')
+  @ZodSerializerDto(RouterResponseDto)
+  update(@Param('id') id: string, @Body() body: UpdateRouterDto, @CurrentUser() user: AuthUser) {
+    return this.routers.update(id, body, user.email ?? user.id);
   }
 
   @Roles('admin', 'staff')
