@@ -1,0 +1,2 @@
+ALTER TABLE "payment_intents" ADD COLUMN "gateway_reference" varchar(64);--> statement-breakpoint
+CREATE INDEX "payment_intents_gateway_reference_idx" ON "payment_intents" USING btree ("gateway_reference");
