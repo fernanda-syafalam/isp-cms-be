@@ -1,6 +1,7 @@
 import { type ArgumentsHost, HttpException, HttpStatus, NotFoundException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { PinoLogger } from 'nestjs-pino';
+import { ZodSerializationException } from 'nestjs-zod';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { AllExceptionsFilter } from './all-exceptions.filter';
@@ -82,6 +83,40 @@ describe('AllExceptionsFilter', () => {
     const body = send.mock.calls[0]?.[0] as ProblemDetailsResponse;
     expect(body.title).toBe('Validation Failed');
     expect(body.errors).toBeDefined();
+  });
+
+  it('maps a ZodSerializationException (response failed its schema) to 500 and logs the Zod issue, never the raw payload', () => {
+    const { host, status, send } = fakeHost();
+
+    let zodError: z.ZodError;
+    try {
+      z.object({ id: z.uuid() }).parse({ id: 'not-a-uuid' });
+      throw new Error('unreachable');
+    } catch (err) {
+      zodError = err as z.ZodError;
+    }
+    // This is exactly what ZodSerializerInterceptor throws when a
+    // handler's return value doesn't match its @ZodSerializerDto schema
+    // (e.g. a raw Date where the schema declares z.iso.datetime()).
+    const exception = new ZodSerializationException(zodError);
+
+    filter.catch(exception, host);
+
+    expect(status).toHaveBeenCalledWith(500);
+    const body = send.mock.calls[0]?.[0] as ProblemDetailsResponse;
+    // Generic — never leaks which field/value tripped the schema to the client.
+    expect(body.title).toBe('Internal Server Error');
+    expect(body.detail).toBeUndefined();
+    expect(body.errors).toBeUndefined();
+    // Unlike a plain Error, ZodSerializationException IS an HttpException
+    // (InternalServerErrorException) — without the dedicated branch this
+    // would silently skip the `instanceof Error` logging branch entirely
+    // and produce a 500 with NO server-side log line at all.
+    expect(logger.error).toHaveBeenCalledOnce();
+    expect(logger.error).toHaveBeenCalledWith(
+      { err: zodError },
+      'response failed schema validation (ZodSerializerDto mismatch)',
+    );
   });
 
   it('hides server-side errors and logs the stack', () => {

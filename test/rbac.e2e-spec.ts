@@ -24,7 +24,7 @@ describe('Staff read-surface gate (e2e)', () => {
   // JwtStrategy resolves the caller from the users repository; the role
   // comes from this record, swapped per test.
   const actor: User = {
-    id: '00000000-0000-0000-0000-000000000001',
+    id: '00000000-0000-4000-8000-000000000001',
     email: 'actor@b.test',
     fullName: 'Actor',
     passwordHash: 'irrelevant',
@@ -49,8 +49,11 @@ describe('Staff read-surface gate (e2e)', () => {
     byStatus: { prospek: 0, instalasi: 0, aktif: 0, isolir: 0, berhenti: 0 },
   };
 
-  const RESELLER_ID = '00000000-0000-0000-0000-0000000000r1';
-  const CUSTOMER_ID = '00000000-0000-0000-0000-0000000000c1';
+  // v4-shaped (not just hex) — `id`/`planId` land in CustomerResponse,
+  // which the now-live ZodSerializerInterceptor validates against
+  // `z.uuid()` (RFC-4122 version/variant nibbles required).
+  const RESELLER_ID = '00000000-0000-4000-8000-0000000000d1';
+  const CUSTOMER_ID = '00000000-0000-4000-8000-0000000000c1';
 
   // Full KYC-bearing row, used by the ADR-0010 amendment / ADR-0015 (SEC-4)
   // detail-route tests below — findById() itself decides (per the
@@ -72,7 +75,7 @@ describe('Staff read-surface gate (e2e)', () => {
     lat: null,
     lng: null,
     odpId: null,
-    planId: '00000000-0000-0000-0000-0000000000b1',
+    planId: '00000000-0000-4000-8000-0000000000b1',
     status: 'aktif' as const,
     holdReason: null,
     outstanding: 0,
@@ -110,7 +113,17 @@ describe('Staff read-surface gate (e2e)', () => {
   };
 
   const fakeWorkOrdersRepo = {
-    list: vi.fn(async () => ({ items: [], total: 0 })),
+    // `summary` is a required part of WorkOrderListResponseSchema (every
+    // status key always zero-filled) — omitting it 500s now that the
+    // response is actually parsed.
+    list: vi.fn(async () => ({
+      items: [],
+      total: 0,
+      summary: {
+        total: 0,
+        byStatus: { scheduled: 0, in_progress: 0, done: 0, cancelled: 0 },
+      },
+    })),
   };
 
   beforeAll(async () => {

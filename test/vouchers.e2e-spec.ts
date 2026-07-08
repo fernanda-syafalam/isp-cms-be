@@ -25,10 +25,13 @@ import { VouchersService } from '../src/modules/vouchers/vouchers.service';
 describe('Vouchers mutating endpoints (e2e)', () => {
   let app: NestFastifyApplication;
 
-  const VOUCHER_ID = '00000000-0000-0000-0000-0000000000v1';
+  // v4-shaped (not just hex) — `id` lands in VoucherResponse, which the
+  // now-live ZodSerializerInterceptor validates against `z.uuid()`
+  // (RFC-4122 version/variant nibbles required).
+  const VOUCHER_ID = '00000000-0000-4000-8000-0000000000e1';
 
   const actor: User = {
-    id: '00000000-0000-0000-0000-000000000001',
+    id: '00000000-0000-4000-8000-000000000001',
     email: 'actor@b.test',
     fullName: 'Actor',
     passwordHash: 'irrelevant',

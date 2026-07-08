@@ -19,8 +19,11 @@ import { UsersRepository } from '../src/modules/users/users.repository';
 describe('Users create gate (e2e)', () => {
   let app: NestFastifyApplication;
 
+  // v4-shaped (not just hex) — `id` lands in UserResponse, which the
+  // now-live ZodSerializerInterceptor validates against `z.uuid()`
+  // (RFC-4122 version/variant nibbles required).
   const createdUser: User = {
-    id: '00000000-0000-0000-0000-000000000042',
+    id: '00000000-0000-4000-8000-000000000042',
     email: 'new-admin@b.test',
     fullName: 'New Admin',
     passwordHash: 'irrelevant',

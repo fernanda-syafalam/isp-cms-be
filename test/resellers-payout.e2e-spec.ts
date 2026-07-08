@@ -28,12 +28,15 @@ import { UsersRepository } from '../src/modules/users/users.repository';
 describe('Resellers + payout lifecycle (e2e)', () => {
   let app: NestFastifyApplication;
 
-  const RESELLER_ID = '00000000-0000-0000-0000-0000000000r1';
-  const FOREIGN_RESELLER_ID = '00000000-0000-0000-0000-0000000000r2';
-  const PAYOUT_ID = '00000000-0000-0000-0000-0000000000p1';
+  // v4-shaped (not just hex) — these land in ResellerResponse/PayoutResponse,
+  // which the now-live ZodSerializerInterceptor validates against
+  // `z.uuid()` (RFC-4122 version/variant nibbles required).
+  const RESELLER_ID = '00000000-0000-4000-8000-0000000000d1';
+  const FOREIGN_RESELLER_ID = '00000000-0000-4000-8000-0000000000d2';
+  const PAYOUT_ID = '00000000-0000-4000-8000-0000000000e1';
 
   const actor: User = {
-    id: '00000000-0000-0000-0000-000000000001',
+    id: '00000000-0000-4000-8000-000000000001',
     email: 'actor@b.test',
     fullName: 'Actor',
     passwordHash: 'irrelevant',
@@ -102,7 +105,7 @@ describe('Resellers + payout lifecycle (e2e)', () => {
     disbursePayout: vi.fn(async () => ({
       ...PAYOUT_ROW,
       status: 'paid' as const,
-      ledgerEntryId: '00000000-0000-0000-0000-0000000000l1',
+      ledgerEntryId: '00000000-0000-4000-8000-0000000000f1',
       decidedAt: new Date('2026-07-02T00:00:00Z'),
     })),
   };

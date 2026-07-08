@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { PinoLogger } from 'nestjs-pino';
+import { ZodSerializationException } from 'nestjs-zod';
 import { ZodError } from 'zod';
 
 /**
@@ -62,6 +63,23 @@ export class AllExceptionsFilter implements ExceptionFilter {
       status = HttpStatus.BAD_REQUEST;
       title = 'Validation Failed';
       errors = exception.flatten();
+    } else if (exception instanceof ZodSerializationException) {
+      // A handler's return value didn't match the `@ZodSerializerDto(...)`
+      // response schema declared for it (e.g. a raw Date where the schema
+      // expects an ISO string) — a server-side bug, not a client error, so
+      // this stays a 500 with the generic InternalServerErrorException
+      // title/status the exception already carries. Unlike a plain Error,
+      // `ZodSerializationException` never falls into the `instanceof
+      // Error` branch below (`InternalServerErrorException` IS an
+      // `HttpException`), so without this branch a response-serialization
+      // bug would 500 with ZERO server-side log line — exactly the kind of
+      // silent failure this filter exists to prevent. Logs the Zod issue
+      // list (never the response payload itself, which may carry a KYC/
+      // secret field this exception was thrown while trying to strip).
+      this.logger.error(
+        { err: exception.getZodError() },
+        'response failed schema validation (ZodSerializerDto mismatch)',
+      );
     } else if (exception instanceof HttpException) {
       status = exception.getStatus();
       const res = exception.getResponse();

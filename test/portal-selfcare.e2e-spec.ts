@@ -26,12 +26,16 @@ import { UsersRepository } from '../src/modules/users/users.repository';
 describe('Portal self-care (e2e)', () => {
   let app: NestFastifyApplication;
 
-  const CUSTOMER_ID = '00000000-0000-0000-0000-0000000000c1';
+  // Fixture ids must be RFC-4122-shaped v4 UUIDs — the response schemas
+  // declare `z.uuid()`, which the now-live ZodSerializerInterceptor
+  // actually parses (it requires the version/variant nibbles `4`/`8-b`,
+  // not just hex characters).
+  const CUSTOMER_ID = '00000000-0000-4000-8000-0000000000c1';
   const CUSTOMER_FULL_NAME = 'Budi Santoso';
-  const DEVICE_ID = '00000000-0000-0000-0000-00000000ad01';
+  const DEVICE_ID = '00000000-0000-4000-8000-00000000ad01';
 
   const actor: User = {
-    id: '00000000-0000-0000-0000-000000000001',
+    id: '00000000-0000-4000-8000-000000000001',
     email: 'budi@b.test',
     fullName: CUSTOMER_FULL_NAME,
     passwordHash: 'irrelevant',
@@ -51,7 +55,7 @@ describe('Portal self-care (e2e)', () => {
     address: 'Jl. Mawar',
     areaId: null,
     areaName: null,
-    planId: '00000000-0000-0000-0000-0000000000p1',
+    planId: '00000000-0000-4000-8000-0000000000e1',
     planName: 'Home 50',
     status: 'aktif',
     holdReason: null,
@@ -80,7 +84,7 @@ describe('Portal self-care (e2e)', () => {
   };
 
   const ANNOUNCEMENT: Announcement = {
-    id: '00000000-0000-0000-0000-0000000000an1',
+    id: '00000000-0000-4000-8000-0000000000f1',
     title: 'Pemeliharaan jaringan terjadwal',
     body: 'Layanan dapat terputus sesaat.',
     severity: 'info',

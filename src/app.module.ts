@@ -3,7 +3,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
-import { ZodValidationPipe } from 'nestjs-zod';
+import { ZodSerializerInterceptor, ZodValidationPipe } from 'nestjs-zod';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -150,8 +150,31 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     // the service, not here. Pilar 4.
     { provide: APP_GUARD, useClass: RolesGuard },
     // Structured audit log for handlers annotated with @Audit('...').
-    // Pass-through for everything else.
+    // Pass-through for everything else. Registered BEFORE
+    // ZodSerializerInterceptor so it is the OUTER layer: NestJS composes
+    // multiple APP_INTERCEPTOR providers like onion layers, in
+    // registration order (first = outermost, closest to the client;
+    // last = innermost, closest to the handler). With Audit outer and
+    // Serializer inner, a handler's raw return value is validated/
+    // stripped by the serializer FIRST, and only that already-safe
+    // (or, on a schema mismatch, the resulting error) reaches Audit's
+    // tap()/error() — so an audited endpoint's audit outcome
+    // ('success'/'failure') reflects what actually left the process,
+    // including a response-serialization failure. The reverse order
+    // would let Audit log 'success' for a request that then 500s during
+    // serialization.
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
+    // Enforces every `@ZodSerializerDto(...)` annotation (100+ handlers)
+    // at runtime: parses the handler's return value against the
+    // declared response schema, stripping any field the schema doesn't
+    // declare (e.g. `passwordHash` on users, encrypted TOTP secrets) and
+    // throwing a ZodSerializationException — surfaced as a 500 by
+    // AllExceptionsFilter (which logs the Zod issue server-side) — if
+    // the runtime value doesn't match the schema's shape (e.g. a raw
+    // `Date` where the schema declares `z.iso.datetime()`). Previously
+    // dead metadata: `@ZodSerializerDto` was applied everywhere but
+    // never enforced because this provider was missing.
+    { provide: APP_INTERCEPTOR, useClass: ZodSerializerInterceptor },
     // ZodValidationPipe is registered globally so that any DTO created
     // with `createZodDto()` is validated automatically. Non-zod DTOs
     // pass through unchanged.
