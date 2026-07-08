@@ -28,6 +28,10 @@ export const appConfig = registerAs('app', () => {
       expiresIn: env.JWT_EXPIRES_IN,
       refreshTokenTtlSeconds: env.REFRESH_TOKEN_TTL_SECONDS,
     },
+    // Also reused by RouterCredentialCipherService for per-router RouterOS
+    // API password encryption at rest (SEC-M1) — one app "encrypt a secret
+    // at rest" key for v1 rather than a second env secret; see that
+    // service's doc comment for the tradeoff.
     twoFactor: {
       encKey: env.TWOFA_ENC_KEY,
     },

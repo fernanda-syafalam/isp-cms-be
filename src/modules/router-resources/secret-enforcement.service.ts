@@ -36,6 +36,7 @@ export class SecretEnforcementService {
           host: target.host,
           apiPort: target.apiPort,
           routerUser: target.routerUser,
+          apiPasswordEncrypted: target.apiPasswordEncrypted,
           secretUsername: target.secretUsername,
         },
         disabled,

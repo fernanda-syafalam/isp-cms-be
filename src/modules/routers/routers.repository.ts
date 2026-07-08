@@ -115,6 +115,20 @@ export class RoutersRepository {
     return row;
   }
 
+  // Partial patch (PATCH /v1/routers/:id). Caller (RoutersService) resolves
+  // which fields to include — this only applies whatever it's given.
+  async update(id: string, patch: Partial<NewRouter>): Promise<Router> {
+    const [row] = await this.db
+      .update(routers)
+      .set({ ...patch, updatedAt: sql`now()` })
+      .where(eq(routers.id, id))
+      .returning();
+    if (!row) {
+      throw new NotFoundException('router not found');
+    }
+    return row;
+  }
+
   // Move the cached secret count by delta (floored at 0). Maintained by the
   // PPPoE-secrets module as secrets are created/deleted.
   async adjustSecretCount(id: string, delta: number): Promise<void> {

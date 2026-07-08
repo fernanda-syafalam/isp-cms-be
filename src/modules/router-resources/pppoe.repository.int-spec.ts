@@ -54,6 +54,7 @@ describe('PPPoE repositories (integration)', () => {
       CREATE TABLE routers (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name varchar(80) NOT NULL,
         address varchar(120) NOT NULL, api_port integer NOT NULL, username varchar(60) NOT NULL,
+        api_username varchar(60), api_password_encrypted text,
         model varchar(60) NOT NULL, version varchar(40) NOT NULL,
         status router_status NOT NULL DEFAULT 'online', secret_count integer NOT NULL DEFAULT 0,
         last_sync_at timestamptz(3) NOT NULL DEFAULT now(),

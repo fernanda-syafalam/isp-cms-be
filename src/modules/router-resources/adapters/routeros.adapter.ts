@@ -2,6 +2,7 @@ import { type Socket, connect } from 'node:net';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { AppConfig } from '../../../config/configuration';
+import { RouterCredentialCipherService } from '../../routers/router-credential-cipher.service';
 import { RouterAdapter, type RouterSecretTarget } from './router-adapter';
 import { encodeSentence, parseSentences } from './routeros-protocol';
 
@@ -14,6 +15,16 @@ const CONNECT_TIMEOUT_MS = 5_000;
  * `/ppp/secret/print ?name=<u>` → `.id`, then `/ppp/secret/set =.id=<id>
  * =disabled=yes|no`.
  *
+ * SEC-M1 credential resolution: prefers the target router's own encrypted
+ * credential (`RouterCredentialCipherService.decrypt`) so a compromised or
+ * misdirected (malicious `host`) password only ever exposes ONE router.
+ * Falls back to the shared env `ROUTEROS_API_PASSWORD` ONLY when the router
+ * genuinely has no per-router credential stored yet (`apiPasswordEncrypted`
+ * is `null`) — logging a warning nudge to migrate it. A router that DOES
+ * have a stored credential but fails to decrypt (corrupted blob / rotated
+ * key) fails closed instead — it does NOT silently fall back to the shared
+ * secret, which would defeat the isolation this fix provides.
+ *
  * Best-effort by contract: a device/connection failure is logged and swallowed
  * so a billing batch is never aborted by one unreachable router — the DB
  * already holds the intended state for a later reconcile.
@@ -21,18 +32,22 @@ const CONNECT_TIMEOUT_MS = 5_000;
 @Injectable()
 export class RouterOsRouterAdapter extends RouterAdapter {
   private readonly logger = new Logger(RouterOsRouterAdapter.name);
-  private readonly apiPassword: string | undefined;
+  private readonly sharedApiPassword: string | undefined;
 
-  constructor(config: ConfigService<{ app: AppConfig }, true>) {
+  constructor(
+    config: ConfigService<{ app: AppConfig }, true>,
+    private readonly cipher: RouterCredentialCipherService,
+  ) {
     super();
-    this.apiPassword = config.get('app.routeros.apiPassword', { infer: true });
+    this.sharedApiPassword = config.get('app.routeros.apiPassword', { infer: true });
   }
 
   async setSecretDisabled(target: RouterSecretTarget, disabled: boolean): Promise<void> {
-    if (!this.apiPassword) {
+    const apiPassword = this.resolveApiPassword(target);
+    if (!apiPassword) {
       this.logger.error(
         { host: target.host },
-        'ROUTEROS_MODE=live but ROUTEROS_API_PASSWORD is unset — skipping push',
+        'ROUTEROS_MODE=live but no usable API password (no per-router credential and ROUTEROS_API_PASSWORD is unset) — skipping push',
       );
       return;
     }
@@ -40,7 +55,7 @@ export class RouterOsRouterAdapter extends RouterAdapter {
     let session: RouterOsSession | undefined;
     try {
       session = await RouterOsSession.open(target.host, target.apiPort);
-      await session.login(target.routerUser, this.apiPassword);
+      await session.login(target.routerUser, apiPassword);
       const id = await session.findSecretId(target.secretUsername);
       if (!id) {
         this.logger.warn(
@@ -66,6 +81,29 @@ export class RouterOsRouterAdapter extends RouterAdapter {
     } finally {
       session?.close();
     }
+  }
+
+  /**
+   * Resolve the plaintext password to authenticate with (SEC-M1). See the
+   * class doc comment for the fail-closed-on-corruption rationale.
+   */
+  private resolveApiPassword(target: RouterSecretTarget): string | undefined {
+    if (target.apiPasswordEncrypted) {
+      const decrypted = this.cipher.decrypt(target.apiPasswordEncrypted);
+      if (decrypted) return decrypted;
+      this.logger.error(
+        { host: target.host },
+        'stored router API credential failed to decrypt (corrupted value or rotated key) — failing closed, NOT falling back to the shared password',
+      );
+      return undefined;
+    }
+    if (this.sharedApiPassword) {
+      this.logger.warn(
+        { host: target.host },
+        'router has no per-router API credential — using the shared ROUTEROS_API_PASSWORD fallback (SEC-M1: migrate this router to a per-router credential via PATCH /v1/routers/:id)',
+      );
+    }
+    return this.sharedApiPassword;
   }
 }
 

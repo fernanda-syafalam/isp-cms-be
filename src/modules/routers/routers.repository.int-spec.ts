@@ -30,6 +30,8 @@ describe('RoutersRepository (integration)', () => {
         address varchar(120) NOT NULL,
         api_port integer NOT NULL,
         username varchar(60) NOT NULL,
+        api_username varchar(60),
+        api_password_encrypted text,
         model varchar(60) NOT NULL,
         version varchar(40) NOT NULL,
         status router_status NOT NULL DEFAULT 'online',
@@ -89,6 +91,39 @@ describe('RoutersRepository (integration)', () => {
     expect(synced.status).toBe('online');
     expect(synced.lastSyncAt.getTime()).toBeGreaterThanOrEqual(r.lastSyncAt.getTime());
     await expect(repo.markSynced('00000000-0000-0000-0000-0000000000ff')).rejects.toThrow();
+  });
+
+  describe('update (SEC-M1 per-router credential)', () => {
+    it('persists the encrypted password column distinct from the plaintext', async () => {
+      const r = await repo.create(newRouter());
+      expect(r.apiPasswordEncrypted).toBeNull();
+
+      const encrypted = 'aXY=:dGFn:Y2lwaGVydGV4dA=='; // fake iv:authTag:ciphertext shape
+      const updated = await repo.update(r.id, { apiPasswordEncrypted: encrypted });
+
+      expect(updated.apiPasswordEncrypted).toBe(encrypted);
+      expect(updated.apiPasswordEncrypted).not.toContain('plaintext');
+    });
+
+    it('persists an apiUsername override independent of the base username', async () => {
+      const r = await repo.create(newRouter({ username: 'admin' }));
+      const updated = await repo.update(r.id, { apiUsername: 'api-only-user' });
+
+      expect(updated.username).toBe('admin');
+      expect(updated.apiUsername).toBe('api-only-user');
+    });
+
+    it('changes the host (address) via update — the SSRF-relevant field', async () => {
+      const r = await repo.create(newRouter({ address: '10.0.0.1' }));
+      const updated = await repo.update(r.id, { address: '203.0.113.9' });
+      expect(updated.address).toBe('203.0.113.9');
+    });
+
+    it('rejects an update for a missing router', async () => {
+      await expect(
+        repo.update('00000000-0000-0000-0000-0000000000ff', { name: 'X' }),
+      ).rejects.toThrow();
+    });
   });
 
   describe('list — summary aggregate', () => {

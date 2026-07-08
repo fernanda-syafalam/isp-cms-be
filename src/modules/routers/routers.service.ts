@@ -1,11 +1,13 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import type { Router } from '../../infrastructure/database/schema/routers.schema';
+import type { NewRouter, Router } from '../../infrastructure/database/schema/routers.schema';
 import type { ConnectRouterInput } from './dto/connect-router.dto';
 import type {
   RouterListResponse,
   RouterResponse,
   TestConnectionResult,
 } from './dto/router-response.dto';
+import type { UpdateRouterInput } from './dto/update-router.dto';
+import { RouterCredentialCipherService } from './router-credential-cipher.service';
 import { type RouterListFilter, RoutersRepository } from './routers.repository';
 
 // Synthesised RouterOS metadata until the real API integration lands. The
@@ -17,7 +19,10 @@ const VERSIONS = ['7.15.3', '7.14.2', '7.13.5', '6.49.13'] as const;
 export class RoutersService {
   private readonly logger = new Logger(RoutersService.name);
 
-  constructor(private readonly repo: RoutersRepository) {}
+  constructor(
+    private readonly repo: RoutersRepository,
+    private readonly cipher: RouterCredentialCipherService,
+  ) {}
 
   async list(filter: RouterListFilter): Promise<RouterListResponse> {
     const { items, total, summary } = await this.repo.list(filter);
@@ -39,18 +44,62 @@ export class RoutersService {
     };
   }
 
-  /** Save a new managed router (probes for model/version). */
+  /**
+   * Save a new managed router (probes for model/version). SEC-M1: `password`
+   * is persisted as this router's own encrypted credential — not the shared
+   * env secret — so it can never be used to authenticate to a different
+   * device.
+   */
   async connect(input: ConnectRouterInput): Promise<RouterResponse> {
     const router = await this.repo.create({
       name: input.name,
       address: input.host,
       apiPort: input.apiPort,
       username: input.username,
+      apiUsername: input.apiUsername ?? null,
+      apiPasswordEncrypted: this.cipher.encrypt(input.password),
       model: pick(MODELS, input.host, 'RB5009'),
       version: pick(VERSIONS, input.host, '7.15.3'),
     });
     this.logger.log({ routerId: router.id }, 'router connected');
     return toRouterResponse(router);
+  }
+
+  /**
+   * Partial update (PATCH /v1/routers/:id). SEC-M1: when `host` actually
+   * changes, this is a security-relevant event — the target of every future
+   * credential-bearing connection for this router changes — so it's logged
+   * loudly (`audit: true`) in addition to the generic `@Audit('router.update')`
+   * entry the controller already records for every call to this endpoint.
+   */
+  async update(id: string, input: UpdateRouterInput, actor?: string): Promise<RouterResponse> {
+    const current = await this.requireById(id);
+
+    const patch: Partial<NewRouter> = {};
+    if (input.name !== undefined) patch.name = input.name;
+    if (input.host !== undefined) patch.address = input.host;
+    if (input.apiPort !== undefined) patch.apiPort = input.apiPort;
+    if (input.username !== undefined) patch.username = input.username;
+    if (input.apiUsername !== undefined) patch.apiUsername = input.apiUsername;
+    if (input.password !== undefined)
+      patch.apiPasswordEncrypted = this.cipher.encrypt(input.password);
+
+    if (input.host !== undefined && input.host !== current.address) {
+      this.logger.warn(
+        {
+          audit: true,
+          routerId: id,
+          oldHost: current.address,
+          newHost: input.host,
+          actor: actor ?? 'unknown',
+        },
+        'router host changed — verify this update was authorized (SEC-M1: a malicious host swap can redirect credential-bearing traffic)',
+      );
+    }
+
+    const updated = await this.repo.update(id, patch);
+    this.logger.log({ routerId: id }, 'router updated');
+    return toRouterResponse(updated);
   }
 
   async sync(id: string): Promise<RouterResponse> {

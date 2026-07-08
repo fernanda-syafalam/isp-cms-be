@@ -13,8 +13,20 @@
 export type RouterSecretTarget = {
   host: string;
   apiPort: number;
-  /** RouterOS API login user (from the routers table). */
+  /**
+   * RouterOS API login user, already resolved (the router's `apiUsername`
+   * override, falling back to its `username` — see routers.schema.ts).
+   */
   routerUser: string;
+  /**
+   * SEC-M1: the router's own AES-256-GCM-encrypted API password
+   * (`iv:authTag:ciphertext`), or `null` when this router has no
+   * per-router credential set yet. The live adapter decrypts it and, only
+   * when `null`, falls back to the shared env `ROUTEROS_API_PASSWORD`
+   * (logging a warning). Never the plaintext — decryption happens in the
+   * adapter, the only place that also holds the cipher key.
+   */
+  apiPasswordEncrypted: string | null;
   /** The PPPoE secret's username (=name on the device). */
   secretUsername: string;
 };
