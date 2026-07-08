@@ -96,14 +96,23 @@ export class PaymentIntentsService {
     return this.create(input);
   }
 
-  async confirmForCustomer(customerId: string, id: string): Promise<PaymentIntentResponse> {
+  /**
+   * Read-only status poll for the customer's own intent (SEC-H1 interim
+   * fix). Settlement is no longer reachable from the customer at all — it
+   * only happens via `confirm()` above, called from the staff/admin route
+   * or (P4, future) a signed gateway webhook. This never flips state, so
+   * there is no self-settle path hiding behind "just checking status".
+   * Ownership misses 404 (not 403), same posture as the other portal
+   * IDOR guards.
+   */
+  async findForCustomer(customerId: string, id: string): Promise<PaymentIntentResponse> {
     const intent = await this.repo.findById(id);
     if (!intent) throw new NotFoundException('payment intent not found');
     const invoice = await this.invoices.findById(intent.invoiceId);
     if (invoice.customerId !== customerId) {
       throw new NotFoundException('payment intent not found');
     }
-    return this.confirm(id);
+    return toIntentResponse(intent);
   }
 
   /**

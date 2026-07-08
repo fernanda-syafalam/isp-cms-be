@@ -131,7 +131,7 @@ describe('Money + billing mutating endpoints (e2e)', () => {
     create: vi.fn(async () => PENDING_INTENT),
     confirm: vi.fn(async () => PAID_INTENT),
     createForCustomer: vi.fn(async () => PENDING_INTENT),
-    confirmForCustomer: vi.fn(async () => PAID_INTENT),
+    findForCustomer: vi.fn(async () => PENDING_INTENT),
     pendingForCustomer: vi.fn(async () => []),
     expireStale: vi.fn(async () => ({ expired: 0 })),
   };
@@ -355,14 +355,16 @@ describe('Money + billing mutating endpoints (e2e)', () => {
     });
   });
 
-  describe('POST /v1/portal/pay-intent (+ confirm) — customer-scoped gateway path', () => {
-    // SECURITY NOTE (do not "fix" here): PortalController.createPayIntent /
-    // confirmPayIntent are tracked with a known, separate security finding
-    // for the upcoming outstanding-integrity fix wave. This suite
-    // deliberately locks the CURRENT status code + response shape (not
-    // ownership-safety) so that whenever that fix lands, it shows up here
-    // as an intentional, reviewed test diff instead of a silent behavior
-    // change slipping through green CI.
+  describe('POST /v1/portal/pay-intent (+ GET status) — customer-scoped gateway path', () => {
+    // SECURITY FIX (SEC-H1, was a latent-Critical free-internet hole):
+    // `POST /v1/portal/pay-intent/:id/confirm` let a customer self-settle
+    // their own invoice with zero payment verification — it called straight
+    // through to `payment-intents.service.confirm` (mark paid + reactivate)
+    // with no gateway involved. That route is now REMOVED; the customer may
+    // only create an intent and poll its status (`GET .../pay-intent/:id`).
+    // Settlement survives only on the staff/admin route above (or, P4
+    // future, a signed gateway webhook) — see `payment-intents.service.ts`
+    // `confirm()` / `findForCustomer()`.
     it('createPayIntent: 201 + shape, customer', async () => {
       const res = await app.inject({
         method: 'POST',
@@ -377,17 +379,39 @@ describe('Money + billing mutating endpoints (e2e)', () => {
       expect(res.json()).toEqual(PENDING_INTENT);
     });
 
-    it('confirmPayIntent: 201 + shape (paid), customer', async () => {
+    it('GET pay-intent/:id: 200 + shape (status poll only), customer', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/v1/portal/pay-intent/${INTENT_ID}`,
+        headers: { authorization: `Bearer ${await tokenFor('customer')}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual(PENDING_INTENT);
+      expect(fakePaymentIntentsService.findForCustomer).toHaveBeenCalledWith(
+        CUSTOMER_ID,
+        INTENT_ID,
+      );
+    });
+
+    it('SEC-H1 regression: the self-settle route is gone — a customer can no longer confirm/pay their own intent', async () => {
+      // `confirm` is shared with the staff/admin describe block above (no
+      // per-test mock reset in this suite), so assert the call count is
+      // unchanged by THIS request rather than "never called".
+      const callsBefore = fakePaymentIntentsService.confirm.mock.calls.length;
+
       const res = await app.inject({
         method: 'POST',
         url: `/v1/portal/pay-intent/${INTENT_ID}/confirm`,
         headers: { authorization: `Bearer ${await tokenFor('customer')}` },
       });
-      expect(res.statusCode).toBe(201);
-      expect(res.json()).toEqual(PAID_INTENT);
+      // No handler matches this path anymore (JwtAuthGuard/RolesGuard never
+      // even run) — Fastify/Nest answers 404, not 403. Either way the
+      // invoice-settlement service is never invoked by a customer.
+      expect(res.statusCode).toBe(404);
+      expect(fakePaymentIntentsService.confirm.mock.calls.length).toBe(callsBefore);
     });
 
-    it('staff: 403 on both portal-scoped routes (customer-only surface)', async () => {
+    it('staff: 403 on the portal-scoped create + poll routes (customer-only surface)', async () => {
       const token = await tokenFor('staff');
       const create = await app.inject({
         method: 'POST',
@@ -397,12 +421,12 @@ describe('Money + billing mutating endpoints (e2e)', () => {
       });
       expect(create.statusCode).toBe(403);
 
-      const confirm = await app.inject({
-        method: 'POST',
-        url: `/v1/portal/pay-intent/${INTENT_ID}/confirm`,
+      const poll = await app.inject({
+        method: 'GET',
+        url: `/v1/portal/pay-intent/${INTENT_ID}`,
         headers: { authorization: `Bearer ${token}` },
       });
-      expect(confirm.statusCode).toBe(403);
+      expect(poll.statusCode).toBe(403);
     });
   });
 });

@@ -67,10 +67,16 @@ export class PortalService {
     return this.intents.createForCustomer(customer.id, input);
   }
 
-  /** Confirm the customer's own gateway charge (mock settlement webhook). */
-  async confirmPayIntent(user: AuthUser, intentId: string): Promise<PaymentIntentResponse> {
+  /**
+   * Poll the status of the customer's own gateway charge (SEC-H1 interim
+   * fix). This is deliberately read-only: settlement now only happens
+   * through the staff/admin route (or, P4 future, a signed gateway
+   * webhook) — a customer can create an intent and watch it, never flip
+   * it to paid themselves.
+   */
+  async getPayIntent(user: AuthUser, intentId: string): Promise<PaymentIntentResponse> {
     const customer = await this.customers.resolveForPortal(user);
-    return this.intents.confirmForCustomer(customer.id, intentId);
+    return this.intents.findForCustomer(customer.id, intentId);
   }
 
   /** Customer reports a problem -> opens a support ticket on their account. */

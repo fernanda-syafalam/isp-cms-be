@@ -74,7 +74,7 @@ describe('PortalService', () => {
     };
     intents = {
       createForCustomer: vi.fn().mockResolvedValue({ id: 'int-1', status: 'pending' }),
-      confirmForCustomer: vi.fn().mockResolvedValue({ id: 'int-1', status: 'paid' }),
+      findForCustomer: vi.fn().mockResolvedValue({ id: 'int-1', status: 'pending' }),
       // Only the still-resumable (pending, not expired) intent is returned —
       // the paid/expired filtering itself is the repository's job (covered
       // by payment-intents.repository.int-spec.ts); here we only assert
@@ -144,11 +144,14 @@ describe('PortalService', () => {
       expect(result).toEqual({ id: 'int-1', status: 'pending' });
     });
 
-    it('confirms a charge scoped to the resolved customer', async () => {
-      const result = await service.confirmPayIntent(user, 'int-1');
+    // SEC-H1 interim fix: the portal may only poll an intent's status —
+    // there is no service method left that can settle it on the customer's
+    // behalf.
+    it('polls the status of a charge scoped to the resolved customer, never settling it', async () => {
+      const result = await service.getPayIntent(user, 'int-1');
 
-      expect(intents.confirmForCustomer).toHaveBeenCalledWith(CUSTOMER_ID, 'int-1');
-      expect(result).toEqual({ id: 'int-1', status: 'paid' });
+      expect(intents.findForCustomer).toHaveBeenCalledWith(CUSTOMER_ID, 'int-1');
+      expect(result).toEqual({ id: 'int-1', status: 'pending' });
     });
   });
 
