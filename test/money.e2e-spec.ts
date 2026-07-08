@@ -34,12 +34,17 @@ import { UsersRepository } from '../src/modules/users/users.repository';
 describe('Money + billing mutating endpoints (e2e)', () => {
   let app: NestFastifyApplication;
 
-  const INVOICE_ID = '00000000-0000-0000-0000-0000000000i1';
-  const CUSTOMER_ID = '00000000-0000-0000-0000-0000000000c1';
-  const INTENT_ID = '00000000-0000-0000-0000-0000000000n1';
+  // Fixture ids must be RFC-4122-shaped v4 UUIDs — the response schemas
+  // declare `z.uuid()`, which the now-live ZodSerializerInterceptor
+  // actually parses (it requires the version/variant nibbles `4`/`8-b`,
+  // not just hex characters; the all-zero id is otherwise special-cased
+  // and would ALSO fail without them).
+  const INVOICE_ID = '00000000-0000-4000-8000-0000000000e1';
+  const CUSTOMER_ID = '00000000-0000-4000-8000-0000000000c1';
+  const INTENT_ID = '00000000-0000-4000-8000-0000000000f1';
 
   const actor: User = {
-    id: '00000000-0000-0000-0000-000000000001',
+    id: '00000000-0000-4000-8000-000000000001',
     email: 'actor@b.test',
     fullName: 'Actor',
     passwordHash: 'irrelevant',

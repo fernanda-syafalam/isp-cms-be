@@ -25,15 +25,18 @@ const CursorQuerySchema = z.object({
 });
 
 /**
- * Strip sensitive columns before a user row leaves the API. The
- * ZodSerializerDto annotations are NOT enforced at runtime (no global
- * ZodSerializerInterceptor is registered — tracked as a follow-up), so
- * every handler that returns a user must strip explicitly, like `list`
- * always has.
+ * Strip sensitive columns and normalize the Drizzle `Date` column to the
+ * ISO string `UserResponseSchema` (`createdAt: z.iso.datetime()`)
+ * declares. The global `ZodSerializerInterceptor` parses the return
+ * value against that schema, and a raw `Date` fails `z.iso.datetime()`
+ * (a *string* schema) — so every handler that returns a user must go
+ * through this, like `list` already does for the field-stripping half.
  */
-function toUserResponse<T extends { passwordHash: string; deletedAt: Date | null }>(user: T) {
-  const { passwordHash: _passwordHash, deletedAt: _deletedAt, ...rest } = user;
-  return rest;
+function toUserResponse<
+  T extends { passwordHash: string; deletedAt: Date | null; createdAt: Date },
+>(user: T) {
+  const { passwordHash: _passwordHash, deletedAt: _deletedAt, createdAt, ...rest } = user;
+  return { ...rest, createdAt: createdAt.toISOString() };
 }
 
 @Roles('admin', 'staff')

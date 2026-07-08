@@ -27,12 +27,16 @@ import { WorkOrdersService } from '../src/modules/work-orders/work-orders.servic
 describe('Representative domain mutations (e2e)', () => {
   let app: NestFastifyApplication;
 
-  const CUSTOMER_ID = '00000000-0000-0000-0000-0000000000c1';
-  const WORK_ORDER_ID = '00000000-0000-0000-0000-0000000000w1';
-  const TICKET_ID = '00000000-0000-0000-0000-0000000000t1';
+  // Fixture ids must be RFC-4122-shaped v4 UUIDs — the response schemas
+  // declare `z.uuid()`, which the now-live ZodSerializerInterceptor
+  // actually parses (it requires the version/variant nibbles `4`/`8-b`,
+  // not just hex characters).
+  const CUSTOMER_ID = '00000000-0000-4000-8000-0000000000c1';
+  const WORK_ORDER_ID = '00000000-0000-4000-8000-0000000000d1';
+  const TICKET_ID = '00000000-0000-4000-8000-0000000000e1';
 
   const actor: User = {
-    id: '00000000-0000-0000-0000-000000000001',
+    id: '00000000-0000-4000-8000-000000000001',
     email: 'actor@b.test',
     fullName: 'Actor',
     passwordHash: 'irrelevant',
