@@ -42,7 +42,14 @@ describe('SlaCreditsService', () => {
   let tickets: { findIdByCode: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
-    repo = { list: vi.fn(), findById: vi.fn(), create: vi.fn(), apply: vi.fn(), void: vi.fn() };
+    repo = {
+      list: vi.fn(),
+      findById: vi.fn(),
+      create: vi.fn(),
+      apply: vi.fn(),
+      applyWithInvoiceCredit: vi.fn(),
+      void: vi.fn(),
+    };
     customers = { findIdByFullName: vi.fn(), findById: vi.fn(), setBilling: vi.fn() };
     tickets = { findIdByCode: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
@@ -200,36 +207,43 @@ describe('SlaCreditsService', () => {
   });
 
   describe('apply', () => {
-    it('applies a pending credit and reduces the customer outstanding', async () => {
+    // Regression (outstanding-integrity fix): a credit that resolves to a
+    // customer is now applied via `applyWithInvoiceCredit` — a REAL
+    // discount line on a real invoice, deducted + recomputed in ONE
+    // transaction — never a hand-computed `customer.outstanding - amount`
+    // write (that was the silent-wipe bug: `outstanding` is a DERIVED
+    // column, recomputed from unpaid invoices on every billing event, so a
+    // bare delta with no backing invoice row got silently erased by the
+    // next recompute). `applyWithInvoiceCredit` itself (the invoice-line
+    // math, the locking) is covered end-to-end in
+    // `sla-credits.repository.int-spec.ts`; here we only assert the
+    // service routes to the right repo method and never touches
+    // `customers` directly.
+    it('applies a pending credit that resolves to a customer via applyWithInvoiceCredit', async () => {
       repo.findById.mockResolvedValue(credit);
-      repo.apply.mockResolvedValue({
+      repo.applyWithInvoiceCredit.mockResolvedValue({
         ...credit,
         status: 'applied',
+        appliedInvoiceId: '00000000-0000-0000-0000-00000000e001',
         appliedAt: new Date('2026-06-15T10:00:00.000Z'),
       });
-      // amount 50_000 off a 200_000 balance -> 150_000.
-      customers.findById.mockResolvedValue({ id: credit.customerId, outstanding: 200_000 });
       const result = await service.apply(credit.id);
-      expect(repo.apply).toHaveBeenCalledWith(credit.id);
-      expect(customers.setBilling).toHaveBeenCalledWith(credit.customerId, {
-        outstanding: 150_000,
-      });
+      expect(repo.applyWithInvoiceCredit).toHaveBeenCalledWith(credit.id, credit.customerId);
+      expect(repo.apply).not.toHaveBeenCalled();
+      // The service never reads or writes `customers` directly for this path
+      // — the repository owns the invoice-line + outstanding transaction.
+      expect(customers.findById).not.toHaveBeenCalled();
+      expect(customers.setBilling).not.toHaveBeenCalled();
       expect(result.status).toBe('applied');
       expect(result.appliedAt).toBe('2026-06-15T10:00:00.000Z');
     });
 
-    it('floors the outstanding at zero when the credit exceeds the balance', async () => {
-      repo.findById.mockResolvedValue(credit);
-      repo.apply.mockResolvedValue({ ...credit, status: 'applied' });
-      customers.findById.mockResolvedValue({ id: credit.customerId, outstanding: 20_000 });
-      await service.apply(credit.id);
-      expect(customers.setBilling).toHaveBeenCalledWith(credit.customerId, { outstanding: 0 });
-    });
-
-    it('only transitions state when the credit has no resolved customer', async () => {
+    it('only transitions state (plain repo.apply) when the credit has no resolved customer', async () => {
       repo.findById.mockResolvedValue({ ...credit, customerId: null });
       repo.apply.mockResolvedValue({ ...credit, customerId: null, status: 'applied' });
       await service.apply(credit.id);
+      expect(repo.apply).toHaveBeenCalledWith(credit.id);
+      expect(repo.applyWithInvoiceCredit).not.toHaveBeenCalled();
       expect(customers.findById).not.toHaveBeenCalled();
       expect(customers.setBilling).not.toHaveBeenCalled();
     });
@@ -238,6 +252,7 @@ describe('SlaCreditsService', () => {
       repo.findById.mockResolvedValue({ ...credit, status: 'applied' });
       await service.apply(credit.id);
       expect(repo.apply).not.toHaveBeenCalled();
+      expect(repo.applyWithInvoiceCredit).not.toHaveBeenCalled();
       expect(customers.setBilling).not.toHaveBeenCalled();
     });
 

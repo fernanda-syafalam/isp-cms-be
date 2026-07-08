@@ -53,6 +53,7 @@ describe('InvoicesRepository (integration)', () => {
         updated_at timestamptz(3) NOT NULL DEFAULT now()
       );
       CREATE TYPE invoice_status AS ENUM ('draft', 'pending', 'partial', 'overdue', 'paid');
+      CREATE TYPE invoice_type AS ENUM ('regular', 'adjustment');
       CREATE TYPE payment_method AS ENUM ('qris', 'va', 'ewallet', 'transfer', 'cash');
       CREATE SEQUENCE invoice_no_seq START WITH 100;
       CREATE TABLE invoices (
@@ -61,6 +62,7 @@ describe('InvoicesRepository (integration)', () => {
           DEFAULT ('INV-' || to_char(now(), 'YYYY') || '-' || nextval('invoice_no_seq')),
         customer_id uuid NOT NULL REFERENCES customers(id),
         customer_name varchar(120) NOT NULL,
+        type invoice_type NOT NULL DEFAULT 'regular', note varchar(200),
         period_start date NOT NULL, period_end date NOT NULL,
         amount integer NOT NULL, late_fee integer NOT NULL DEFAULT 0,
         tax_amount integer NOT NULL DEFAULT 0, discount_amount integer NOT NULL DEFAULT 0, paid_amount integer NOT NULL DEFAULT 0, tax_invoice_no varchar(40),
@@ -69,7 +71,7 @@ describe('InvoicesRepository (integration)', () => {
         created_at timestamptz(3) NOT NULL DEFAULT now(),
         updated_at timestamptz(3) NOT NULL DEFAULT now()
       );
-      CREATE UNIQUE INDEX invoices_customer_period_idx ON invoices (customer_id, period_start);
+      CREATE UNIQUE INDEX invoices_customer_period_idx ON invoices (customer_id, period_start) WHERE type = 'regular';
       -- Minimal stub — only the voucher_id FK target for the payments table
       -- below (P3.D.3); vouchers.repository.int-spec.ts owns the full DDL.
       CREATE TABLE vouchers (
@@ -145,6 +147,35 @@ describe('InvoicesRepository (integration)', () => {
   it('enforces one invoice per customer per period', async () => {
     await repo.create(newInvoice());
     await expect(repo.create(newInvoice())).rejects.toThrow();
+  });
+
+  // MUST-FIX #2 (PR #121 money review — "free month / lost revenue"):
+  // existsForPeriod MUST filter on type = 'regular'. A proration
+  // 'adjustment' invoice raised on the 1st shares that same-day
+  // periodStart with the month's regular invoice — without the type
+  // filter, `existsForPeriod` would see the adjustment alone and report
+  // "already invoiced this period", so `InvoicesService.run()` /
+  // `generateFirstInvoice()` would skip billing the customer for the whole
+  // month.
+  it('existsForPeriod ignores an adjustment invoice for the same period — the regular invoice can still be created', async () => {
+    await repo.create(
+      newInvoice({
+        type: 'adjustment',
+        periodStart: '2026-06-01',
+        periodEnd: '2026-06-01',
+        amount: 50_000,
+      }),
+    );
+
+    // An adjustment invoice alone must NOT count as "already invoiced".
+    expect(await repo.existsForPeriod(customerId, '2026-06-01')).toBe(false);
+
+    // The regular monthly invoice for the SAME period must still be
+    // createable — the partial unique index (`WHERE type = 'regular'`)
+    // does not see the adjustment row as a conflict.
+    const regular = await repo.create(newInvoice({ periodStart: '2026-06-01' }));
+    expect(regular.type).toBe('regular');
+    expect(await repo.existsForPeriod(customerId, '2026-06-01')).toBe(true);
   });
 
   it('lists by status with a real total and limit/offset', async () => {

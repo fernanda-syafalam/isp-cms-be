@@ -5,6 +5,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PlansRepository } from '../plans/plans.repository';
 import { ResellersRepository } from '../resellers/resellers.repository';
 import { SecretEnforcementService } from '../router-resources/secret-enforcement.service';
+import { SettingsService } from '../settings/settings.service';
 import { type CustomerRow, CustomersRepository } from './customers.repository';
 import { CustomersService } from './customers.service';
 
@@ -47,6 +48,7 @@ describe('CustomersService', () => {
   let notifications: { send: ReturnType<typeof vi.fn> };
   let secrets: { applyDisabledForCustomer: ReturnType<typeof vi.fn> };
   let resellers: { findById: ReturnType<typeof vi.fn> };
+  let settings: { getBillingPolicy: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     repo = {
@@ -62,11 +64,14 @@ describe('CustomersService', () => {
       requestDataDeletion: vi.fn(),
       relocate: vi.fn(),
       setBilling: vi.fn(),
+      applyProration: vi.fn(),
+      changePlan: vi.fn(),
     };
     plans = { findById: vi.fn() };
     notifications = { send: vi.fn() };
     secrets = { applyDisabledForCustomer: vi.fn() };
     resellers = { findById: vi.fn() };
+    settings = { getBillingPolicy: vi.fn().mockResolvedValue({ dueDays: 7 }) };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         CustomersService,
@@ -75,6 +80,7 @@ describe('CustomersService', () => {
         { provide: NotificationsService, useValue: notifications },
         { provide: SecretEnforcementService, useValue: secrets },
         { provide: ResellersRepository, useValue: resellers },
+        { provide: SettingsService, useValue: settings },
       ],
     }).compile();
     service = moduleRef.get(CustomersService);
@@ -624,45 +630,63 @@ describe('CustomersService', () => {
     });
 
     describe('changePlan', () => {
-      it('adds the price delta to outstanding on an upgrade', async () => {
-        repo.findById.mockResolvedValue({ ...sampleRow, outstanding: 0, planId: PLAN_ID });
-        plans.findById.mockImplementation((id: string) =>
-          Promise.resolve(
-            id === 'plan-new'
-              ? { id: 'plan-new', name: 'Pro 100', priceMonthly: 500_000 }
-              : { id: PLAN_ID, name: 'Home 20', priceMonthly: 200_000 },
-          ),
-        );
-        repo.updateProfile.mockResolvedValue(sampleRow);
-        repo.setBilling.mockResolvedValue(undefined);
+      // Regression (MUST-FIX #1/#5, PR #121 money review): the plan write
+      // AND the delta computation now happen ATOMICALLY inside
+      // `CustomersRepository.changePlan` — a single transaction, under a
+      // customer-row lock, that re-reads planId and does its own price
+      // math. The service no longer computes the delta or calls
+      // `updateProfile`/`applyProration` itself (that split is exactly
+      // what let two concurrent submits double-charge — see
+      // `customers.repository.int-spec.ts`'s `changePlan` describe block
+      // for the real atomicity/idempotency coverage). Here we only assert
+      // the service validates the target plan, reads `dueDays`, and
+      // delegates to the one atomic repo call — nothing else.
+      it('validates the target plan then delegates atomically to repo.changePlan', async () => {
+        repo.findById.mockResolvedValue(sampleRow);
+        plans.findById.mockResolvedValue({
+          id: 'plan-new',
+          name: 'Pro 100',
+          priceMonthly: 500_000,
+        });
+        repo.changePlan.mockResolvedValue({ applied: true, delta: 300_000 });
 
         await service.changePlan(sampleRow.id, { planId: 'plan-new' });
 
-        expect(repo.updateProfile).toHaveBeenCalledWith(sampleRow.id, { planId: 'plan-new' });
-        // delta 300k added to outstanding
-        expect(repo.setBilling).toHaveBeenCalledWith(sampleRow.id, { outstanding: 300_000 });
-      });
-
-      it('does not touch outstanding on a downgrade', async () => {
-        repo.findById.mockResolvedValue({ ...sampleRow, outstanding: 0 });
-        plans.findById.mockImplementation((id: string) =>
-          Promise.resolve(
-            id === 'plan-cheap'
-              ? { id: 'plan-cheap', name: 'Home 10', priceMonthly: 100_000 }
-              : { id: PLAN_ID, name: 'Home 20', priceMonthly: 200_000 },
-          ),
-        );
-        repo.updateProfile.mockResolvedValue(sampleRow);
-        await service.changePlan(sampleRow.id, { planId: 'plan-cheap' });
+        expect(plans.findById).toHaveBeenCalledWith('plan-new');
+        expect(settings.getBillingPolicy).toHaveBeenCalled();
+        expect(repo.changePlan).toHaveBeenCalledWith(sampleRow.id, {
+          targetPlanId: 'plan-new',
+          dueDays: 7,
+        });
+        // No split writes — the service does no money math itself.
+        expect(repo.updateProfile).not.toHaveBeenCalled();
+        expect(repo.applyProration).not.toHaveBeenCalled();
         expect(repo.setBilling).not.toHaveBeenCalled();
       });
 
-      it('rejects an unknown plan with 400', async () => {
+      it('an idempotent no-op result from the repo (applied: false) does not throw', async () => {
+        repo.findById.mockResolvedValue(sampleRow);
+        plans.findById.mockResolvedValue({ id: PLAN_ID, name: 'Home 20', priceMonthly: 200_000 });
+        repo.changePlan.mockResolvedValue({ applied: false, delta: 0 });
+
+        await expect(service.changePlan(sampleRow.id, { planId: PLAN_ID })).resolves.toBeDefined();
+      });
+
+      it('rejects an unknown plan with 400 before ever calling the repo', async () => {
         repo.findById.mockResolvedValue(sampleRow);
         plans.findById.mockResolvedValue(null);
         await expect(service.changePlan(sampleRow.id, { planId: 'nope' })).rejects.toBeInstanceOf(
           BadRequestException,
         );
+        expect(repo.changePlan).not.toHaveBeenCalled();
+      });
+
+      it('rejects an unknown customer with 404 before ever calling the repo', async () => {
+        repo.findById.mockResolvedValue(null);
+        await expect(
+          service.changePlan('00000000-0000-0000-0000-0000000000ff', { planId: 'plan-new' }),
+        ).rejects.toBeInstanceOf(NotFoundException);
+        expect(repo.changePlan).not.toHaveBeenCalled();
       });
     });
   });

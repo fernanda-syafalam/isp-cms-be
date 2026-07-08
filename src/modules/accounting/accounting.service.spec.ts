@@ -10,6 +10,8 @@ function paidInvoice(over: Partial<Invoice>): Invoice {
     invoiceNo: 'INV-2026-100',
     customerId: '00000000-0000-0000-0000-0000000000c1',
     customerName: 'Budi',
+    type: 'regular',
+    note: null,
     periodStart: '2026-05-01',
     periodEnd: '2026-05-31',
     amount: 200_000,

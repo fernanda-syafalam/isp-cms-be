@@ -1,13 +1,28 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, count, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
 import { buildOrderBy } from '../../common/utils/list-sort';
-import { DrizzleService } from '../../infrastructure/database/drizzle.service';
+import { type Db, DrizzleService } from '../../infrastructure/database/drizzle.service';
+import { customers } from '../../infrastructure/database/schema/customers.schema';
+import { invoices } from '../../infrastructure/database/schema/invoices.schema';
 import {
   type NewSlaCredit,
   type SlaCredit,
   slaCredits,
 } from '../../infrastructure/database/schema/sla-credits.schema';
 import type { SlaCreditSummary } from './dto/sla-credit-response.dto';
+
+// The transaction handle drizzle hands its callback — used to type
+// `applyWithInvoiceCredit`'s handle without an `any` (mirrors
+// InvoicesRepository / VouchersRepository / CustomersRepository's
+// identical local alias).
+type DbTx = Parameters<Parameters<Db['transaction']>[0]>[0];
+
+// Statuses that still owe money — the exact same tuple
+// `InvoicesRepository` uses for `sumUnpaidByCustomer` / `UNPAID_STATUSES`.
+// Duplicated locally so this money-critical transaction is self-contained
+// and auditable within this one file (same convention as
+// `CustomersRepository.applyProration`'s identical copy).
+const UNPAID_STATUSES = ['pending', 'partial', 'overdue'] as const;
 
 // Columns the frontend may sort on (camelCase key → Drizzle column).
 // Unknown/absent key falls back to `createdAt desc` via buildOrderBy — never throws.
@@ -111,6 +126,13 @@ export class SlaCreditsRepository {
     return row?.value ?? 0;
   }
 
+  /**
+   * Transition-only apply — used when the credit has no resolved
+   * `customerId` (nothing to deduct anywhere). For a credit that DOES
+   * resolve to a customer, `SlaCreditsService.apply` calls
+   * `applyWithInvoiceCredit` instead, which also deducts a real invoice
+   * line — see that method's doc.
+   */
   async apply(id: string): Promise<SlaCredit> {
     const [row] = await this.db
       .update(slaCredits)
@@ -121,6 +143,139 @@ export class SlaCreditsRepository {
       throw new NotFoundException('sla credit not found');
     }
     return row;
+  }
+
+  /**
+   * Apply a credit that resolves to a real customer, in ONE transaction:
+   * if — and ONLY if — its oldest unpaid invoice can absorb the credit IN
+   * FULL right now, deduct it via `discountAmount` and transition to
+   * 'applied'. Otherwise LEAVE IT PENDING (see below) — never a
+   * hand-computed delta on `customers.outstanding` directly (that was the
+   * silent-wipe bug: `outstanding` is a DERIVED column, recomputed from
+   * unpaid invoices on every billing event, so a bare delta with no
+   * backing invoice row gets silently erased by the next recompute).
+   *
+   * The deduction targets a SINGLE invoice — the customer's oldest unpaid
+   * one by due date — so `appliedInvoiceId` (a single FK) stays
+   * unambiguous, mirroring `InvoicesService.resolveSlaDiscount`'s
+   * single-invoice absorption at billing time.
+   *
+   * MED #3 (PR #121 money review — "credit vanishes"): if the customer has
+   * NO unpaid invoice, or the credit is LARGER than that invoice's balance
+   * due, this does NOT mark the credit 'applied' with nothing (or only
+   * part of it) deducted — a partial-now / remainder-later split would
+   * double count, because a LATER billing run's absorption
+   * (`resolveSlaDiscount`) has no concept of "this credit was already
+   * partly spent," and re-marking an 'applied' credit's amount toward a
+   * future invoice is not a code path that exists. Instead the credit is
+   * left `status: 'pending'`, UNTOUCHED — the exact same pending-absorption
+   * mechanism (`findPendingByCustomer` -> `resolveSlaDiscount` ->
+   * `absorbSlaCredits`, `invoices.service.ts`) a newly-created credit
+   * already relies on, so a future billing run picks it up in full. A
+   * credit the customer earned is never silently consumed for nothing.
+   *
+   * `SELECT ... FOR UPDATE` locks this credit row first (idempotency
+   * re-check, defense in depth — the service already guards this), then
+   * the chosen invoice, then the CUSTOMER row LAST, right before the
+   * final outstanding recompute — the exact lock order
+   * `InvoicesRepository.recordPayment` / `refreshOutstandingTx` use, so a
+   * concurrent payment against the same customer can only ever serialize
+   * on the shared locks, never deadlock against this method.
+   */
+  async applyWithInvoiceCredit(id: string, customerId: string): Promise<SlaCredit> {
+    return this.db.transaction(async (tx) => {
+      const [credit] = await tx
+        .select()
+        .from(slaCredits)
+        .where(eq(slaCredits.id, id))
+        .for('update')
+        .limit(1);
+      if (!credit) {
+        throw new NotFoundException('sla credit not found');
+      }
+      if (credit.status !== 'pending') {
+        return credit; // idempotent no-op — see method doc.
+      }
+
+      const [invoice] = await tx
+        .select()
+        .from(invoices)
+        .where(
+          and(eq(invoices.customerId, customerId), inArray(invoices.status, [...UNPAID_STATUSES])),
+        )
+        .orderBy(asc(invoices.dueDate))
+        .for('update')
+        .limit(1);
+
+      const balanceDue = invoice
+        ? invoice.amount +
+          invoice.lateFee +
+          invoice.taxAmount -
+          invoice.discountAmount -
+          invoice.paidAmount
+        : 0;
+
+      if (!invoice || balanceDue < credit.amount) {
+        // Defer — see method doc (MED #3). Left exactly as-is (still
+        // 'pending'); nothing on `invoices`/`customers` changes.
+        return credit;
+      }
+
+      await tx
+        .update(invoices)
+        .set({
+          discountAmount: sql`${invoices.discountAmount} + ${credit.amount}`,
+          updatedAt: sql`now()`,
+        })
+        .where(eq(invoices.id, invoice.id));
+
+      const [applied] = await tx
+        .update(slaCredits)
+        .set({
+          status: 'applied',
+          appliedInvoiceId: invoice.id,
+          appliedAt: sql`now()`,
+          updatedAt: sql`now()`,
+        })
+        .where(eq(slaCredits.id, id))
+        .returning();
+      if (!applied) {
+        throw new NotFoundException('sla credit not found');
+      }
+
+      await this.refreshOutstandingTx(tx, customerId);
+      return applied;
+    });
+  }
+
+  /**
+   * Recompute `customers.outstanding` from the exact same expression
+   * `InvoicesRepository.sumUnpaidByCustomer` uses and persist it, inside
+   * the caller's transaction — mirrors
+   * `InvoicesRepository.refreshOutstandingTx` /
+   * `CustomersRepository.applyProration`'s identical helper. The customer
+   * row is locked FOR UPDATE immediately before the recompute (the LAST
+   * lock this transaction takes).
+   */
+  private async refreshOutstandingTx(tx: DbTx, customerId: string): Promise<void> {
+    await tx
+      .select({ id: customers.id })
+      .from(customers)
+      .where(eq(customers.id, customerId))
+      .for('update')
+      .limit(1);
+    const [sumRow] = await tx
+      .select({
+        total: sql<string>`coalesce(sum(${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount}), 0)`,
+      })
+      .from(invoices)
+      .where(
+        and(eq(invoices.customerId, customerId), inArray(invoices.status, [...UNPAID_STATUSES])),
+      );
+    await tx
+      .update(customers)
+      .set({ outstanding: Number(sumRow?.total ?? 0), updatedAt: sql`now()` })
+      .where(eq(customers.id, customerId));
   }
 
   /**

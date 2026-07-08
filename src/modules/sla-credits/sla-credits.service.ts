@@ -41,26 +41,24 @@ export class SlaCreditsService {
   }
 
   /**
-   * Apply a pending credit: transition it to `applied` AND reduce the
-   * customer's outstanding balance by the credit amount (floored at zero), so
-   * the goodwill credit actually lowers what they owe (ADR-0007). This mirrors
-   * how plan-change proration adjusts `outstanding` directly; a formal credit
-   * invoice-line is a follow-up. Idempotent for an already-applied credit; a
-   * void credit cannot be applied. A credit with no resolved customer only
-   * transitions state (nothing to deduct).
+   * Apply a pending credit: transition it to `applied` AND deduct it from a
+   * REAL invoice line (ADR-0007) — never a hand-computed delta on
+   * `customers.outstanding` directly (that was the silent-wipe bug:
+   * `outstanding` is a DERIVED column, recomputed from unpaid invoices on
+   * every billing event, so a bare delta with no backing invoice row got
+   * silently erased by the next recompute). See
+   * `SlaCreditsRepository.applyWithInvoiceCredit` for the invoice-line
+   * modeling. Idempotent for an already-applied credit; a void credit
+   * cannot be applied. A credit with no resolved customer only transitions
+   * state (nothing to deduct anywhere).
    */
   async apply(id: string): Promise<SlaCreditResponse> {
     const credit = await this.requireById(id);
     if (credit.status === 'applied') return toSlaCreditResponse(credit);
     if (credit.status === 'void') throw new BadRequestException('credit is void');
-    const applied = await this.repo.apply(id);
-    if (applied.customerId) {
-      const customer = await this.customers.findById(applied.customerId);
-      if (customer) {
-        const outstanding = Math.max(0, customer.outstanding - applied.amount);
-        await this.customers.setBilling(applied.customerId, { outstanding });
-      }
-    }
+    const applied = credit.customerId
+      ? await this.repo.applyWithInvoiceCredit(id, credit.customerId)
+      : await this.repo.apply(id);
     this.logger.log({ creditId: id, customerId: applied.customerId }, 'sla credit applied');
     return toSlaCreditResponse(applied);
   }

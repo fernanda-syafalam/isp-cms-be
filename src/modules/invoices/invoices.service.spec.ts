@@ -18,6 +18,8 @@ const pendingInvoice: Invoice = {
   invoiceNo: 'INV-2026-100',
   customerId: CUSTOMER_ID,
   customerName: 'Budi Santoso',
+  type: 'regular',
+  note: null,
   periodStart: '2026-06-01',
   periodEnd: '2026-06-30',
   amount: 200_000,

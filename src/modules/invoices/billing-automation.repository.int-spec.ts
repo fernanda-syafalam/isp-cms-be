@@ -49,6 +49,7 @@ describe('InvoicesRepository billing-automation (integration)', () => {
         created_at timestamptz(3) NOT NULL DEFAULT now(), updated_at timestamptz(3) NOT NULL DEFAULT now()
       );
       CREATE TYPE invoice_status AS ENUM ('draft', 'pending', 'partial', 'overdue', 'paid');
+      CREATE TYPE invoice_type AS ENUM ('regular', 'adjustment');
       CREATE TYPE payment_method AS ENUM ('qris', 'va', 'ewallet', 'transfer', 'cash');
       CREATE SEQUENCE invoice_no_seq START WITH 100;
       CREATE TABLE invoices (
@@ -56,6 +57,7 @@ describe('InvoicesRepository billing-automation (integration)', () => {
         invoice_no varchar(32) NOT NULL UNIQUE
           DEFAULT ('INV-' || to_char(now(), 'YYYY') || '-' || nextval('invoice_no_seq')),
         customer_id uuid NOT NULL REFERENCES customers(id), customer_name varchar(120) NOT NULL,
+        type invoice_type NOT NULL DEFAULT 'regular', note varchar(200),
         period_start date NOT NULL, period_end date NOT NULL,
         amount integer NOT NULL, late_fee integer NOT NULL DEFAULT 0,
         tax_amount integer NOT NULL DEFAULT 0, discount_amount integer NOT NULL DEFAULT 0, paid_amount integer NOT NULL DEFAULT 0, tax_invoice_no varchar(40),
@@ -63,7 +65,7 @@ describe('InvoicesRepository billing-automation (integration)', () => {
         paid_at timestamptz(3), last_reminded_at timestamptz(3),
         created_at timestamptz(3) NOT NULL DEFAULT now(), updated_at timestamptz(3) NOT NULL DEFAULT now()
       );
-      CREATE UNIQUE INDEX invoices_customer_period_idx ON invoices (customer_id, period_start);
+      CREATE UNIQUE INDEX invoices_customer_period_idx ON invoices (customer_id, period_start) WHERE type = 'regular';
     `);
 
     const [plan] = await db

@@ -37,10 +37,14 @@ export class InvoiceResponseDto extends createZodDto(InvoiceResponseSchema) {}
  * Full-set summary aggregate for the invoices list.
  * Computed over ALL invoices — NEVER affected by status/q/paging.
  *
- * - outstanding: sum of grand total (amount + lateFee + taxAmount) for
- *   invoices with status 'pending' OR 'overdue'.
- * - overdue: sum of grand total for invoices with status 'overdue' only.
- * - unpaidCount: count of invoices with status 'pending' OR 'overdue'.
+ * - outstanding: sum of balance due (amount + lateFee + taxAmount -
+ *   discountAmount - paidAmount, `InvoicesRepository.list`) for invoices
+ *   with status 'pending', 'partial', OR 'overdue' — never the gross
+ *   total, so an SLA-credit/proration discount or a partial payment is
+ *   never double-counted.
+ * - overdue: same balance-due sum, for invoices with status 'overdue' only.
+ * - unpaidCount: count of invoices with status 'pending', 'partial', OR
+ *   'overdue'.
  * - total: count of ALL invoices (every status).
  * - byStatus: per-status counts over ALL invoices (drives the FE status
  *   filter tabs, ADR-0011 parity) — every status key always present,
