@@ -111,6 +111,21 @@ export class SecretsRepository {
     return row ?? null;
   }
 
+  /**
+   * The customer's existing PPPoE secret, if any. Backs the install-cascade
+   * idempotency guard (`WorkOrdersService.provisionSecret`) so a retry of
+   * `complete()` never inserts a duplicate secret for the same customer.
+   * A customer has at most one secret in practice; the first match wins.
+   */
+  async findByCustomerId(customerId: string): Promise<PppSecret | null> {
+    const [row] = await this.db
+      .select()
+      .from(pppSecrets)
+      .where(eq(pppSecrets.customerId, customerId))
+      .limit(1);
+    return row ?? null;
+  }
+
   async create(input: NewPppSecret): Promise<PppSecret> {
     const [row] = await this.db.insert(pppSecrets).values(input).returning();
     if (!row) {
