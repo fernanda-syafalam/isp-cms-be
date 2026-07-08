@@ -79,8 +79,7 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=dokploy-network
-      # Replace api.example.com with your real BE subdomain.
-      - traefik.http.routers.isp-cms-be.rule=Host(`api.example.com`)
+      - traefik.http.routers.isp-cms-be.rule=Host(`api.isp.astaweda.com`)
       - traefik.http.routers.isp-cms-be.entrypoints=websecure
       - traefik.http.routers.isp-cms-be.tls.certresolver=letsencrypt
       - traefik.http.services.isp-cms-be.loadbalancer.server.port=3000
