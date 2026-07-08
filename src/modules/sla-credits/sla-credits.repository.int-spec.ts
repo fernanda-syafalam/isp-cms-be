@@ -9,17 +9,23 @@ import { customers } from '../../infrastructure/database/schema/customers.schema
 import { invoices } from '../../infrastructure/database/schema/invoices.schema';
 import { plans } from '../../infrastructure/database/schema/plans.schema';
 import { slaCredits } from '../../infrastructure/database/schema/sla-credits.schema';
+import { applyMigrations } from '../../test-utils/apply-migrations';
 import { SlaCreditsRepository } from './sla-credits.repository';
 
 /**
  * Real Postgres integration test for SlaCreditsRepository. Requires Docker.
- * `sla_credits.customer_id` / `ticket_id` are left as bare uuid (no FK, no
- * NOT NULL) so most tests below can use arbitrary fake ids, mirroring
- * migration 0010 minus those FKs. `customers` / `plans` / `invoices` ARE
- * created for real (mirroring migrations 0002-0004, 0043, 0048), because
- * `applyWithInvoiceCredit` (outstanding-integrity fix) reads/writes them for
- * real — its own describe block below seeds an actual customer + invoice
- * rather than a fake id.
+ * Schema comes from the REAL `drizzle/*.sql` migrations (TEST-H1) — the
+ * single source of truth — instead of a hand-mirrored `CREATE TABLE` DDL.
+ *
+ * TEST-H1 real finding: the old hand DDL left `sla_credits.customer_id` /
+ * `applied_invoice_id` as bare `uuid` columns with NO foreign key, so tests
+ * could use arbitrary fake ids (e.g. `...-c1`, `...-e001`) that resolve to
+ * no row. The real schema (migration 0010 + 0036) DOES FK both columns to
+ * `customers.id` / `invoices.id` — production enforces that a credit's
+ * customer/applied-invoice reference is always a real row. The
+ * `findPendingByCustomer` / `markAppliedWithInvoice` tests below now seed
+ * real customers + a real invoice instead of fabricating ids, so they run
+ * against (and genuinely exercise) that FK.
  */
 describe('SlaCreditsRepository (integration)', () => {
   let container: StartedPostgreSqlContainer;
@@ -32,69 +38,7 @@ describe('SlaCreditsRepository (integration)', () => {
     container = await new PostgreSqlContainer('postgres:16-alpine').start();
     pool = new Pool({ connectionString: container.getConnectionUri() });
     db = drizzle(pool, { schema });
-
-    await db.execute(`
-      CREATE TYPE sla_credit_status AS ENUM ('pending', 'applied', 'void');
-      CREATE TYPE plan_status AS ENUM ('active', 'archived');
-      CREATE TABLE plans (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        name varchar(80) NOT NULL, speed_mbps integer NOT NULL,
-        price_monthly integer NOT NULL, status plan_status NOT NULL DEFAULT 'active',
-        created_at timestamptz(3) NOT NULL DEFAULT now(),
-        updated_at timestamptz(3) NOT NULL DEFAULT now()
-      );
-      CREATE TYPE customer_status AS ENUM ('prospek', 'instalasi', 'aktif', 'isolir', 'berhenti');
-      CREATE TYPE customer_hold_reason AS ENUM ('overdue', 'voluntary');
-      CREATE SEQUENCE customer_no_seq START WITH 9001;
-      CREATE TABLE customers (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        lat double precision, lng double precision, odp_id varchar(60), billing_anchor_day smallint,
-        customer_no varchar(32) NOT NULL UNIQUE DEFAULT ('CUST-' || nextval('customer_no_seq')),
-        full_name varchar(120) NOT NULL, phone varchar(20) NOT NULL, email varchar(255), user_id uuid UNIQUE,
-        address varchar(255) NOT NULL, area_id uuid, area_name varchar(120),
-        plan_id uuid NOT NULL REFERENCES plans(id),
-        status customer_status NOT NULL DEFAULT 'prospek', hold_reason customer_hold_reason,
-        outstanding integer NOT NULL DEFAULT 0, npwp varchar(40), ktp varchar(32),
-        consent_at timestamptz(3), data_deletion_requested_at timestamptz(3),
-        reseller_name varchar(120), reseller_id uuid, connection jsonb,
-        created_at timestamptz(3) NOT NULL DEFAULT now(),
-        updated_at timestamptz(3) NOT NULL DEFAULT now()
-      );
-      CREATE TYPE invoice_status AS ENUM ('draft', 'pending', 'partial', 'overdue', 'paid');
-      CREATE TYPE invoice_type AS ENUM ('regular', 'adjustment');
-      CREATE SEQUENCE invoice_no_seq START WITH 100;
-      CREATE TABLE invoices (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        invoice_no varchar(32) NOT NULL UNIQUE
-          DEFAULT ('INV-' || to_char(now(), 'YYYY') || '-' || nextval('invoice_no_seq')),
-        customer_id uuid NOT NULL REFERENCES customers(id),
-        customer_name varchar(120) NOT NULL,
-        type invoice_type NOT NULL DEFAULT 'regular', note varchar(200),
-        period_start date NOT NULL, period_end date NOT NULL,
-        amount integer NOT NULL, late_fee integer NOT NULL DEFAULT 0,
-        tax_amount integer NOT NULL DEFAULT 0, discount_amount integer NOT NULL DEFAULT 0,
-        paid_amount integer NOT NULL DEFAULT 0, tax_invoice_no varchar(40),
-        status invoice_status NOT NULL DEFAULT 'pending', due_date date NOT NULL,
-        paid_at timestamptz(3), last_reminded_at timestamptz(3),
-        created_at timestamptz(3) NOT NULL DEFAULT now(),
-        updated_at timestamptz(3) NOT NULL DEFAULT now()
-      );
-      CREATE UNIQUE INDEX invoices_customer_period_idx ON invoices (customer_id, period_start) WHERE type = 'regular';
-      CREATE TABLE sla_credits (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        customer_id uuid,
-        customer_name varchar(120) NOT NULL,
-        amount integer NOT NULL,
-        reason varchar(200) NOT NULL,
-        ticket_id uuid,
-        ticket_code varchar(40),
-        status sla_credit_status NOT NULL DEFAULT 'pending',
-        applied_invoice_id uuid,
-        applied_at timestamptz(3),
-        created_at timestamptz(3) NOT NULL DEFAULT now(),
-        updated_at timestamptz(3) NOT NULL DEFAULT now()
-      );
-    `);
+    await applyMigrations(pool);
 
     const [plan] = await db
       .insert(plans)
@@ -260,9 +204,43 @@ describe('SlaCreditsRepository (integration)', () => {
   // ---------------------------------------------------------------------------
 
   describe('findPendingByCustomer / markAppliedWithInvoice', () => {
-    const CUSTOMER_ID = '00000000-0000-0000-0000-0000000000c1';
-    const OTHER_CUSTOMER_ID = '00000000-0000-0000-0000-0000000000c2';
-    const INVOICE_ID = '00000000-0000-0000-0000-00000000e001';
+    // TEST-H1 real finding: under the real schema, customer_id and
+    // applied_invoice_id are FK'd to customers(id) / invoices(id) (migration
+    // 0010 + 0036) — the old hand-DDL suite used arbitrary fake ids here
+    // because its DDL never enforced that FK. Seed real rows instead so
+    // these tests exercise (and respect) the real constraint.
+    let CUSTOMER_ID: string;
+    let OTHER_CUSTOMER_ID: string;
+    let INVOICE_ID: string;
+
+    beforeEach(async () => {
+      const [c1] = await db
+        .insert(customers)
+        .values({ fullName: 'Customer C1', phone: '08', address: 'Jl', planId })
+        .returning();
+      const [c2] = await db
+        .insert(customers)
+        .values({ fullName: 'Customer C2', phone: '08', address: 'Jl', planId })
+        .returning();
+      if (!c1 || !c2) throw new Error('customer seed failed');
+      CUSTOMER_ID = c1.id;
+      OTHER_CUSTOMER_ID = c2.id;
+
+      const [invoice] = await db
+        .insert(invoices)
+        .values({
+          customerId: c1.id,
+          customerName: c1.fullName,
+          periodStart: '2026-06-01',
+          periodEnd: '2026-06-30',
+          amount: 100_000,
+          dueDate: '2026-06-10',
+          status: 'pending',
+        })
+        .returning();
+      if (!invoice) throw new Error('invoice seed failed');
+      INVOICE_ID = invoice.id;
+    });
 
     it("returns only this customer's pending credits, oldest first", async () => {
       const first = await repo.create(newCredit({ customerId: CUSTOMER_ID, amount: 20_000 }));

@@ -8,11 +8,16 @@ import * as schema from '../../infrastructure/database/schema';
 import { customers } from '../../infrastructure/database/schema/customers.schema';
 import { invoices, payments } from '../../infrastructure/database/schema/invoices.schema';
 import { plans } from '../../infrastructure/database/schema/plans.schema';
+import { applyMigrations } from '../../test-utils/apply-migrations';
 import { InvoicesRepository } from './invoices.repository';
 
 /**
  * Real Postgres integration test for InvoicesRepository. Requires Docker.
- * Schema is applied by hand (mirroring migrations 0002-0004, 0043).
+ * Schema comes from the REAL `drizzle/*.sql` migrations (TEST-H1) — the
+ * single source of truth, including `invoices_customer_period_idx` (the
+ * partial unique index the "one invoice per period" money invariant relies
+ * on) — never a hand-mirrored `CREATE TABLE` DDL that could silently drift
+ * more permissive than production.
  */
 describe('InvoicesRepository (integration)', () => {
   let container: StartedPostgreSqlContainer;
@@ -25,72 +30,7 @@ describe('InvoicesRepository (integration)', () => {
     container = await new PostgreSqlContainer('postgres:16-alpine').start();
     pool = new Pool({ connectionString: container.getConnectionUri() });
     db = drizzle(pool, { schema });
-
-    await db.execute(`
-      CREATE TYPE plan_status AS ENUM ('active', 'archived');
-      CREATE TABLE plans (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        name varchar(80) NOT NULL, speed_mbps integer NOT NULL,
-        price_monthly integer NOT NULL, status plan_status NOT NULL DEFAULT 'active',
-        created_at timestamptz(3) NOT NULL DEFAULT now(),
-        updated_at timestamptz(3) NOT NULL DEFAULT now()
-      );
-      CREATE TYPE customer_status AS ENUM ('prospek', 'instalasi', 'aktif', 'isolir', 'berhenti');
-      CREATE TYPE customer_hold_reason AS ENUM ('overdue', 'voluntary');
-      CREATE SEQUENCE customer_no_seq START WITH 9001;
-      CREATE TABLE customers (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        lat double precision, lng double precision, odp_id varchar(60), billing_anchor_day smallint,
-        customer_no varchar(32) NOT NULL UNIQUE DEFAULT ('CUST-' || nextval('customer_no_seq')),
-        full_name varchar(120) NOT NULL, phone varchar(20) NOT NULL, email varchar(255), user_id uuid UNIQUE,
-        address varchar(255) NOT NULL, area_id uuid, area_name varchar(120),
-        plan_id uuid NOT NULL REFERENCES plans(id),
-        status customer_status NOT NULL DEFAULT 'prospek', hold_reason customer_hold_reason,
-        outstanding integer NOT NULL DEFAULT 0, npwp varchar(40), ktp varchar(32),
-        consent_at timestamptz(3), data_deletion_requested_at timestamptz(3),
-        reseller_name varchar(120), reseller_id uuid, connection jsonb,
-        created_at timestamptz(3) NOT NULL DEFAULT now(),
-        updated_at timestamptz(3) NOT NULL DEFAULT now()
-      );
-      CREATE TYPE invoice_status AS ENUM ('draft', 'pending', 'partial', 'overdue', 'paid');
-      CREATE TYPE invoice_type AS ENUM ('regular', 'adjustment');
-      CREATE TYPE payment_method AS ENUM ('qris', 'va', 'ewallet', 'transfer', 'cash');
-      CREATE SEQUENCE invoice_no_seq START WITH 100;
-      CREATE TABLE invoices (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        invoice_no varchar(32) NOT NULL UNIQUE
-          DEFAULT ('INV-' || to_char(now(), 'YYYY') || '-' || nextval('invoice_no_seq')),
-        customer_id uuid NOT NULL REFERENCES customers(id),
-        customer_name varchar(120) NOT NULL,
-        type invoice_type NOT NULL DEFAULT 'regular', note varchar(200),
-        period_start date NOT NULL, period_end date NOT NULL,
-        amount integer NOT NULL, late_fee integer NOT NULL DEFAULT 0,
-        tax_amount integer NOT NULL DEFAULT 0, discount_amount integer NOT NULL DEFAULT 0, paid_amount integer NOT NULL DEFAULT 0, tax_invoice_no varchar(40),
-        status invoice_status NOT NULL DEFAULT 'pending', due_date date NOT NULL,
-        paid_at timestamptz(3), last_reminded_at timestamptz(3),
-        created_at timestamptz(3) NOT NULL DEFAULT now(),
-        updated_at timestamptz(3) NOT NULL DEFAULT now()
-      );
-      CREATE UNIQUE INDEX invoices_customer_period_idx ON invoices (customer_id, period_start) WHERE type = 'regular';
-      -- Minimal stub — only the voucher_id FK target for the payments table
-      -- below (P3.D.3); vouchers.repository.int-spec.ts owns the full DDL.
-      CREATE TABLE vouchers (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid()
-      );
-      CREATE TYPE payment_source AS ENUM ('invoice', 'voucher');
-      CREATE TABLE payments (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        invoice_id uuid REFERENCES invoices(id),
-        invoice_no varchar(32), customer_id uuid,
-        customer_name varchar(120), amount integer NOT NULL,
-        method payment_method NOT NULL,
-        source payment_source NOT NULL DEFAULT 'invoice',
-        voucher_id uuid REFERENCES vouchers(id),
-        tendered_amount integer, change_amount integer,
-        paid_at timestamptz(3) NOT NULL DEFAULT now(),
-        created_at timestamptz(3) NOT NULL DEFAULT now()
-      );
-    `);
+    await applyMigrations(pool);
 
     const [plan] = await db
       .insert(plans)
@@ -643,6 +583,48 @@ describe('InvoicesRepository (integration)', () => {
         .limit(1);
       expect(customer?.status).toBe('isolir');
       expect(customer?.outstanding).toBe(122_000);
+    });
+
+    // TEST-H2: the sequential double-pay test above ('a double-pay ... is a
+    // no-op') would stay green even if `.for('update')` were removed from
+    // `recordPayment()` — it only proves a second CALL after the first
+    // already committed is a no-op. Firing both calls via Promise.all races
+    // two real transactions against the SAME invoice row: without the FOR
+    // UPDATE lock, both could read status = 'pending' under READ COMMITTED
+    // before either commits, and both would insert a payment row — a real
+    // double-pay. This proves the lock actually holds.
+    it('concurrency: two concurrent recordPayment calls for the full amount write exactly ONE payment row', async () => {
+      const created = await repo.create(newInvoice()); // total = 222_000
+
+      const [a, b] = await Promise.all([
+        repo.recordPayment(created.id, {
+          amount: 222_000,
+          method: 'transfer',
+          tenderedAmount: null,
+          changeAmount: null,
+        }),
+        repo.recordPayment(created.id, {
+          amount: 222_000,
+          method: 'transfer',
+          tenderedAmount: null,
+          changeAmount: null,
+        }),
+      ]);
+      // Both calls resolve (recordPayment is idempotent, never throws on a
+      // race) — the invariant is what got WRITTEN, not which call "won".
+      expect(a.invoice.status).toBe('paid');
+      expect(b.invoice.status).toBe('paid');
+
+      const ledger = await repo.listPayments({ limit: 50, offset: 0 });
+      expect(ledger.total).toBe(1); // FOR UPDATE serialized the loser into the idempotent no-op branch
+      expect(ledger.items[0]?.amount).toBe(222_000); // never double-credited
+
+      const [customer] = await db
+        .select()
+        .from(customers)
+        .where(eq(customers.id, customerId))
+        .limit(1);
+      expect(customer?.outstanding).toBe(0); // not a negative / over-credited balance
     });
   });
 
