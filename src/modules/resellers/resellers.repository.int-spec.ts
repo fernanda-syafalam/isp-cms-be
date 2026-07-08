@@ -11,11 +11,16 @@ import {
   resellerPayouts,
   resellers,
 } from '../../infrastructure/database/schema/resellers.schema';
+import { applyMigrations } from '../../test-utils/apply-migrations';
 import { ResellersRepository } from './resellers.repository';
 
 /**
  * Real Postgres integration test for ResellersRepository. Requires Docker.
- * Schema applied by hand (mirroring migration 0012).
+ * Schema comes from the REAL `drizzle/*.sql` migrations (TEST-H1) — the
+ * single source of truth, including `reseller_ledger_reseller_type_ref_idx`
+ * (the partial unique index the commission/withdrawal idempotency
+ * invariant relies on) — never a hand-mirrored `CREATE TABLE` DDL that
+ * could silently drift more permissive than production.
  */
 describe('ResellersRepository (integration)', () => {
   let container: StartedPostgreSqlContainer;
@@ -27,49 +32,7 @@ describe('ResellersRepository (integration)', () => {
     container = await new PostgreSqlContainer('postgres:16-alpine').start();
     pool = new Pool({ connectionString: container.getConnectionUri() });
     db = drizzle(pool, { schema });
-
-    await db.execute(`
-      CREATE TYPE reseller_status AS ENUM ('active', 'inactive');
-      CREATE TYPE reseller_ledger_type AS ENUM ('topup', 'commission', 'deduction', 'withdrawal');
-      CREATE TABLE resellers (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        name varchar(120) NOT NULL,
-        area varchar(120) NOT NULL,
-        balance integer NOT NULL DEFAULT 0,
-        commission_pct real NOT NULL DEFAULT 0,
-        status reseller_status NOT NULL DEFAULT 'active',
-        created_at timestamptz(3) NOT NULL DEFAULT now(),
-        updated_at timestamptz(3) NOT NULL DEFAULT now()
-      );
-      CREATE TABLE reseller_ledger (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        reseller_id uuid NOT NULL REFERENCES resellers(id),
-        type reseller_ledger_type NOT NULL,
-        amount integer NOT NULL,
-        note varchar(200) NOT NULL DEFAULT '',
-        balance_after integer NOT NULL,
-        ref varchar(64),
-        at timestamptz(3) NOT NULL DEFAULT now()
-      );
-      CREATE UNIQUE INDEX reseller_ledger_reseller_type_ref_idx
-        ON reseller_ledger (reseller_id, type, ref) WHERE ref IS NOT NULL;
-      CREATE TYPE reseller_payout_status AS ENUM ('requested', 'approved', 'rejected', 'paid');
-      CREATE TABLE reseller_payouts (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        reseller_id uuid NOT NULL REFERENCES resellers(id),
-        amount integer NOT NULL,
-        status reseller_payout_status NOT NULL DEFAULT 'requested',
-        note varchar(200) NOT NULL DEFAULT '',
-        requested_by uuid,
-        decided_by uuid,
-        ledger_entry_id uuid REFERENCES reseller_ledger(id),
-        created_at timestamptz(3) NOT NULL DEFAULT now(),
-        updated_at timestamptz(3) NOT NULL DEFAULT now(),
-        decided_at timestamptz(3)
-      );
-      CREATE INDEX reseller_payouts_reseller_id_idx ON reseller_payouts (reseller_id);
-      CREATE INDEX reseller_payouts_status_idx ON reseller_payouts (status);
-    `);
+    await applyMigrations(pool);
 
     repo = new ResellersRepository({ db } as unknown as DrizzleService);
   }, 60_000);
