@@ -9,17 +9,24 @@
 # Redis hostname right. Override REDIS_URL in the UI only if you want to
 # point at an external/managed Redis instead.
 #
-# Four workloads:
+# Five workloads:
 #   - isp-redis : Redis 7 for throttler + refresh tokens + BullMQ.
 #   - migrate   : one-shot `node dist/migrate.js`, applies pending Drizzle
 #                 migrations then exits 0. The pipeline gate (Pilar 8).
+#   - seed      : one-shot `node dist/infrastructure/database/seed-demo.js`.
+#                 A no-op (exits 0, logs a skip line) unless SEED_WIPE=true —
+#                 safe to leave in every deploy. Only set SEED_WIPE=true for
+#                 a deliberate demo-data (re)seed; it WIPES the database.
 #   - api       : the HTTP server (`dist/main.js`, port 3000). Exposed to
 #                 the internet through Dokploy's Traefik.
 #   - worker    : the BullMQ consumer (`dist/worker.js`). Internal only.
 #
 # api and worker WAIT for migrate to finish and for Redis to be healthy,
 # so every deploy migrates before new code serves traffic and the app
-# never boots against a dead Redis (which would crash-loop it).
+# never boots against a dead Redis (which would crash-loop it). `seed` also
+# waits for migrate (it needs the schema to exist) but api/worker do NOT
+# wait for `seed` — it is an opt-in, deliberately-triggered side effect,
+# never a deploy-blocking step.
 
 # Environment shared by all three app workloads. Values come from the
 # Dokploy environment settings (compose interpolates ${VAR}); the full
@@ -49,6 +56,10 @@ x-app-env: &app-env
   OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-isp-cms-be}
   SERVICE_VERSION: ${SERVICE_VERSION:-0.0.0}
   ROUTEROS_MODE: ${ROUTEROS_MODE:-simulation}
+  # Guards `seed` (dist/infrastructure/database/seed-demo.js): only 'true'
+  # arms the wipe-and-reseed. Defaults to 'false' so `seed` is a safe no-op
+  # on every ordinary deploy — see that file's header for the full contract.
+  SEED_WIPE: ${SEED_WIPE:-false}
 
 services:
   isp-redis:
@@ -73,6 +84,21 @@ services:
     networks:
       - dokploy-network
 
+  # One-shot demo-data (re)seed. No-ops unless SEED_WIPE=true, so it is safe
+  # to leave wired into every deploy — do NOT make api/worker depend on it.
+  seed:
+    image: isp-cms-be:dokploy
+    command: ["dist/infrastructure/database/seed-demo.js"]
+    restart: "no"
+    environment:
+      <<: *app-env
+      SEED_WIPE: ${SEED_WIPE:-false}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - dokploy-network
+
   api:
     # The image is built here and reused by migrate + worker.
     build:
@@ -82,6 +108,17 @@ services:
     restart: unless-stopped
     command: ["dist/main.js"]
     environment: *app-env
+    # argon2 password hashing on the login path is CPU-bound; give the API
+    # a real CPU budget so a throttled container can't turn a ~150ms verify
+    # into tens of seconds. Tune to the host — 2 vCPU limit fits a 4-core VPS.
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1024M
+        reservations:
+          cpus: "0.5"
+          memory: 512M
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -102,6 +139,14 @@ services:
     restart: unless-stopped
     command: ["dist/worker.js"]
     environment: *app-env
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 768M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
     depends_on:
       migrate:
         condition: service_completed_successfully
