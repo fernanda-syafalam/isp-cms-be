@@ -2,6 +2,7 @@ import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PaymentIntent } from '../../infrastructure/database/schema/invoices.schema';
+import { AuditRepository } from '../audit/audit.repository';
 import { CustomersRepository } from '../customers/customers.repository';
 import type { InvoiceResponse } from './dto/invoice-response.dto';
 import { InvoicesService } from './invoices.service';
@@ -65,6 +66,7 @@ describe('PaymentIntentsService', () => {
   let repo: Record<string, ReturnType<typeof vi.fn>>;
   let invoices: Record<string, ReturnType<typeof vi.fn>>;
   let customers: Record<string, ReturnType<typeof vi.fn>>;
+  let audit: { record: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     repo = {
@@ -81,12 +83,14 @@ describe('PaymentIntentsService', () => {
     customers = {
       findById: vi.fn(async () => null),
     };
+    audit = { record: vi.fn().mockResolvedValue(undefined) };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         PaymentIntentsService,
         { provide: PaymentIntentsRepository, useValue: repo },
         { provide: InvoicesService, useValue: invoices },
         { provide: CustomersRepository, useValue: customers },
+        { provide: AuditRepository, useValue: audit },
         // The REAL simulation gateway (not a mock) — proves the create()
         // refactor stays byte-compatible with the pre-adapter mock VA/QR
         // behaviour (regression coverage for the Tripay seam). The gateway
@@ -268,6 +272,39 @@ describe('PaymentIntentsService', () => {
       expect(result).toEqual({ settled: true });
       expect(invoices.pay).toHaveBeenCalledWith(INVOICE_ID, { method: 'qris' });
       expect(repo.markPaid).toHaveBeenCalledWith(INTENT_ID);
+      // R8-OBS-3: a successful gateway settlement lands a queryable
+      // `audit_log` row — this is the trail the interceptor-based
+      // `@Audit` mechanism can never reach (the webhook route is @Public
+      // and never keys off a 2xx the interceptor's success branch relies on).
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actor: 'tripay-webhook',
+          action: 'payment.settle_gateway',
+          entity: 'invoice',
+          entityId: INVOICE_ID,
+          summary: expect.stringContaining(INTENT_ID),
+        }),
+      );
+    });
+
+    it('R8-OBS-3: a throwing audit write does not break settlement (best-effort, money already moved)', async () => {
+      repo.findById.mockResolvedValue(
+        intentRow({ status: 'pending', gatewayReference: GATEWAY_REFERENCE }),
+      );
+      invoices.findById.mockResolvedValue(invoice({ balanceDue: 116_000 }));
+      repo.markPaid.mockResolvedValue(intentRow({ status: 'paid' }));
+      audit.record.mockRejectedValue(new Error('db unavailable'));
+
+      const result = await service.settleFromGateway({
+        reference: GATEWAY_REFERENCE,
+        invoiceRef: INTENT_ID,
+        amount: 116_000,
+      });
+
+      // Settlement itself (the money path) must still have gone through.
+      expect(result).toEqual({ settled: true });
+      expect(invoices.pay).toHaveBeenCalledWith(INVOICE_ID, { method: 'qris' });
+      expect(repo.markPaid).toHaveBeenCalledWith(INTENT_ID);
     });
 
     it('is idempotent for a redelivered callback on an already-settled intent (one settle, no double ledger row)', async () => {
@@ -284,6 +321,9 @@ describe('PaymentIntentsService', () => {
       expect(result).toEqual({ settled: true });
       expect(invoices.pay).not.toHaveBeenCalled();
       expect(repo.markPaid).not.toHaveBeenCalled();
+      // No NEW settlement happened — a redelivered callback must not write
+      // a second audit row for the same money movement.
+      expect(audit.record).not.toHaveBeenCalled();
     });
 
     // M1: a deterministic non-settle condition is reported via the return

@@ -4,6 +4,7 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import * as argon2 from 'argon2';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { User } from '../../infrastructure/database/schema/users.schema';
+import { AuditRepository } from '../audit/audit.repository';
 import { SecurityService } from '../security/security.service';
 import type { SessionMeta } from '../sessions/refresh-token.service';
 import { RefreshTokenService } from '../sessions/refresh-token.service';
@@ -30,6 +31,7 @@ describe('AuthService', () => {
     revoke: ReturnType<typeof vi.fn>;
   };
   let security: { verifyLoginChallenge: ReturnType<typeof vi.fn> };
+  let audit: { record: ReturnType<typeof vi.fn> };
 
   const password = 'correct-horse-battery-staple';
   let user: User;
@@ -55,10 +57,11 @@ describe('AuthService', () => {
         .fn()
         .mockResolvedValue({ token: 'refresh-A', expiresInSeconds: 604_800, sessionId: 'sess-A' }),
       rotate: vi.fn(),
-      revoke: vi.fn(),
+      revoke: vi.fn().mockResolvedValue(null),
     };
     // Default: no 2FA challenge — matches every pre-existing regression test.
     security = { verifyLoginChallenge: vi.fn().mockResolvedValue('ok') };
+    audit = { record: vi.fn().mockResolvedValue(undefined) };
 
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
@@ -68,6 +71,7 @@ describe('AuthService', () => {
         { provide: JwtService, useValue: jwt },
         { provide: RefreshTokenService, useValue: refresh },
         { provide: SecurityService, useValue: security },
+        { provide: AuditRepository, useValue: audit },
       ],
     }).compile();
     service = moduleRef.get(AuthService);
@@ -97,6 +101,24 @@ describe('AuthService', () => {
       expect(refresh.mint).toHaveBeenCalledWith(user.id, meta);
     });
 
+    // R8-OBS-2: a successful login must land a queryable `audit_log` row —
+    // actor is the submitted email (forensic identity), not a field the
+    // pino redact rules would strip.
+    it('R8-OBS-2: persists an audit_log row with actor=email + outcome=success on a valid login', async () => {
+      repo.findByEmail.mockResolvedValue(user);
+      await service.login(user.email, password, undefined, meta);
+
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actor: user.email,
+          action: 'auth.login',
+          entity: 'auth',
+          entityId: user.id,
+          summary: expect.stringContaining('success'),
+        }),
+      );
+    });
+
     it('rejects with 401 when email is unknown', async () => {
       repo.findByEmail.mockResolvedValue(null);
       await expect(service.login('nope@b.test', password, undefined, meta)).rejects.toBeInstanceOf(
@@ -104,6 +126,18 @@ describe('AuthService', () => {
       );
       expect(jwt.signAsync).not.toHaveBeenCalled();
       expect(refresh.mint).not.toHaveBeenCalled();
+      // R8-OBS-2: still audited (failure) even though no user row exists —
+      // and still no enumeration signal (same generic 'invalid_credentials'
+      // reason as a wrong password below).
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actor: 'nope@b.test',
+          action: 'auth.login',
+          entity: 'auth',
+          entityId: undefined,
+          summary: expect.stringContaining('invalid_credentials'),
+        }),
+      );
     });
 
     it('rejects with 401 when password does not match', async () => {
@@ -113,6 +147,25 @@ describe('AuthService', () => {
       ).rejects.toBeInstanceOf(UnauthorizedException);
       expect(jwt.signAsync).not.toHaveBeenCalled();
       expect(refresh.mint).not.toHaveBeenCalled();
+      // R8-OBS-2 anti-enumeration: bad-password and unknown-email failures
+      // must produce the IDENTICAL audit reason — no distinguishing signal
+      // leaks into the trail either.
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actor: user.email,
+          action: 'auth.login',
+          entityId: undefined,
+          summary: expect.stringContaining('invalid_credentials'),
+        }),
+      );
+    });
+
+    it('R8-OBS-2: a throwing audit write does not break login (best-effort)', async () => {
+      repo.findByEmail.mockResolvedValue(user);
+      audit.record.mockRejectedValue(new Error('db unavailable'));
+
+      const out = await service.login(user.email, password, undefined, meta);
+      expect(out.accessToken).toBe('signed.jwt.value');
     });
 
     describe('with two-factor enabled', () => {
@@ -196,6 +249,15 @@ describe('AuthService', () => {
       expect(out.accessToken).toBe('signed.jwt.value');
       expect(out.user.id).toBe(user.id);
       expect(jwt.signAsync).toHaveBeenCalledWith({ sub: user.id, role: user.role, sid: 'sess-A' });
+      // R8-OBS-2: refresh also lands an audit_log row, actor = resolved userId.
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actor: user.id,
+          action: 'auth.refresh',
+          entity: 'auth',
+          entityId: user.id,
+        }),
+      );
     });
 
     it('rejects with 401 when the rotated user no longer exists', async () => {
@@ -222,8 +284,31 @@ describe('AuthService', () => {
 
   describe('logout', () => {
     it('revokes the supplied refresh token', async () => {
-      await service.logout('refresh-Z');
+      await service.logout('refresh-Z', meta);
       expect(refresh.revoke).toHaveBeenCalledWith('refresh-Z');
+    });
+
+    it('R8-OBS-2: persists an auth.logout audit row with the resolved userId as actor', async () => {
+      refresh.revoke.mockResolvedValue({ userId: user.id });
+      await service.logout('refresh-Z', meta);
+
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actor: user.id,
+          action: 'auth.logout',
+          entity: 'auth',
+          entityId: user.id,
+        }),
+      );
+    });
+
+    it('R8-OBS-2: still audits (system actor) an unknown/already-revoked token, but never throws', async () => {
+      refresh.revoke.mockResolvedValue(null);
+      await service.logout('unknown-token', meta);
+
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ actor: 'system', action: 'auth.logout' }),
+      );
     });
   });
 
