@@ -334,6 +334,55 @@ describe('PaymentIntentsService', () => {
       expect(result).toEqual({ settled: false, reason: 'unknown_intent' });
       expect(invoices.pay).not.toHaveBeenCalled();
     });
+
+    // R4-BE-1 regression: a signature-verified PAID callback whose intent has
+    // already been marked `expired` locally (the hourly `expireStale` sweep
+    // beat Tripay's callback) MUST still settle — the gateway confirms money
+    // moved. Routing through confirm() would throw ConflictException → 409 →
+    // dropped payment + permanent Tripay retry storm. The invoice is credited
+    // (a late settlement), not refused.
+    it('R4-BE-1: settles a PAID callback on an already-expired intent (money moved at the gateway; never refuses on local expiry)', async () => {
+      repo.findById.mockResolvedValue(
+        intentRow({ status: 'expired', gatewayReference: GATEWAY_REFERENCE }),
+      );
+      invoices.findById.mockResolvedValue(invoice({ balanceDue: 116_000 }));
+      repo.markPaid.mockResolvedValue(intentRow({ status: 'paid' }));
+
+      const result = await service.settleFromGateway({
+        reference: GATEWAY_REFERENCE,
+        invoiceRef: INTENT_ID,
+        amount: 116_000,
+      });
+
+      expect(result).toEqual({ settled: true });
+      expect(invoices.pay).toHaveBeenCalledWith(INVOICE_ID, { method: 'qris' });
+      expect(repo.markPaid).toHaveBeenCalledWith(INTENT_ID);
+    });
+
+    // R4-BE-1 sibling: the same must hold for an intent still `pending` in the
+    // row but past its `expiresAt` wall-clock (near-deadline payment, sweep
+    // not yet run) — the time-based branch of the local-expiry guard.
+    it('R4-BE-1: settles a PAID callback on a pending-but-lapsed intent (past expiresAt)', async () => {
+      repo.findById.mockResolvedValue(
+        intentRow({
+          status: 'pending',
+          gatewayReference: GATEWAY_REFERENCE,
+          expiresAt: new Date('2020-01-01T00:00:00.000Z'),
+        }),
+      );
+      invoices.findById.mockResolvedValue(invoice({ balanceDue: 116_000 }));
+      repo.markPaid.mockResolvedValue(intentRow({ status: 'paid' }));
+
+      const result = await service.settleFromGateway({
+        reference: GATEWAY_REFERENCE,
+        invoiceRef: INTENT_ID,
+        amount: 116_000,
+      });
+
+      expect(result).toEqual({ settled: true });
+      expect(invoices.pay).toHaveBeenCalledWith(INVOICE_ID, { method: 'qris' });
+      expect(repo.markPaid).toHaveBeenCalledWith(INTENT_ID);
+    });
   });
 
   // L3: a verified but non-'paid' callback ('expired'/'failed') marks the

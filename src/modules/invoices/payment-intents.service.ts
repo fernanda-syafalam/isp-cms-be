@@ -114,9 +114,21 @@ export class PaymentIntentsService {
       throw new ConflictException('payment intent expired');
     }
 
+    return this.settleIntent(intent);
+  }
+
+  /**
+   * The transactional settle body shared by `confirm()` (staff/dev path,
+   * which refuses a lapsed intent above) and `settleFromGateway` (the real
+   * webhook, which must settle regardless of LOCAL expiry — see there). Kept
+   * private so the SEC-H1 rule holds: settlement is never reachable except
+   * through one of those two callers. `invoices.pay` is itself idempotent +
+   * FOR UPDATE, so a redelivered/racing settle can never double-credit.
+   */
+  private async settleIntent(intent: PaymentIntentRow): Promise<PaymentIntentResponse> {
     await this.invoices.pay(intent.invoiceId, { method: channelToMethod(intent.channel) });
-    const paid = await this.repo.markPaid(id);
-    this.logger.log({ intentId: id, invoiceId: intent.invoiceId }, 'payment intent settled');
+    const paid = await this.repo.markPaid(intent.id);
+    this.logger.log({ intentId: intent.id, invoiceId: intent.invoiceId }, 'payment intent settled');
     return toIntentResponse(paid);
   }
 
@@ -207,7 +219,23 @@ export class PaymentIntentsService {
       return { settled: false, reason: 'amount_mismatch' };
     }
 
-    await this.confirm(intent.id);
+    // The gateway asserts PAID — authoritative that money actually moved.
+    // Settle even if the intent lapsed LOCALLY (a near-deadline payment, or
+    // the hourly `expireStale` sweep flipping a still-`pending` intent to
+    // `expired` before Tripay's PAID callback lands). Routing through
+    // `confirm()` here would hit its local-expiry guard and throw — dropping
+    // a real payment AND, because that condition is permanent, triggering the
+    // exact Tripay retry storm M1 exists to prevent. `settleIntent` skips the
+    // guard; `invoices.pay` stays idempotent + FOR UPDATE, so no double
+    // credit. A settlement past local expiry is reconciliation-worthy, so log
+    // it (audit) — but it is a SUCCESS, not a mismatch.
+    if (intent.status === 'expired' || intent.expiresAt.getTime() <= Date.now()) {
+      this.logger.warn(
+        { audit: true, intentId: intent.id, reference: parsed.reference },
+        'tripay webhook: settling a locally-expired intent — gateway confirms payment (late settlement); invoice credited',
+      );
+    }
+    await this.settleIntent(intent);
     return { settled: true };
   }
 
