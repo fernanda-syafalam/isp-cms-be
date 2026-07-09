@@ -457,6 +457,8 @@ function toInvoiceResponse(row: Invoice): InvoiceResponse {
     dueDate: row.dueDate,
     paidAt: row.paidAt ? row.paidAt.toISOString() : null,
     lastRemindedAt: row.lastRemindedAt ? row.lastRemindedAt.toISOString() : null,
+    type: row.type,
+    note: row.note,
   };
 }
 

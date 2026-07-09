@@ -19,3 +19,19 @@ export const UserResponseSchema = z.object({
 export type UserResponse = z.infer<typeof UserResponseSchema>;
 
 export class UserResponseDto extends createZodDto(UserResponseSchema) {}
+
+/**
+ * Cursor-paginated list response for `GET /v1/users`. Binding this via
+ * `@ZodSerializerDto` closes the same strip-guard gap `UserResponseDto`
+ * closes for the single-record endpoints — today it's a no-op (the handler
+ * already field-strips + ISO-converts by hand), but it guards against a
+ * future sensitive column added to `users` leaking through the list.
+ */
+export const UserListResponseSchema = z.object({
+  items: z.array(UserResponseSchema),
+  nextCursor: z.string().nullable(),
+});
+
+export type UserListResponse = z.infer<typeof UserListResponseSchema>;
+
+export class UserListResponseDto extends createZodDto(UserListResponseSchema) {}

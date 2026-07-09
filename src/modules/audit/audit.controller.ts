@@ -1,7 +1,9 @@
 import { Controller, Get, Query } from '@nestjs/common';
+import { ZodSerializerDto } from 'nestjs-zod';
 import { z } from 'zod';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { AuditService } from './audit.service';
+import { AuditListResponseDto } from './dto/audit-response.dto';
 
 const ListQuerySchema = z.object({
   entityId: z.string().min(1).optional(),
@@ -23,6 +25,7 @@ export class AuditController {
 
   @Roles('admin', 'staff')
   @Get()
+  @ZodSerializerDto(AuditListResponseDto)
   list(@Query() query: unknown) {
     return this.audit.list(ListQuerySchema.parse(query));
   }
