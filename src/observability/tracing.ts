@@ -56,13 +56,17 @@ export const otelSdk = new NodeSDK({
 
 otelSdk.start();
 
-// Flush exporters before the process exits so spans buffered in memory
-// reach the collector.
+// Flush exporters on shutdown so spans buffered in memory reach the
+// collector. Deliberately does NOT call process.exit(): main.ts and
+// worker.ts call app.enableShutdownHooks(), which registers its OWN SIGTERM
+// handler to drain in-flight HTTP, close DB/Redis, and run OnModuleDestroy.
+// Node invokes every SIGTERM listener, so both fire — forcing an exit here
+// would race and truncate Nest's graceful drain (R8-OBS-5), especially when
+// OTEL is disabled and shutdown() resolves almost instantly. Let Nest own
+// the shutdown; the process exits naturally once both finish and nothing is
+// left keeping the event loop alive.
 process.on('SIGTERM', () => {
-  otelSdk
-    .shutdown()
-    .catch(() => {
-      /* swallow — we are exiting anyway */
-    })
-    .finally(() => process.exit(0));
+  void otelSdk.shutdown().catch(() => {
+    /* swallow — shutting down anyway */
+  });
 });
