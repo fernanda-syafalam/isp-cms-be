@@ -45,7 +45,7 @@ describe('CustomersService', () => {
   let service: CustomersService;
   let repo: Record<string, ReturnType<typeof vi.fn>>;
   let plans: { findById: ReturnType<typeof vi.fn> };
-  let notifications: { send: ReturnType<typeof vi.fn> };
+  let notifications: { send: ReturnType<typeof vi.fn>; enqueue: ReturnType<typeof vi.fn> };
   let secrets: { applyDisabledForCustomer: ReturnType<typeof vi.fn> };
   let resellers: { findById: ReturnType<typeof vi.fn> };
   let settings: { getBillingPolicy: ReturnType<typeof vi.fn> };
@@ -68,7 +68,7 @@ describe('CustomersService', () => {
       changePlan: vi.fn(),
     };
     plans = { findById: vi.fn() };
-    notifications = { send: vi.fn() };
+    notifications = { send: vi.fn(), enqueue: vi.fn() };
     secrets = { applyDisabledForCustomer: vi.fn() };
     resellers = { findById: vi.fn() };
     settings = { getBillingPolicy: vi.fn().mockResolvedValue({ dueDays: 7 }) };
@@ -623,10 +623,26 @@ describe('CustomersService', () => {
       await expect(service.rebootOnu('missing')).rejects.toBeInstanceOf(NotFoundException);
     });
 
-    it('notifyWhatsapp sends a due_soon reminder to the customer phone', async () => {
+    it('notifyWhatsapp enqueues a due_soon reminder with real vars through the queue (not send() directly)', async () => {
       repo.findById.mockResolvedValue(sampleRow);
       await service.notifyWhatsapp(sampleRow.id);
-      expect(notifications.send).toHaveBeenCalledWith({ event: 'due_soon', to: sampleRow.phone });
+      expect(notifications.send).not.toHaveBeenCalled();
+      expect(notifications.enqueue).toHaveBeenCalledTimes(1);
+      const [payload, jobId] = notifications.enqueue.mock.calls[0] ?? [];
+      expect(payload).toEqual({
+        event: 'due_soon',
+        to: sampleRow.phone,
+        vars: { nama: sampleRow.fullName, jumlah: 'Rp0' },
+      });
+      expect(jobId).toMatch(new RegExp(`^manual-due_soon:${sampleRow.id}:`));
+    });
+
+    it('notifyWhatsapp is best-effort: an enqueue failure does not throw', async () => {
+      repo.findById.mockResolvedValue(sampleRow);
+      notifications.enqueue.mockRejectedValue(new Error('redis unavailable'));
+      await expect(service.notifyWhatsapp(sampleRow.id)).resolves.toMatchObject({
+        id: sampleRow.id,
+      });
     });
 
     describe('changePlan', () => {

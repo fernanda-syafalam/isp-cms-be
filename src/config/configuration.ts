@@ -49,6 +49,13 @@ export const appConfig = registerAs('app', () => {
       mode: env.ROUTEROS_MODE,
       apiPassword: env.ROUTEROS_API_PASSWORD,
     },
+    notifications: {
+      mode: env.NOTIFICATION_MODE,
+      wa: {
+        apiUrl: env.WA_API_URL,
+        apiToken: env.WA_API_TOKEN,
+      },
+    },
   } as const;
 });
 
