@@ -14,6 +14,7 @@ import type { SendNotificationInput } from './dto/send-notification.dto';
 import type { UpdateTemplateInput } from './dto/update-template.dto';
 import { NOTIFICATIONS_QUEUE } from './notifications.constants';
 import { type LogListFilter, NotificationsRepository } from './notifications.repository';
+import { NotificationTransport } from './transports/notification-transport';
 
 // Default templates, seeded on first read. Admins edit body/enabled after.
 const DEFAULT_TEMPLATES: NewNotificationTemplate[] = [
@@ -69,6 +70,11 @@ export class NotificationsService {
     // worker (NotificationsProcessor); the synchronous send() below is the
     // delivery the worker performs.
     @InjectQueue(NOTIFICATIONS_QUEUE) private readonly queue: Queue<SendNotificationInput>,
+    // The SEND seam (ADR-0017): LogTransport (default) or WhatsAppTransport,
+    // selected by NOTIFICATION_MODE in notifications.module.ts. send() below
+    // always writes the notification_log row regardless of which transport
+    // is wired in — the transport is the send, the log row is the record.
+    private readonly transport: NotificationTransport,
   ) {}
 
   async listTemplates(): Promise<{ items: NotificationTemplateResponse[]; total: number }> {
@@ -93,18 +99,41 @@ export class NotificationsService {
     return { items: items.map(toLogResponse), total };
   }
 
-  /** Render the event's template and append a send-log entry. */
+  /**
+   * Render the event's template, hand it to the delivery transport
+   * (ADR-0017), and append a send-log entry recording the outcome. The log
+   * row is written regardless of transport result — it is the permanent
+   * delivery record; the transport result only decides `sent` vs `failed`
+   * and whether this call rethrows to trigger a BullMQ retry.
+   */
   async send(input: SendNotificationInput): Promise<void> {
     await this.repo.ensureSeeded(DEFAULT_TEMPLATES);
     const template = await this.repo.findTemplateByEvent(input.event);
     if (!template) throw new NotFoundException('template not found');
 
+    const message = renderTemplate(template.body, input.vars ?? {});
+    const result = await this.transport.send({ to: input.to, event: input.event, message });
+
     await this.repo.addLog({
       recipient: input.to,
       templateName: template.name,
-      body: renderTemplate(template.body, input.vars ?? {}),
-      status: 'sent',
+      body: message,
+      status: result.delivered ? 'sent' : 'failed',
     });
+
+    if (!result.delivered) {
+      this.logger.warn(
+        { event: input.event, to: input.to },
+        'notification transport delivery failed',
+      );
+      // Rethrow so the caller (NotificationsProcessor.process, in the queue
+      // path) fails the job and BullMQ retries per its existing
+      // attempts/backoff config — the log row above already recorded this
+      // attempt as 'failed', so the retry is never lost from the audit
+      // trail even if every attempt ultimately fails.
+      throw new Error(`notification delivery failed for event "${input.event}"`);
+    }
+
     this.logger.log({ event: input.event, to: input.to }, 'notification sent');
   }
 

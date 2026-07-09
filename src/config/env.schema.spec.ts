@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { envSchema } from './env.schema';
 
 // Minimal valid baseline — every var envSchema requires unconditionally,
-// independent of PAYMENT_MODE. Mirrors test/setup.ts's fixed test values.
+// independent of NOTIFICATION_MODE / PAYMENT_MODE. Mirrors test/setup.ts's
+// fixed test values.
 function baseEnv(over: Record<string, string> = {}): Record<string, string> {
   return {
     DATABASE_URL: 'postgres://app:app@localhost:5432/app',
@@ -11,6 +12,43 @@ function baseEnv(over: Record<string, string> = {}): Record<string, string> {
     ...over,
   };
 }
+
+describe('envSchema — NOTIFICATION_MODE (ADR-0017)', () => {
+  it('defaults to log and does not require any WA_API_* var', () => {
+    const parsed = envSchema.parse(baseEnv());
+    expect(parsed.NOTIFICATION_MODE).toBe('log');
+  });
+
+  it('accepts NOTIFICATION_MODE=wa with both WA_API_* vars present', () => {
+    const parsed = envSchema.parse(
+      baseEnv({
+        NOTIFICATION_MODE: 'wa',
+        WA_API_URL: 'https://wa-gateway.example.com/send',
+        WA_API_TOKEN: 'token',
+      }),
+    );
+    expect(parsed.NOTIFICATION_MODE).toBe('wa');
+  });
+
+  it('fails fast when NOTIFICATION_MODE=wa and both WA_API_* vars are missing', () => {
+    const result = envSchema.safeParse(baseEnv({ NOTIFICATION_MODE: 'wa' }));
+    expect(result.success).toBe(false);
+    const paths = result.success ? [] : result.error.issues.map((i) => i.path.join('.'));
+    expect(paths).toEqual(expect.arrayContaining(['WA_API_URL', 'WA_API_TOKEN']));
+  });
+
+  it('fails fast when NOTIFICATION_MODE=wa and only WA_API_TOKEN is missing', () => {
+    const result = envSchema.safeParse(
+      baseEnv({
+        NOTIFICATION_MODE: 'wa',
+        WA_API_URL: 'https://wa-gateway.example.com/send',
+      }),
+    );
+    expect(result.success).toBe(false);
+    const paths = result.success ? [] : result.error.issues.map((i) => i.path.join('.'));
+    expect(paths).toEqual(['WA_API_TOKEN']);
+  });
+});
 
 describe('envSchema — PAYMENT_MODE (ADR-0016)', () => {
   it('defaults to simulation and does not require any TRIPAY_* var', () => {

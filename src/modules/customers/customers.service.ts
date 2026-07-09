@@ -1,5 +1,7 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import type { AuthUser } from '../../common/decorators/current-user.decorator';
+import { notifyBestEffort } from '../../common/notifications/notify-best-effort';
+import { formatIdr } from '../../common/utils/format-idr';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PlansRepository } from '../plans/plans.repository';
 import { ResellersRepository } from '../resellers/resellers.repository';
@@ -260,11 +262,33 @@ export class CustomersService {
     return toActionResponse(row, user);
   }
 
-  /** Fire a WhatsApp billing reminder to the customer. */
+  /**
+   * Fire a manual WhatsApp billing reminder to the customer, through the
+   * SAME retried delivery queue as automated dunning (ADR-0012/ADR-0017) —
+   * previously this bypassed the queue and called send() directly with no
+   * vars, so the template rendered literal `{nama}`/`{jumlah}` and a
+   * transient failure had no retry. Best-effort (notifyBestEffort): a
+   * queue outage must never fail this admin action.
+   */
   async notifyWhatsapp(id: string): Promise<CustomerResponse> {
     const row = await this.requireById(id);
-    await this.notifications.send({ event: 'due_soon', to: row.phone });
-    this.logger.log({ customerId: id }, 'whatsapp reminder sent');
+    await notifyBestEffort(
+      this.logger,
+      () =>
+        this.notifications.enqueue(
+          {
+            event: 'due_soon',
+            to: row.phone,
+            vars: { nama: row.fullName, jumlah: formatIdr(row.outstanding) },
+          },
+          // Unique per click (not per-cycle like the automated dunning
+          // jobId), so an admin re-sending the same reminder is never
+          // deduped by BullMQ's idempotent jobId.
+          `manual-due_soon:${id}:${Date.now()}`,
+        ),
+      { event: 'due_soon', customerId: id },
+    );
+    this.logger.log({ customerId: id }, 'whatsapp reminder enqueued');
     return toCustomerResponse(row);
   }
 

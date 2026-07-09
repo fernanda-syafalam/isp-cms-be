@@ -97,6 +97,14 @@ export const envSchema = z
     ROUTEROS_MODE: z.enum(['simulation', 'live']).default('simulation'),
     ROUTEROS_API_PASSWORD: z.string().optional(),
 
+    // WhatsApp delivery transport (ADR-0017). 'log' (default) keeps the
+    // pre-existing dev/demo behavior — only the notification_log row is
+    // written, no external call. 'wa' sends through a Fonnte/Wablas-class
+    // WhatsApp HTTP gateway. See src/modules/notifications/transports/.
+    NOTIFICATION_MODE: z.enum(['log', 'wa']).default('log'),
+    WA_API_URL: z.string().url().optional(),
+    WA_API_TOKEN: z.string().optional(),
+
     // Payment gateway (ADR-0016). 'simulation' (default) keeps the existing
     // dev/demo VA/QR mock behavior with no real money movement; 'live' charges
     // through Tripay and settles only via its signed webhook (SEC-H1: never
@@ -108,25 +116,41 @@ export const envSchema = z
     TRIPAY_BASE_URL: z.string().url().optional(),
   })
   .superRefine((env, ctx) => {
+    // Fail FAST at startup if NOTIFICATION_MODE=wa is armed without the
+    // gateway credentials, not silently no-op on the first real dunning
+    // cycle in production.
+    if (env.NOTIFICATION_MODE === 'wa') {
+      const required = [
+        ['WA_API_URL', env.WA_API_URL],
+        ['WA_API_TOKEN', env.WA_API_TOKEN],
+      ] as const;
+      for (const [key, value] of required) {
+        if (!value) {
+          ctx.addIssue({
+            code: 'custom',
+            message: `${key} is required when NOTIFICATION_MODE=wa`,
+            path: [key],
+          });
+        }
+      }
+    }
     // Money-critical: PAYMENT_MODE=live must fail FAST at startup if a Tripay
-    // secret is missing, not silently no-op on the first real charge/webhook
-    // in production. (Deliberately stricter here than ROUTEROS_MODE=live,
-    // which degrades at call time instead — a mis-armed payment gateway is a
-    // worse failure mode than a mis-armed network push.)
-    if (env.PAYMENT_MODE !== 'live') return;
-    const required = [
-      ['TRIPAY_API_KEY', env.TRIPAY_API_KEY],
-      ['TRIPAY_PRIVATE_KEY', env.TRIPAY_PRIVATE_KEY],
-      ['TRIPAY_MERCHANT_CODE', env.TRIPAY_MERCHANT_CODE],
-      ['TRIPAY_BASE_URL', env.TRIPAY_BASE_URL],
-    ] as const;
-    for (const [key, value] of required) {
-      if (!value) {
-        ctx.addIssue({
-          code: 'custom',
-          message: `${key} is required when PAYMENT_MODE=live`,
-          path: [key],
-        });
+    // secret is missing, not silently no-op on the first real charge/webhook.
+    if (env.PAYMENT_MODE === 'live') {
+      const required = [
+        ['TRIPAY_API_KEY', env.TRIPAY_API_KEY],
+        ['TRIPAY_PRIVATE_KEY', env.TRIPAY_PRIVATE_KEY],
+        ['TRIPAY_MERCHANT_CODE', env.TRIPAY_MERCHANT_CODE],
+        ['TRIPAY_BASE_URL', env.TRIPAY_BASE_URL],
+      ] as const;
+      for (const [key, value] of required) {
+        if (!value) {
+          ctx.addIssue({
+            code: 'custom',
+            message: `${key} is required when PAYMENT_MODE=live`,
+            path: [key],
+          });
+        }
       }
     }
   });

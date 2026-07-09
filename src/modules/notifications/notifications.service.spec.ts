@@ -6,6 +6,7 @@ import type { NotificationTemplate } from '../../infrastructure/database/schema/
 import { NOTIFICATIONS_QUEUE } from './notifications.constants';
 import { NotificationsRepository } from './notifications.repository';
 import { NotificationsService } from './notifications.service';
+import { NotificationTransport } from './transports/notification-transport';
 
 const template: NotificationTemplate = {
   id: '00000000-0000-0000-0000-00000000b201',
@@ -21,6 +22,7 @@ describe('NotificationsService', () => {
   let service: NotificationsService;
   let repo: Record<string, ReturnType<typeof vi.fn>>;
   let queue: { add: ReturnType<typeof vi.fn> };
+  let transport: { send: ReturnType<typeof vi.fn> };
 
   beforeEach(async () => {
     repo = {
@@ -32,11 +34,16 @@ describe('NotificationsService', () => {
       addLog: vi.fn(),
     };
     queue = { add: vi.fn() };
+    // Default: delivered (mirrors LogTransport's always-delivered contract),
+    // so existing tests written before the transport seam still pass
+    // unmodified — only the delivered:false specs below override this.
+    transport = { send: vi.fn().mockResolvedValue({ delivered: true }) };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         NotificationsService,
         { provide: NotificationsRepository, useValue: repo },
         { provide: getQueueToken(NOTIFICATIONS_QUEUE), useValue: queue },
+        { provide: NotificationTransport, useValue: transport },
       ],
     }).compile();
     service = moduleRef.get(NotificationsService);
@@ -96,6 +103,40 @@ describe('NotificationsService', () => {
         NotFoundException,
       );
       expect(repo.addLog).not.toHaveBeenCalled();
+    });
+
+    // ADR-0017: the transport (LogTransport by default) is handed the
+    // already-rendered message, never the raw template/vars.
+    it('hands the rendered message to the transport', async () => {
+      repo.findTemplateByEvent.mockResolvedValue(template);
+      await service.send({
+        event: 'invoice_created',
+        to: '081200000000',
+        vars: { nama: 'Siti', no_tagihan: 'INV-1', jumlah: 'Rp1', jatuh_tempo: '1 Jan' },
+      });
+      expect(transport.send).toHaveBeenCalledWith({
+        to: '081200000000',
+        event: 'invoice_created',
+        message: 'Halo Siti, tagihan INV-1 sebesar Rp1 jatuh tempo 1 Jan.',
+      });
+    });
+
+    // ADR-0017: a delivery failure (e.g. WhatsAppTransport's gateway
+    // rejected/unreachable) must still be recorded in notification_log —
+    // the log row is the RECORD regardless of transport outcome — and must
+    // rethrow so the queue path (NotificationsProcessor) fails the BullMQ
+    // job and lets the existing retry/backoff pick it up.
+    it('logs status: failed and rethrows when the transport does not deliver', async () => {
+      repo.findTemplateByEvent.mockResolvedValue(template);
+      transport.send.mockResolvedValue({ delivered: false });
+
+      await expect(
+        service.send({ event: 'invoice_created', to: '081200000000', vars: { nama: 'Ana' } }),
+      ).rejects.toThrow(/delivery failed/);
+
+      expect(repo.addLog).toHaveBeenCalledWith(
+        expect.objectContaining({ recipient: '081200000000', status: 'failed' }),
+      );
     });
   });
 
