@@ -102,8 +102,9 @@ export class ResellersController {
 
   // --- Payout lifecycle (P3.D.4) ---------------------------------------
   // requested -> approved -> paid (disbursed, debits the balance), or
-  // requested -> rejected. Only admin/staff decide; a mitra may only read
-  // their own reseller's payouts (ownership enforced in the service).
+  // requested -> rejected. A mitra may self-request a payout for their own
+  // reseller (ownership + balance enforced in the service, ADR-0010); only
+  // admin/staff may approve/reject/disburse.
 
   @Roles('admin', 'staff', 'mitra')
   @Get(':id/payouts')
@@ -111,7 +112,11 @@ export class ResellersController {
     return this.resellers.listPayouts(id, PayoutListQuerySchema.parse(query), user);
   }
 
-  @Roles('admin', 'staff')
+  // A mitra may self-request a payout for their own reseller only
+  // (ownership + balance enforced in the service, ADR-0010); admin/staff
+  // may request for any reseller. Approve/reject/disburse stay
+  // admin/staff-only — see below.
+  @Roles('admin', 'staff', 'mitra')
   @Audit('reseller.payout.request')
   @Post(':id/payouts')
   @HttpCode(HttpStatus.CREATED)
@@ -121,7 +126,7 @@ export class ResellersController {
     @Body() body: CreatePayoutDto,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.resellers.requestPayout(id, body, user.id);
+    return this.resellers.requestPayout(id, body, user);
   }
 
   @Roles('admin', 'staff')
