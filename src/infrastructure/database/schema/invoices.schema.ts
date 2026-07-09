@@ -104,6 +104,10 @@ export const invoices = pgTable(
     index('invoices_customer_id_idx').on(t.customerId),
     index('invoices_status_idx').on(t.status),
     index('invoices_type_idx').on(t.type),
+    // R6-DB-3: `desc(dueDate)` is the default sort of the invoice list (the
+    // most-hit staff billing screen). Without this the unfiltered list
+    // full-sorts the table every page load. DESC matches the query direction.
+    index('invoices_due_date_idx').on(t.dueDate.desc()),
     // One REGULAR invoice per customer per billing period — enforces the
     // "no duplicate period" invariant at the DB, so a re-run of billing is
     // naturally idempotent. Partial (`WHERE type = 'regular'`) so a
@@ -150,6 +154,10 @@ export const payments = pgTable(
     index('payments_invoice_id_idx').on(t.invoiceId),
     index('payments_customer_id_idx').on(t.customerId),
     index('payments_voucher_id_idx').on(t.voucherId),
+    // R6-DB-4: `paidAt` drives the payments-list default sort, the dashboard
+    // revenue window (`gte(paidAt, since)`), and the daily reconciliation
+    // report — all frequent, all full-scanning `payments` without this.
+    index('payments_paid_at_idx').on(t.paidAt),
   ],
 );
 
