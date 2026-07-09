@@ -61,6 +61,30 @@ import type { AppConfig } from '../../config/configuration';
               '*.privateKey',
               '*.apiKey',
               '*.merchantCode',
+              // UU PDP (Indonesian data-protection law): customer personal
+              // data must not land in the prod log shipper in clear text.
+              // These were leaking on the notification happy path
+              // (`{ to: input.to }` = customer phone/email, logged at info on
+              // every send) and on a few work-order/ACS lines
+              // (`{ customerName }`) — redact them at the boundary so no
+              // current OR future call site can leak them (R8-OBS-1/4). The
+              // `req` serializer already strips request bodies, but these
+              // wildcards make the wildcard tier self-sufficient if that
+              // serializer is ever relaxed for debugging (R8-OBS-6). `*.to`
+              // may over-redact a date-range filter's `to` field — harmless
+              // over-redaction, worth it to guarantee no recipient leaks.
+              '*.to',
+              '*.recipient',
+              '*.phone',
+              '*.customerPhone',
+              '*.email',
+              '*.customerEmail',
+              '*.customerName',
+              '*.ktp',
+              '*.npwp',
+              '*.address',
+              '*.lat',
+              '*.lng',
             ],
             censor: '[REDACTED]',
           },
