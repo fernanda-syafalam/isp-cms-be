@@ -27,7 +27,17 @@ export class DrizzleService implements OnModuleInit, OnModuleDestroy {
     this.pool = new Pool({
       connectionString: this.config.get('app.database.url', { infer: true }),
       max: this.config.get('app.database.poolSize', { infer: true }),
-      idleTimeoutMillis: 30_000,
+      // Send TCP keepalives. The managed Postgres is reached through the
+      // Docker Swarm overlay VIP, whose IPVS load balancer silently drops
+      // idle TCP flows. Without keepalives node-postgres keeps handing out a
+      // now-dead pooled socket and the next query hangs ~15-30s waiting for a
+      // TCP timeout (observed as 16s+ logins / hanging /v1/* behind the VIP).
+      // Keepalives keep the flow alive and surface a dead peer quickly.
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10_000,
+      // Recycle idle connections well under any overlay idle-drop window so a
+      // stale socket is closed by us before it can be handed to a request.
+      idleTimeoutMillis: 10_000,
       connectionTimeoutMillis: 5_000,
     });
 
