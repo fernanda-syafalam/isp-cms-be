@@ -15,14 +15,37 @@ import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 import type { AppConfig } from './config/configuration';
 
+/**
+ * How many proxy hops Fastify should trust when deriving the client IP.
+ * Read from `process.env` directly because the adapter is constructed before
+ * the DI container / ConfigService exists (env.schema.ts documents + validates
+ * TRUST_PROXY). Default 1 (a single ingress — Dokploy/Traefik in prod): with
+ * exactly one real proxy, `trustProxy: 1` makes the X-Forwarded-For the per-IP
+ * throttler keys on UNSPOOFABLE — Fastify uses the IP the trusted proxy
+ * recorded, not an attacker-supplied header — closing the login/2FA
+ * brute-force rate-limit bypass (R5-SEC-1). Was `trustProxy: true` (trust the
+ * whole XFF chain), which let a caller rotate a fake header for a fresh bucket
+ * per spoofed IP.
+ */
+function parseTrustProxy(raw: string | undefined): boolean | number | string {
+  if (raw === undefined || raw === '') return 1;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  const n = Number(raw);
+  if (Number.isInteger(n) && n >= 0) return n;
+  return raw; // a CIDR / comma-separated IP list — Fastify accepts these
+}
+
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     new FastifyAdapter({
       // Disable Fastify's built-in logger; nestjs-pino owns logging.
       logger: false,
-      // Required when running behind an ingress / load balancer in K8s.
-      trustProxy: true,
+      // Trust exactly the configured number of proxy hops (default 1) so the
+      // client IP — and thus the per-IP throttle bucket — cannot be forged via
+      // X-Forwarded-For (R5-SEC-1). Set TRUST_PROXY to match your topology.
+      trustProxy: parseTrustProxy(process.env.TRUST_PROXY),
       // Default 1 MB body limit; raise explicitly per route if needed.
       bodyLimit: 1_048_576,
       genReqId: (req: IncomingMessage | Http2ServerRequest) =>

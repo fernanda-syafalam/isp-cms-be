@@ -42,6 +42,28 @@ export const envSchema = z
     THROTTLER_TTL_MS: z.coerce.number().int().positive().default(60_000),
     THROTTLER_LIMIT: z.coerce.number().int().positive().default(100),
 
+    // Consumed at bootstrap (main.ts) BEFORE the DI container / ConfigService
+    // exists, so main.ts reads process.env.TRUST_PROXY directly — this entry
+    // documents + validates it. Controls Fastify `trustProxy`: how many proxy
+    // hops to trust when deriving the client IP the per-IP throttler keys on.
+    // Default 1 (a single ingress, e.g. Dokploy/Traefik) makes the throttle's
+    // X-Forwarded-For unspoofable — Fastify uses the IP the trusted proxy
+    // recorded, not an attacker-supplied header — so login/2FA rate limits
+    // can't be bypassed (R5-SEC-1). Values: 'false'/0 = no proxy (socket IP),
+    // N = N chained proxies (e.g. Cloudflare in front of Traefik), or a
+    // CIDR/comma-separated IP list to trust only those hops. Constrained so an
+    // invalid value fails env validation with a clear message rather than
+    // surfacing as a proxy-addr TypeError deep in bootstrap. NOTE:
+    // `TRUST_PROXY=true` trusts the WHOLE X-Forwarded-For chain and reinstates
+    // the R5-SEC-1 spoof bypass — prefer a hop count.
+    TRUST_PROXY: z
+      .string()
+      .regex(
+        /^(true|false|\d+|[\d.,:/\s]+)$/,
+        'TRUST_PROXY must be true/false, a hop count, or a CIDR/IP list',
+      )
+      .optional(),
+
     // 32+ char keeps brute-force out of reach. The schema rejects shorter
     // values so a placeholder secret never leaks into production.
     JWT_SECRET: z.string().min(32),

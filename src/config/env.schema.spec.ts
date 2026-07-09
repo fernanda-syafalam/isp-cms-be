@@ -98,3 +98,28 @@ describe('envSchema — PAYMENT_MODE (ADR-0016)', () => {
     expect(paths).toEqual(['TRIPAY_BASE_URL']);
   });
 });
+
+describe('envSchema — TRUST_PROXY (R5-SEC-1)', () => {
+  it('is optional (absent env parses fine)', () => {
+    const parsed = envSchema.parse(baseEnv());
+    expect(parsed.TRUST_PROXY).toBeUndefined();
+  });
+
+  it.each(['1', '0', '2', 'true', 'false', '10.0.0.0/8', '10.0.0.1, 10.0.0.2'])(
+    'accepts the valid value %j',
+    (value) => {
+      const result = envSchema.safeParse(baseEnv({ TRUST_PROXY: value }));
+      expect(result.success).toBe(true);
+    },
+  );
+
+  it.each(['yes', 'trust-all', '-1', 'abc'])(
+    'rejects the garbage value %j with a clear message rather than crashing at bootstrap',
+    (value) => {
+      const result = envSchema.safeParse(baseEnv({ TRUST_PROXY: value }));
+      expect(result.success).toBe(false);
+      const paths = result.success ? [] : result.error.issues.map((i) => i.path.join('.'));
+      expect(paths).toContain('TRUST_PROXY');
+    },
+  );
+});

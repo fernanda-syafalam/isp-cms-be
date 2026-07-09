@@ -1,4 +1,5 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { type AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -71,6 +72,10 @@ export class PortalController {
 
   // Customer-scoped gateway charge (P0.4): staff use /v1/payments/intent to
   // act on anyone; a customer pays only their own invoices here.
+  // R5-SEC-3: cap beyond the global limit — each call can open a real Tripay
+  // transaction in live mode, so a customer repeatedly minting charges for
+  // their own invoice is a cost/abuse vector even though ownership is enforced.
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Audit('portal.pay_intent.create')
   @Post('pay-intent')
   @ZodSerializerDto(PaymentIntentResponseDto)
