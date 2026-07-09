@@ -118,6 +118,62 @@ describe('InvoicesRepository (integration)', () => {
     expect(await repo.existsForPeriod(customerId, '2026-06-01')).toBe(true);
   });
 
+  // R6-DB-5: existingRegularForPeriod is the batched sibling of
+  // existsForPeriod used by the billing-cron schedulerPreview — same
+  // type='regular' filter, for many customers in one round-trip.
+  describe('existingRegularForPeriod', () => {
+    it('mirrors existsForPeriod across multiple customers, ignoring an adjustment invoice', async () => {
+      const [plan] = await db
+        .insert(plans)
+        .values({ name: 'Home 50', speedMbps: 50, priceMonthly: 300_000 })
+        .returning();
+      if (!plan) throw new Error('plan seed failed');
+      const [otherCustomer] = await db
+        .insert(customers)
+        .values({
+          fullName: 'Ani',
+          phone: '0812',
+          address: 'Jl. B',
+          planId: plan.id,
+          status: 'aktif',
+        })
+        .returning();
+      if (!otherCustomer) throw new Error('customer seed failed');
+
+      // customerId has a regular invoice for the period -> should be "existing".
+      await repo.create(newInvoice({ periodStart: '2026-06-01' }));
+      // otherCustomer has only an adjustment invoice for the same period ->
+      // must NOT count as existing (mirrors existsForPeriod's type filter).
+      await repo.create(
+        newInvoice({
+          customerId: otherCustomer.id,
+          type: 'adjustment',
+          periodStart: '2026-06-01',
+          periodEnd: '2026-06-01',
+          amount: 50_000,
+        }),
+      );
+
+      const existing = await repo.existingRegularForPeriod(
+        [customerId, otherCustomer.id],
+        '2026-06-01',
+      );
+
+      expect(existing.has(customerId)).toBe(true);
+      expect(existing.has(otherCustomer.id)).toBe(false);
+      // Parity with the per-id method for each id individually.
+      expect(await repo.existsForPeriod(customerId, '2026-06-01')).toBe(existing.has(customerId));
+      expect(await repo.existsForPeriod(otherCustomer.id, '2026-06-01')).toBe(
+        existing.has(otherCustomer.id),
+      );
+    });
+
+    it('returns an empty set for an empty id list without querying', async () => {
+      await repo.create(newInvoice({ periodStart: '2026-06-01' }));
+      expect(await repo.existingRegularForPeriod([], '2026-06-01')).toEqual(new Set());
+    });
+  });
+
   it('lists by status with a real total and limit/offset', async () => {
     await repo.create(newInvoice());
     await repo.create(newInvoice({ periodStart: '2026-07-01', status: 'overdue' }));
@@ -641,6 +697,86 @@ describe('InvoicesRepository (integration)', () => {
 
     expect(await repo.sumUnpaidByCustomer(customerId)).toBe(222_000 + 247_000);
     expect(await repo.countOverdueByCustomer(customerId)).toBe(1);
+  });
+
+  // R6-DB-2: sumUnpaidByCustomers is the batched sibling of
+  // sumUnpaidByCustomer used by the billing cron — same balance-due
+  // expression and UNPAID_STATUSES filter, grouped, for many customers in
+  // one round-trip.
+  describe('sumUnpaidByCustomers', () => {
+    it('mirrors sumUnpaidByCustomer across multiple customers, omitting one with only paid invoices', async () => {
+      const [plan] = await db
+        .insert(plans)
+        .values({ name: 'Home 50', speedMbps: 50, priceMonthly: 300_000 })
+        .returning();
+      if (!plan) throw new Error('plan seed failed');
+      const [customerB] = await db
+        .insert(customers)
+        .values({
+          fullName: 'Ani',
+          phone: '0812',
+          address: 'Jl. B',
+          planId: plan.id,
+          status: 'aktif',
+        })
+        .returning();
+      const [customerC] = await db
+        .insert(customers)
+        .values({
+          fullName: 'Cici',
+          phone: '0813',
+          address: 'Jl. C',
+          planId: plan.id,
+          status: 'aktif',
+        })
+        .returning();
+      if (!customerB || !customerC) throw new Error('customer seed failed');
+
+      // customerId (the outer describe's seeded customer): one pending +
+      // one overdue-with-late-fee, same fixture as the single-id test above.
+      await repo.create(newInvoice({ periodStart: '2026-06-01', status: 'pending' })); // 222_000
+      await repo.create(
+        newInvoice({ periodStart: '2026-07-01', status: 'overdue', lateFee: 25_000 }),
+      ); // 247_000
+
+      // customerB: one partial invoice, part paid.
+      await repo.create(
+        newInvoice({
+          customerId: customerB.id,
+          customerName: 'Ani',
+          periodStart: '2026-06-01',
+          status: 'partial',
+          paidAmount: 100_000,
+        }),
+      ); // 122_000 still owed
+
+      // customerC: ONLY a paid invoice -> must be absent from the map,
+      // mirroring sumUnpaidByCustomer's own coalesce(...,0) for a single id
+      // (a caller must treat a missing key as 0, never throw on it).
+      await repo.create(
+        newInvoice({
+          customerId: customerC.id,
+          customerName: 'Cici',
+          periodStart: '2026-06-01',
+          status: 'paid',
+        }),
+      );
+
+      const sums = await repo.sumUnpaidByCustomers([customerId, customerB.id, customerC.id]);
+
+      expect(sums.get(customerId)).toBe(222_000 + 247_000);
+      expect(sums.get(customerB.id)).toBe(122_000);
+      expect(sums.has(customerC.id)).toBe(false);
+      // Parity with the per-id method for each id individually.
+      expect(await repo.sumUnpaidByCustomer(customerId)).toBe(sums.get(customerId));
+      expect(await repo.sumUnpaidByCustomer(customerB.id)).toBe(sums.get(customerB.id));
+      expect(await repo.sumUnpaidByCustomer(customerC.id)).toBe(0); // coalesce(...,0) parity
+    });
+
+    it('returns an empty map for an empty id list without querying', async () => {
+      await repo.create(newInvoice({ periodStart: '2026-06-01', status: 'pending' }));
+      expect(await repo.sumUnpaidByCustomers([])).toEqual(new Map());
+    });
   });
 
   // ---------------------------------------------------------------------------

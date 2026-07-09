@@ -247,6 +247,17 @@ export class CustomersRepository {
     return row ?? null;
   }
 
+  // Batched sibling of findById — same select shape (joined planName /
+  // resellerName), used by the billing cron (R6-DB-2) so it stops issuing
+  // one findById per customer id in a loop. Order/dedupe is whatever
+  // Postgres's IN returns (callers key off the row's own `id`, e.g. via a
+  // Map, so ordering never matters). Empty input returns [] WITHOUT
+  // querying — `inArray(col, [])` is a SQL error on some drivers.
+  async findByIds(ids: string[]): Promise<CustomerRow[]> {
+    if (ids.length === 0) return [];
+    return this.baseSelect().where(inArray(customers.id, ids));
+  }
+
   // Resolve a customer by their (unique-in-practice) email. Transition
   // fallback for portal sessions predating the userId linkage (P1.3).
   async findByEmail(email: string): Promise<CustomerRow | null> {

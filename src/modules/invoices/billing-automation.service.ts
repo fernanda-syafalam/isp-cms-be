@@ -60,10 +60,14 @@ export class BillingAutomationService {
   async schedulerPreview(): Promise<SchedulerPreview> {
     const periodStart = currentPeriodStart();
     const billables = await this.customers.findActiveBillable();
-    let toBill = 0;
-    for (const c of billables) {
-      if (!(await this.repo.existsForPeriod(c.id, periodStart))) toBill += 1;
-    }
+    // R6-DB-5: one batched existence query instead of one per billable
+    // customer — same type='regular' + periodStart filter as the per-id
+    // existsForPeriod this replaces (see existingRegularForPeriod's doc).
+    const existing = await this.repo.existingRegularForPeriod(
+      billables.map((c) => c.id),
+      periodStart,
+    );
+    const toBill = billables.filter((c) => !existing.has(c.id)).length;
     return {
       toBill,
       toRemindUpcoming: await this.repo.countPendingDueSoon(REMIND_UPCOMING_DAYS),
@@ -102,10 +106,23 @@ export class BillingAutomationService {
     customerIds: string[],
   ): Promise<void> {
     const period = currentPeriodStart();
+    // R6-DB-2: two batched round-trips (customers + outstanding sums) up
+    // front instead of two per customer id in the loop below. A customer id
+    // present in customerIds but absent from the batched fetch (e.g.
+    // deleted mid-run) behaves exactly like the old findById -> null did:
+    // `customersById.get(id)` is undefined, so the phone-skip guard below
+    // (`!customer?.phone`) skips it the same way.
+    const [customersRows, outstandingByCustomer] = await Promise.all([
+      this.customers.findByIds(customerIds),
+      this.repo.sumUnpaidByCustomers(customerIds),
+    ]);
+    const customersById = new Map(customersRows.map((c) => [c.id, c]));
     for (const id of customerIds) {
-      const customer = await this.customers.findById(id);
+      const customer = customersById.get(id);
       if (!customer?.phone) continue;
-      const outstanding = await this.repo.sumUnpaidByCustomer(id);
+      // Missing key = no unpaid invoices = 0, mirroring sumUnpaidByCustomer's
+      // own coalesce(...,0) for a single id (see sumUnpaidByCustomers' doc).
+      const outstanding = outstandingByCustomer.get(id) ?? 0;
       try {
         await this.notifications.enqueue(
           {
@@ -127,11 +144,21 @@ export class BillingAutomationService {
   private async isolateActiveDebtors(): Promise<number> {
     const ids = await this.repo.customerIdsWithOverdue();
     const period = currentPeriodStart();
+    // R6-DB-2: same batched-fetch-then-loop-side-effects shape as
+    // dispatchDunning above. A deleted-mid-run id is simply absent from
+    // customersById, so `customer?.status === 'aktif'` is false and it's
+    // skipped — identical to the old findById -> null behavior.
+    const [customersRows, outstandingByCustomer] = await Promise.all([
+      this.customers.findByIds(ids),
+      this.repo.sumUnpaidByCustomers(ids),
+    ]);
+    const customersById = new Map(customersRows.map((c) => [c.id, c]));
     let isolated = 0;
     for (const id of ids) {
-      const customer = await this.customers.findById(id);
+      const customer = customersById.get(id);
       if (customer?.status === 'aktif') {
-        const outstanding = await this.repo.sumUnpaidByCustomer(id);
+        // Missing key = 0, mirroring sumUnpaidByCustomer's coalesce(...,0).
+        const outstanding = outstandingByCustomer.get(id) ?? 0;
         await this.customers.setBilling(id, {
           status: 'isolir',
           outstanding,
@@ -180,12 +207,11 @@ export class BillingAutomationService {
 
   private async countActiveDebtors(): Promise<number> {
     const ids = await this.repo.customerIdsWithOverdue();
-    let n = 0;
-    for (const id of ids) {
-      const customer = await this.customers.findById(id);
-      if (customer?.status === 'aktif') n += 1;
-    }
-    return n;
+    // R6-DB-2: one batched fetch instead of one findById per id — a
+    // deleted-mid-run id is absent from the map, same as the old
+    // findById -> null skip.
+    const customersRows = await this.customers.findByIds(ids);
+    return customersRows.filter((c) => c.status === 'aktif').length;
   }
 }
 
