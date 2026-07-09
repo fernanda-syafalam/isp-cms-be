@@ -27,7 +27,13 @@ describe('POST /v1/webhooks/tripay (e2e)', () => {
   let originalEnv: Record<string, string | undefined>;
 
   const fakePaymentIntentsService = {
-    settleFromGateway: vi.fn(async () => ({ settled: true })),
+    settleFromGateway: vi.fn(
+      async (): Promise<
+        | { settled: true }
+        | { settled: false; reason: 'unknown_intent' | 'reference_mismatch' | 'amount_mismatch' }
+      > => ({ settled: true }),
+    ),
+    markGatewayNonSettlement: vi.fn(async () => undefined),
   };
 
   function sign(body: Buffer): string {
@@ -107,6 +113,7 @@ describe('POST /v1/webhooks/tripay (e2e)', () => {
 
   afterEach(() => {
     fakePaymentIntentsService.settleFromGateway.mockClear();
+    fakePaymentIntentsService.markGatewayNonSettlement.mockClear();
   });
 
   it('valid signature + paid status: 200 and settlement delegated to settleFromGateway', async () => {
@@ -131,7 +138,7 @@ describe('POST /v1/webhooks/tripay (e2e)', () => {
     });
   });
 
-  it('valid signature + non-paid status (expired/failed): 200, settlement NOT called', async () => {
+  it('valid signature + non-paid status (expired/failed): 200, settlement NOT called, intent housekeeping (L3) delegated instead', async () => {
     const body = payload({ status: 'EXPIRED' });
     const res = await app.inject({
       method: 'POST',
@@ -145,6 +152,37 @@ describe('POST /v1/webhooks/tripay (e2e)', () => {
 
     expect(res.statusCode).toBe(200);
     expect(fakePaymentIntentsService.settleFromGateway).not.toHaveBeenCalled();
+    expect(fakePaymentIntentsService.markGatewayNonSettlement).toHaveBeenCalledWith(
+      '00000000-0000-4000-8000-0000000000f1',
+    );
+  });
+
+  // M1: a DETERMINISTIC non-settle reason (amount mismatch, reference
+  // mismatch, unknown intent) must still 200 — retrying the same callback
+  // can never turn a permanent condition into a success, so a non-2xx here
+  // would only produce a Tripay retry storm. settleFromGateway itself
+  // already logged the audit:true reconciliation alert (unit-tested in
+  // payment-intents.service.spec.ts) — this only proves the HTTP layer
+  // does not translate its `settled:false` result into a retry-me status.
+  it('valid signature + paid status but settleFromGateway reports a deterministic non-settle (e.g. amount mismatch): still 200, never a retry-triggering status', async () => {
+    fakePaymentIntentsService.settleFromGateway.mockResolvedValueOnce({
+      settled: false,
+      reason: 'amount_mismatch',
+    });
+    const body = payload();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/webhooks/tripay',
+      payload: body,
+      headers: {
+        'content-type': 'application/json',
+        'x-callback-signature': sign(body),
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ received: true });
+    expect(fakePaymentIntentsService.settleFromGateway).toHaveBeenCalledTimes(1);
   });
 
   it('bad signature: 401, settlement NOT called (never settled)', async () => {

@@ -17,6 +17,17 @@ type Channel = PaymentIntent['channel'];
 
 const VA_CHANNELS = new Set<Channel>(['va_bca', 'va_mandiri', 'va_bri', 'va_bni']);
 
+/**
+ * M1: `settleFromGateway`'s result never throws for a DETERMINISTIC
+ * non-settle condition (see that method's doc comment) — the caller
+ * (`TripayWebhookController`) inspects `reason` only to decide what to log
+ * / how to respond; the actual reconciliation-alert logging already
+ * happened inside `settleFromGateway`.
+ */
+export type SettleFromGatewayResult =
+  | { settled: true }
+  | { settled: false; reason: 'unknown_intent' | 'reference_mismatch' | 'amount_mismatch' };
+
 @Injectable()
 export class PaymentIntentsService {
   private readonly logger = new Logger(PaymentIntentsService.name);
@@ -131,19 +142,33 @@ export class PaymentIntentsService {
    * - Amount check: the callback's paid amount must equal the invoice's
    *   CURRENT `balanceDue` — never trust the gateway to have charged the
    *   right amount, and never settle a mismatched one.
+   *
+   * M1: the three checks above are DETERMINISTIC non-settle conditions —
+   * retrying the exact same callback can never make them succeed (an
+   * unknown intent stays unknown, a forged/stale reference stays wrong,
+   * and a stale amount stays stale until a human looks at it). Callers
+   * MUST NOT translate these into a non-2xx HTTP response: Tripay retries
+   * a failed webhook delivery, and retrying a permanent condition forever
+   * is a retry storm that helps nobody. Each case is instead logged as an
+   * `audit: true` reconciliation alert and returned as `{ settled: false,
+   * reason }` — refusing to settle is still the correct MONEY decision
+   * (never paper over a mismatch), only the HTTP-level "should the caller
+   * retry" signal changes. A genuinely transient failure (e.g. the DB call
+   * itself throwing) is NOT caught here and propagates normally — THAT is
+   * when a non-2xx / retry is actually the right behavior.
    */
   async settleFromGateway(parsed: {
     reference: string;
     invoiceRef: string;
     amount: number;
-  }): Promise<{ settled: boolean }> {
+  }): Promise<SettleFromGatewayResult> {
     const intent = await this.repo.findById(parsed.invoiceRef);
     if (!intent) {
       this.logger.warn(
-        { reference: parsed.reference, invoiceRef: parsed.invoiceRef },
-        'tripay webhook: unknown payment intent — ignoring',
+        { audit: true, reference: parsed.reference, invoiceRef: parsed.invoiceRef },
+        'tripay webhook: unknown payment intent — acknowledging without settling; reconcile manually if this represents a real payment',
       );
-      throw new NotFoundException('payment intent not found');
+      return { settled: false, reason: 'unknown_intent' };
     }
 
     if (intent.status === 'paid') {
@@ -156,28 +181,62 @@ export class PaymentIntentsService {
 
     if (intent.gatewayReference && intent.gatewayReference !== parsed.reference) {
       this.logger.error(
-        { intentId: intent.id, expected: intent.gatewayReference, received: parsed.reference },
-        'tripay webhook: gateway reference mismatch — refusing to settle',
+        {
+          audit: true,
+          intentId: intent.id,
+          expected: intent.gatewayReference,
+          received: parsed.reference,
+        },
+        'tripay webhook: gateway reference mismatch — acknowledging without settling; reconcile manually',
       );
-      throw new ConflictException('gateway reference mismatch');
+      return { settled: false, reason: 'reference_mismatch' };
     }
 
     const invoice = await this.invoices.findById(intent.invoiceId);
     if (invoice.balanceDue !== parsed.amount) {
       this.logger.error(
         {
+          audit: true,
           intentId: intent.id,
           invoiceId: invoice.id,
           expected: invoice.balanceDue,
           received: parsed.amount,
         },
-        'tripay webhook: amount mismatch — refusing to settle',
+        'tripay webhook: amount mismatch — acknowledging without settling; reconcile manually (e.g. balanceDue moved via another channel since the charge was created, or this is a bad/forged callback)',
       );
-      throw new ConflictException('amount mismatch');
+      return { settled: false, reason: 'amount_mismatch' };
     }
 
     await this.confirm(intent.id);
     return { settled: true };
+  }
+
+  /**
+   * L3: housekeeping for a VERIFIED Tripay callback whose status is NOT
+   * 'paid' ('expired' or 'failed') — before this, `TripayWebhookController`
+   * treated the whole non-paid branch as a pure no-op, leaving the intent
+   * `pending` until the hourly `expireStale` sweep caught up. This marks it
+   * `expired` immediately so it stops appearing in `pendingForCustomer`
+   * ("resume payment") right away. `payment_intents.status` has no distinct
+   * `failed` value (`payment_intent_status` enum is only pending/paid/
+   * expired) — Tripay's `failed` and `expired` are both mapped to the same
+   * `expired` intent status, since both mean the same thing from this
+   * table's point of view: this charge is dead, stop offering it.
+   *
+   * Deliberately does NOT touch the invoice or any money path (no ledger
+   * row, no balance change) — an intent going stale/failed says nothing
+   * about the invoice itself, which stays payable via a fresh intent or any
+   * other channel. No-op (not an error) for an unknown intent or one that
+   * is already `paid`/`expired` — idempotent for a redelivered callback.
+   */
+  async markGatewayNonSettlement(invoiceRef: string): Promise<void> {
+    const intent = await this.repo.findById(invoiceRef);
+    if (!intent || intent.status !== 'pending') return;
+    await this.repo.markExpired(intent.id);
+    this.logger.log(
+      { intentId: intent.id },
+      'tripay webhook: non-paid callback — marked intent expired',
+    );
   }
 
   /**

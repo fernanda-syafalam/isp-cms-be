@@ -18,15 +18,24 @@ import { PaymentGateway } from './payment-gateway';
  * because the caller is Tripay's server, not a logged-in user; there is no
  * JWT to check. Authentication is entirely `gateway.verifyAndParseWebhook`'s
  * job (HMAC-SHA256 over the raw body, see `TripayPaymentGateway`'s doc
- * comment) — this controller stays thin: verify, then delegate settlement
- * to `PaymentIntentsService.settleFromGateway` (idempotency + amount check
- * + the actual `invoices.pay` transaction all live there, reused from the
+ * comment) — this controller stays thin: verify, then delegate to
+ * `PaymentIntentsService.settleFromGateway` (idempotency + amount check +
+ * the actual `invoices.pay` transaction all live there, reused from the
  * existing `confirm()` path — SEC-H1: never reimplemented here).
  *
- * Always 200s once the signature is valid, even for a status this handler
- * doesn't settle (e.g. 'failed') or an already-settled duplicate — Tripay
- * retries on any non-2xx, and none of those cases should trigger a retry
- * storm. Only an invalid signature returns non-2xx (401, via the gateway).
+ * M1: this handler always 200s once the signature is valid — including for
+ * an already-settled duplicate, a non-'paid' status (`markGatewayNonSettlement`),
+ * AND a DETERMINISTIC reason `settleFromGateway` refused to settle (unknown
+ * intent / reference mismatch / amount mismatch). Refusing to settle is
+ * still the correct MONEY decision in all three cases (never paper over a
+ * mismatch) — each is logged as an `audit: true` reconciliation alert at
+ * the service layer for a human to follow up on — but retrying the exact
+ * same callback can never turn a permanent condition into a success, so
+ * asking Tripay to retry it (a non-2xx) would only produce a retry storm
+ * with no chance of ever resolving. Only an invalid/missing signature (not
+ * authenticated as Tripay at all) returns non-2xx (401, via the gateway); a
+ * genuinely transient failure (e.g. the DB call itself throwing) is not
+ * caught here and propagates as a 5xx, which IS a case Tripay should retry.
  */
 @Public()
 @Controller({ path: 'webhooks', version: '1' })
@@ -54,12 +63,15 @@ export class TripayWebhookController {
     const parsed = this.gateway.verifyAndParseWebhook(headers, req.rawBody);
 
     if (parsed.status === 'paid') {
+      // `settleFromGateway` never throws for a deterministic non-settle
+      // reason (see its + this controller's doc comments) — its own
+      // `audit: true` log line is the reconciliation alert; nothing further
+      // to do here regardless of `result.settled`.
       await this.intents.settleFromGateway(parsed);
     } else {
-      // 'expired' / 'failed' — acknowledged, nothing to settle. Logged at
-      // the service layer would require a call just for a log line, so a
-      // dedicated no-op path here is preferable — Tripay must still get a
-      // 200 or it will keep retrying this webhook forever.
+      // 'expired' / 'failed' (L3) — no money path, just intent housekeeping
+      // so it stops looking "still resumable" to the customer.
+      await this.intents.markGatewayNonSettlement(parsed.invoiceRef);
     }
 
     return { received: true };

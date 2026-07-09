@@ -54,6 +54,13 @@ import type { AppConfig } from '../../config/configuration';
               // against a future accidental config dump.
               '*.encKey',
               '*.TWOFA_ENC_KEY',
+              // ADR-0016: Tripay gateway credentials
+              // (`AppConfig.payment.tripay.*`). Nothing logs these today
+              // either (`TripayPaymentGateway` never logs a config dump),
+              // same cheap-insurance rationale as `encKey` above.
+              '*.privateKey',
+              '*.apiKey',
+              '*.merchantCode',
             ],
             censor: '[REDACTED]',
           },

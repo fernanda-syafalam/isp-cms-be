@@ -284,49 +284,91 @@ describe('PaymentIntentsService', () => {
       expect(repo.markPaid).not.toHaveBeenCalled();
     });
 
-    it('rejects when the callback amount does not match the invoice balanceDue', async () => {
+    // M1: a deterministic non-settle condition is reported via the return
+    // value, NOT a thrown exception — the controller must be able to 200
+    // (acknowledge, no retry) rather than ask Tripay to retry a permanent
+    // condition forever. See settleFromGateway's doc comment.
+    it('returns settled:false with reason "amount_mismatch" (does not throw) when the callback amount does not match balanceDue', async () => {
       repo.findById.mockResolvedValue(
         intentRow({ status: 'pending', gatewayReference: GATEWAY_REFERENCE }),
       );
       invoices.findById.mockResolvedValue(invoice({ balanceDue: 116_000 }));
 
-      await expect(
-        service.settleFromGateway({
-          reference: GATEWAY_REFERENCE,
-          invoiceRef: INTENT_ID,
-          amount: 1, // attacker/bug: far below the real balance due
-        }),
-      ).rejects.toBeInstanceOf(ConflictException);
+      const result = await service.settleFromGateway({
+        reference: GATEWAY_REFERENCE,
+        invoiceRef: INTENT_ID,
+        amount: 1, // attacker/bug: far below the real balance due
+      });
+
+      expect(result).toEqual({ settled: false, reason: 'amount_mismatch' });
       expect(invoices.pay).not.toHaveBeenCalled();
       expect(repo.markPaid).not.toHaveBeenCalled();
     });
 
-    it('rejects when the callback reference does not match the reference recorded at charge-create time', async () => {
+    it('returns settled:false with reason "reference_mismatch" (does not throw) when the callback reference does not match the one recorded at charge-create time', async () => {
       repo.findById.mockResolvedValue(
         intentRow({ status: 'pending', gatewayReference: 'T-the-real-one' }),
       );
 
-      await expect(
-        service.settleFromGateway({
-          reference: 'T-a-forged-one',
-          invoiceRef: INTENT_ID,
-          amount: 116_000,
-        }),
-      ).rejects.toBeInstanceOf(ConflictException);
+      const result = await service.settleFromGateway({
+        reference: 'T-a-forged-one',
+        invoiceRef: INTENT_ID,
+        amount: 116_000,
+      });
+
+      expect(result).toEqual({ settled: false, reason: 'reference_mismatch' });
       expect(invoices.pay).not.toHaveBeenCalled();
     });
 
-    it('404s for an unknown invoiceRef (merchant_ref)', async () => {
+    it('returns settled:false with reason "unknown_intent" (does not throw) for an unknown invoiceRef (merchant_ref)', async () => {
       repo.findById.mockResolvedValue(null);
 
-      await expect(
-        service.settleFromGateway({
-          reference: GATEWAY_REFERENCE,
-          invoiceRef: 'missing',
-          amount: 1,
-        }),
-      ).rejects.toBeInstanceOf(NotFoundException);
+      const result = await service.settleFromGateway({
+        reference: GATEWAY_REFERENCE,
+        invoiceRef: 'missing',
+        amount: 1,
+      });
+
+      expect(result).toEqual({ settled: false, reason: 'unknown_intent' });
       expect(invoices.pay).not.toHaveBeenCalled();
+    });
+  });
+
+  // L3: a verified but non-'paid' callback ('expired'/'failed') marks the
+  // intent expired immediately instead of waiting for the hourly sweep —
+  // and never touches the invoice/money path.
+  describe('markGatewayNonSettlement (L3)', () => {
+    it('marks a pending intent expired', async () => {
+      repo.findById.mockResolvedValue(intentRow({ status: 'pending' }));
+
+      await service.markGatewayNonSettlement(INTENT_ID);
+
+      expect(repo.markExpired).toHaveBeenCalledWith(INTENT_ID);
+      expect(invoices.pay).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op for an already-paid intent (never touches money)', async () => {
+      repo.findById.mockResolvedValue(intentRow({ status: 'paid' }));
+
+      await service.markGatewayNonSettlement(INTENT_ID);
+
+      expect(repo.markExpired).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op for an already-expired intent (idempotent for a redelivered callback)', async () => {
+      repo.findById.mockResolvedValue(intentRow({ status: 'expired' }));
+
+      await service.markGatewayNonSettlement(INTENT_ID);
+
+      expect(repo.markExpired).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op for an unknown intent', async () => {
+      repo.findById.mockResolvedValue(null);
+
+      await service.markGatewayNonSettlement('missing');
+
+      expect(repo.markExpired).not.toHaveBeenCalled();
     });
   });
 
