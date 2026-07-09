@@ -1,23 +1,27 @@
 # Dokploy deployment compose for isp-cms-be.
 #
 # Deploy this as a Dokploy "Compose" application (NOT the local
-# docker-compose.yml — that one only spins up Postgres/Redis for local
-# dev). Postgres and Redis here are Dokploy *managed* databases; their
-# internal connection strings are injected as environment variables
-# (DATABASE_URL / REDIS_URL) via the Dokploy UI — see
-# docs/DEPLOYMENT-DOKPLOY.md.
+# docker-compose.yml).
 #
-# Three workloads share ONE image (built once on the `api` service):
-#   - migrate : one-shot `node dist/migrate.js`, runs pending Drizzle
-#               migrations, then exits 0. The pipeline gate (Pilar 8).
-#   - api     : the HTTP server (`dist/main.js`, port 3000). Exposed to
-#               the internet through Dokploy's Traefik.
-#   - worker  : the BullMQ consumer (`dist/worker.js`). Internal only.
+# Postgres is a Dokploy *managed* database (set DATABASE_URL in the UI).
+# Redis is co-located here as the `isp-redis` service — self-contained and
+# always reachable by name, so the app never depends on getting a managed
+# Redis hostname right. Override REDIS_URL in the UI only if you want to
+# point at an external/managed Redis instead.
 #
-# api and worker WAIT for migrate to finish successfully, so every
-# deploy applies migrations before new code serves traffic.
+# Four workloads:
+#   - isp-redis : Redis 7 for throttler + refresh tokens + BullMQ.
+#   - migrate   : one-shot `node dist/migrate.js`, applies pending Drizzle
+#                 migrations then exits 0. The pipeline gate (Pilar 8).
+#   - api       : the HTTP server (`dist/main.js`, port 3000). Exposed to
+#                 the internet through Dokploy's Traefik.
+#   - worker    : the BullMQ consumer (`dist/worker.js`). Internal only.
+#
+# api and worker WAIT for migrate to finish and for Redis to be healthy,
+# so every deploy migrates before new code serves traffic and the app
+# never boots against a dead Redis (which would crash-loop it).
 
-# Environment shared by all three workloads. Values come from the
+# Environment shared by all three app workloads. Values come from the
 # Dokploy environment settings (compose interpolates ${VAR}); the full
 # list and how to generate secrets is in .env.dokploy.example.
 x-app-env: &app-env
@@ -25,7 +29,10 @@ x-app-env: &app-env
   PORT: "3000"
   DATABASE_URL: ${DATABASE_URL}
   DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
-  REDIS_URL: ${REDIS_URL}
+  # Defaults to the co-located isp-redis service. `:-` also wins when the
+  # UI leaves REDIS_URL empty, so a blank value never falls back to
+  # localhost (which is what caused the earlier crash-loop).
+  REDIS_URL: ${REDIS_URL:-redis://isp-redis:6379}
   JWT_SECRET: ${JWT_SECRET}
   JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-15m}
   REFRESH_TOKEN_TTL_SECONDS: ${REFRESH_TOKEN_TTL_SECONDS:-604800}
@@ -33,8 +40,9 @@ x-app-env: &app-env
   LOG_LEVEL: ${LOG_LEVEL:-info}
   THROTTLER_TTL_MS: ${THROTTLER_TTL_MS:-60000}
   THROTTLER_LIMIT: ${THROTTLER_LIMIT:-100}
-  # Cross-site cookie: FE (app.*) and BE (api.*) are different origins,
-  # so the refresh cookie needs SameSite=None + Secure (HTTPS via Traefik).
+  # Cross-site cookie: FE (isp.astaweda.com) and BE (api.isp.astaweda.com)
+  # are different origins, so the refresh cookie needs SameSite=None +
+  # Secure (HTTPS is terminated by Traefik).
   CORS_ORIGINS: ${CORS_ORIGINS}
   COOKIE_SECURE: ${COOKIE_SECURE:-true}
   COOKIE_SAMESITE: ${COOKIE_SAMESITE:-none}
@@ -43,6 +51,20 @@ x-app-env: &app-env
   ROUTEROS_MODE: ${ROUTEROS_MODE:-simulation}
 
 services:
+  isp-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - isp-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - dokploy-network
+
   migrate:
     image: isp-cms-be:dokploy
     command: ["dist/migrate.js"]
@@ -63,17 +85,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-    # Distroless has no shell/curl — probe with the bundled node binary.
-    healthcheck:
-      test:
-        - "CMD"
-        - "node"
-        - "-e"
-        - "require('http').get('http://127.0.0.1:3000/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
-      interval: 15s
-      timeout: 3s
-      retries: 5
-      start_period: 40s
+      isp-redis:
+        condition: service_healthy
     networks:
       - dokploy-network
     labels:
@@ -92,11 +105,16 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      isp-redis:
+        condition: service_healthy
     networks:
       - dokploy-network
 
-# Dokploy's shared Traefik network. Managed Postgres/Redis attach here
-# too, so the app reaches them by their internal service hostname.
+# Dokploy's shared Traefik network. The managed Postgres attaches here too,
+# so the app reaches it by its internal service hostname.
 networks:
   dokploy-network:
     external: true
+
+volumes:
+  isp-redis-data:
