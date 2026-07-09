@@ -365,6 +365,13 @@
       "when": 1783510798337,
       "tag": "0051_drop_customers_reseller_name",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1783552950843,
+      "tag": "0052_add_payment_intent_gateway_reference",
+      "breakpoints": true
     }
   ]
 }

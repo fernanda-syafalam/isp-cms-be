@@ -186,14 +186,27 @@ export const paymentIntents = pgTable(
     channel: paymentChannel('channel').notNull(),
     status: paymentIntentStatus('status').notNull().default('pending'),
     // Exactly one of these is set per channel: VA rails get a number, QR /
-    // e-wallet rails get a payload.
+    // e-wallet rails get a payload. In `PAYMENT_MODE=live` (Tripay),
+    // `qrPayload` also carries the e-wallet `checkoutUrl` — the field was
+    // already a generic "channel payload" string, so no separate column
+    // is needed for that case.
     vaNumber: varchar('va_number', { length: 40 }),
     qrPayload: varchar('qr_payload', { length: 512 }),
+    // Gateway's own transaction id (Tripay `reference`), null in
+    // `PAYMENT_MODE=simulation`. Populated at charge-create time; the
+    // webhook cross-checks it against the callback's `reference` as a
+    // defense-in-depth integrity check (the primary lookup key is still
+    // `payment_intents.id`, sent to the gateway as `merchant_ref`). Purely
+    // for reconciliation/audit — nothing reads it for correctness.
+    gatewayReference: varchar('gateway_reference', { length: 64 }),
     expiresAt: timestamp('expires_at', { withTimezone: true, precision: 3 }).notNull(),
     paidAt: timestamp('paid_at', { withTimezone: true, precision: 3 }),
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },
-  (t) => [index('payment_intents_invoice_id_idx').on(t.invoiceId)],
+  (t) => [
+    index('payment_intents_invoice_id_idx').on(t.invoiceId),
+    index('payment_intents_gateway_reference_idx').on(t.gatewayReference),
+  ],
 );
 
 // Domain types derived from the schema — never hand-written (Pilar 3).

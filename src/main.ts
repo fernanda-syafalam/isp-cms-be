@@ -28,10 +28,20 @@ async function bootstrap(): Promise<void> {
       genReqId: (req: IncomingMessage | Http2ServerRequest) =>
         req.headers['x-request-id']?.toString() ?? randomUUID(),
     }),
-    // Buffer log lines until `useLogger` swaps the default Nest logger
-    // for pino — without this the bootstrap lines come out as plain
-    // text and are hard to grep alongside JSON request logs.
-    { bufferLogs: true },
+    {
+      // Buffer log lines until `useLogger` swaps the default Nest logger
+      // for pino — without this the bootstrap lines come out as plain
+      // text and are hard to grep alongside JSON request logs.
+      bufferLogs: true,
+      // Preserves the exact request bytes on `req.rawBody` alongside the
+      // normal parsed `req.body` (ADR-0016) — the Tripay webhook signature
+      // must be verified over the raw bytes Tripay actually signed, not a
+      // re-serialized JSON.parse(body) that could diverge (key order,
+      // whitespace). Global (not per-route) is the only way NestJS exposes
+      // this; the extra buffered Buffer per request is negligible next to
+      // the existing 1 MB bodyLimit above.
+      rawBody: true,
+    },
   );
 
   // Hand request logging and bootstrap logs to pino.

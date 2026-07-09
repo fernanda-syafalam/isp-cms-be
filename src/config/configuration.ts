@@ -56,6 +56,15 @@ export const appConfig = registerAs('app', () => {
         apiToken: env.WA_API_TOKEN,
       },
     },
+    payment: {
+      mode: env.PAYMENT_MODE,
+      tripay: {
+        apiKey: env.TRIPAY_API_KEY,
+        privateKey: env.TRIPAY_PRIVATE_KEY,
+        merchantCode: env.TRIPAY_MERCHANT_CODE,
+        baseUrl: env.TRIPAY_BASE_URL,
+      },
+    },
   } as const;
 });
 
