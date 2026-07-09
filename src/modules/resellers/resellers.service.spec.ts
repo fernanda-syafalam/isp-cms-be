@@ -35,6 +35,24 @@ const payout: ResellerPayout = {
 
 const actorId = '00000000-0000-0000-0000-0000000a0bbb';
 
+const staffUser = {
+  id: actorId,
+  email: 'staff@x.test',
+  fullName: 'Staff',
+  role: 'staff' as const,
+  resellerId: null,
+};
+
+function mitraUserFor(resellerId: string) {
+  return {
+    id: '00000000-0000-0000-0000-0000000a0mit',
+    email: 'mitra@x.test',
+    fullName: 'Mitra',
+    role: 'mitra' as const,
+    resellerId,
+  };
+}
+
 describe('ResellersService', () => {
   let service: ResellersService;
   let repo: Record<string, ReturnType<typeof vi.fn>>;
@@ -188,26 +206,62 @@ describe('ResellersService', () => {
   });
 
   describe('payout lifecycle (P3.D.4)', () => {
-    it('requestPayout forwards amount/note/actor and returns the mapped response', async () => {
+    it('requestPayout (staff) forwards amount/note/actor and returns the mapped response', async () => {
       repo.createPayout.mockResolvedValue(payout);
       const result = await service.requestPayout(
         reseller.id,
         { amount: 400_000, note: 'Cair mingguan' },
-        actorId,
+        staffUser,
       );
       expect(repo.createPayout).toHaveBeenCalledWith(reseller.id, {
         amount: 400_000,
         note: 'Cair mingguan',
-        requestedBy: actorId,
+        requestedBy: staffUser.id,
       });
       expect(result.status).toBe('requested');
       expect(result.ledgerEntryId).toBeNull();
+      // staff bypasses the mitra-only balance guard — no reseller lookup needed
+      expect(repo.findById).not.toHaveBeenCalled();
+    });
+
+    it('requestPayout (mitra, own reseller): succeeds within balance, audited as the mitra', async () => {
+      repo.findById.mockResolvedValue(reseller); // balance 1_000_000
+      repo.createPayout.mockResolvedValue({ ...payout, requestedBy: mitraUserFor(reseller.id).id });
+      const mitra = mitraUserFor(reseller.id);
+
+      const result = await service.requestPayout(reseller.id, { amount: 400_000 }, mitra);
+
+      expect(repo.createPayout).toHaveBeenCalledWith(reseller.id, {
+        amount: 400_000,
+        note: '',
+        requestedBy: mitra.id,
+      });
+      expect(result.status).toBe('requested');
+    });
+
+    it('requestPayout (mitra, ANOTHER reseller): 404, repository never touched', async () => {
+      const mitra = mitraUserFor('00000000-0000-0000-0000-00000000ffff');
+      await expect(
+        service.requestPayout(reseller.id, { amount: 100_000 }, mitra),
+      ).rejects.toThrow();
+      expect(repo.findById).not.toHaveBeenCalled();
+      expect(repo.createPayout).not.toHaveBeenCalled();
+    });
+
+    it('requestPayout (mitra) rejects an amount above the reseller balance — 422, entitlement guard', async () => {
+      repo.findById.mockResolvedValue(reseller); // balance 1_000_000
+      const mitra = mitraUserFor(reseller.id);
+
+      await expect(
+        service.requestPayout(reseller.id, { amount: 1_000_001 }, mitra),
+      ).rejects.toThrow('Saldo tidak mencukupi');
+      expect(repo.createPayout).not.toHaveBeenCalled();
     });
 
     it('the full happy path: request -> approve -> disburse', async () => {
       repo.findById.mockResolvedValue(reseller);
       repo.createPayout.mockResolvedValue(payout);
-      const requested = await service.requestPayout(reseller.id, { amount: 400_000 }, actorId);
+      const requested = await service.requestPayout(reseller.id, { amount: 400_000 }, staffUser);
       expect(requested.status).toBe('requested');
 
       repo.findPayoutById.mockResolvedValue(payout);

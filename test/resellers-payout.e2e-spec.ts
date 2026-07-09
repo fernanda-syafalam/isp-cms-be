@@ -214,7 +214,28 @@ describe('Resellers + payout lifecycle (e2e)', () => {
       });
     });
 
-    it('POST .../payouts — mitra: 403 (request is admin/staff only, not a mitra self-service action)', async () => {
+    it('POST .../payouts — mitra requesting their OWN reseller: 201 + shape (self-service, ADR-0010 amendment)', async () => {
+      actor.resellerId = RESELLER_ID;
+      const res = await app.inject({
+        method: 'POST',
+        url: `/v1/resellers/${RESELLER_ID}/payouts`,
+        payload: { amount: 50000, note: 'payout mingguan' },
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${await tokenFor('mitra')}`,
+        },
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json()).toMatchObject({
+        id: PAYOUT_ID,
+        resellerId: RESELLER_ID,
+        amount: 50000,
+        status: 'requested',
+      });
+    });
+
+    it('POST .../payouts — mitra requesting a FOREIGN reseller: 404 (not 403, not 200 — IDOR guard)', async () => {
+      actor.resellerId = FOREIGN_RESELLER_ID;
       const res = await app.inject({
         method: 'POST',
         url: `/v1/resellers/${RESELLER_ID}/payouts`,
@@ -224,7 +245,21 @@ describe('Resellers + payout lifecycle (e2e)', () => {
           authorization: `Bearer ${await tokenFor('mitra')}`,
         },
       });
-      expect(res.statusCode).toBe(403);
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('POST .../payouts — mitra requesting more than their reseller balance: 422 (entitlement guard)', async () => {
+      actor.resellerId = RESELLER_ID; // RESELLER_ROW.balance === 100000
+      const res = await app.inject({
+        method: 'POST',
+        url: `/v1/resellers/${RESELLER_ID}/payouts`,
+        payload: { amount: 100001 },
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${await tokenFor('mitra')}`,
+        },
+      });
+      expect(res.statusCode).toBe(422);
     });
 
     it('POST .../approve — staff: 201 + shape (approved)', async () => {
@@ -272,12 +307,13 @@ describe('Resellers + payout lifecycle (e2e)', () => {
     });
   });
 
-  // TEST-H3: mitra-ownership IDOR on the payout surface. requestPayout/
-  // approve/reject/disburse are admin/staff-only (guard rejects a mitra
-  // before the service's ownership check even runs, covered above); the
-  // one payout route a mitra CAN reach is the read (list), which is where
-  // ResellersService.assertResellerAccess enforces "own reseller only" —
-  // a foreign resellerId must 404, never leak via 200/403.
+  // TEST-H3: mitra-ownership IDOR on the payout surface. approve/reject/
+  // disburse are still admin/staff-only (guard rejects a mitra before the
+  // service's ownership check even runs, covered above); requestPayout and
+  // the read (list) are the two payout routes a mitra CAN reach, and both
+  // are ownership-scoped in ResellersService.assertResellerAccess — a
+  // foreign resellerId must 404, never leak via 200/403 (requestPayout's own
+  // IDOR + balance cases are covered above, in "Payout lifecycle").
   describe('GET /v1/resellers/:id/payouts — mitra ownership (TEST-H3 IDOR)', () => {
     it('mitra reading their OWN reseller payouts: 200 + shape', async () => {
       actor.resellerId = RESELLER_ID;

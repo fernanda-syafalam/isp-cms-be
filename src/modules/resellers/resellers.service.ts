@@ -114,17 +114,38 @@ export class ResellersService {
     return { items: items.map(toPayoutResponse), total };
   }
 
+  /**
+   * A mitra may self-request a payout for its OWN reseller only (ADR-0010
+   * amendment — supersedes the earlier view-only stance); admin/staff may
+   * request for any reseller (unchanged). `assertResellerAccess` 404s a
+   * cross-reseller attempt (non-probeable, mirrors listPayouts/listLedger).
+   * A mitra is additionally capped to its current balance — it must not be
+   * able to request more than it is owed; approve/reject/disburse stay
+   * admin/staff-only and untouched by this guard.
+   */
   async requestPayout(
     id: string,
     input: CreatePayoutInput,
-    actorId: string | null,
+    user: AuthUser,
   ): Promise<PayoutResponse> {
+    assertResellerAccess(id, user);
+
+    if (user.role === 'mitra') {
+      const reseller = await this.requireById(id);
+      if (input.amount > reseller.balance) {
+        throw new UnprocessableEntityException('Saldo tidak mencukupi untuk pengajuan ini');
+      }
+    }
+
     const payout = await this.repo.createPayout(id, {
       amount: input.amount,
       note: input.note ?? '',
-      requestedBy: actorId,
+      requestedBy: user.id,
     });
-    this.logger.log({ resellerId: id, payoutId: payout.id }, 'reseller payout requested');
+    this.logger.log(
+      { resellerId: id, payoutId: payout.id, actorId: user.id, role: user.role },
+      'reseller payout requested',
+    );
     return toPayoutResponse(payout);
   }
 
