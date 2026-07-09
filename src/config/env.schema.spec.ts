@@ -123,3 +123,22 @@ describe('envSchema — TRUST_PROXY (R5-SEC-1)', () => {
     },
   );
 });
+
+describe('envSchema — CORS_ORIGINS wildcard (R10-OPS-9)', () => {
+  it('accepts a comma-separated list of explicit origins', () => {
+    const result = envSchema.safeParse(
+      baseEnv({ CORS_ORIGINS: 'https://isp.astaweda.com, https://admin.astaweda.com' }),
+    );
+    expect(result.success).toBe(true);
+  });
+
+  it.each(['*', 'https://isp.astaweda.com,*', ' * '])(
+    'rejects a wildcard origin %j at boot (credentials:true forbids it)',
+    (value) => {
+      const result = envSchema.safeParse(baseEnv({ CORS_ORIGINS: value }));
+      expect(result.success).toBe(false);
+      const paths = result.success ? [] : result.error.issues.map((i) => i.path.join('.'));
+      expect(paths).toContain('CORS_ORIGINS');
+    },
+  );
+});
