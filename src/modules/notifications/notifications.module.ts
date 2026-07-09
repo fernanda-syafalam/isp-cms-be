@@ -4,23 +4,30 @@ import { ConfigService } from '@nestjs/config';
 import type { AppConfig } from '../../config/configuration';
 import { NOTIFICATIONS_QUEUE } from './notifications.constants';
 import { NotificationsController } from './notifications.controller';
-import { NotificationsProcessor } from './notifications.processor';
 import { NotificationsRepository } from './notifications.repository';
 import { NotificationsService } from './notifications.service';
 import { LogTransport } from './transports/log.transport';
 import { NotificationTransport } from './transports/notification-transport';
 import { WhatsAppTransport } from './transports/whatsapp.transport';
 
+/**
+ * PRODUCER side only (R10-OPS-1). Registers the `notifications` queue so
+ * NotificationsService can enqueue dunning/lifecycle events, and exposes the
+ * manual-reminder HTTP endpoint (NotificationsController). Imported by
+ * AppModule (API) and every domain module that fires a notification
+ * (customers, tickets, work-orders, invoices).
+ *
+ * The consumer (NotificationsProcessor, the BullMQ WorkerHost that actually
+ * delivers the job) is registered ONLY in NotificationsWorkerModule, which
+ * imports this module and is wired into WorkerModule alone — the API process
+ * must never instantiate a queue processor (Pilar 7 / ADR-0012's follow-up).
+ */
 @Module({
-  // Register the queue (producer side, NotificationsService) and the processor
-  // (consumer side, runs in the worker process) so dunning is delivered with
-  // retries instead of being dropped — ADR-0012.
   imports: [BullModule.registerQueue({ name: NOTIFICATIONS_QUEUE })],
   controllers: [NotificationsController],
   providers: [
     NotificationsService,
     NotificationsRepository,
-    NotificationsProcessor,
     // Select the delivery transport by NOTIFICATION_MODE (ADR-0017): 'wa'
     // sends through a real WhatsApp gateway; 'log' (default) reproduces the
     // pre-existing DB-log-only behavior. Same DI-token-selection pattern as
