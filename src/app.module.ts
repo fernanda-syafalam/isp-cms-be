@@ -42,7 +42,6 @@ import { ResellersModule } from './modules/resellers/resellers.module';
 import { RouterResourcesModule } from './modules/router-resources/router-resources.module';
 import { RoutersModule } from './modules/routers/routers.module';
 import { SatisfactionModule } from './modules/satisfaction/satisfaction.module';
-import { SchedulerModule } from './modules/scheduler/scheduler.module';
 import { SecurityModule } from './modules/security/security.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { SetupModule } from './modules/setup/setup.module';
@@ -58,6 +57,17 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
  * Composition root. Should only import other modules and wire global
  * providers — no controllers or domain providers of its own. See v2
  * Best Practices doc, Pilar 1.
+ *
+ * Invariant (R10-OPS-1): the API process registers ZERO BullMQ
+ * processors/WorkerHosts, so background queue load never steals the API's
+ * tuned CPU/mem budget. EmailModule and NotificationsModule below are the
+ * PRODUCER side only (queue registration + *Service.enqueue); their
+ * consumers (EmailProcessor, NotificationsProcessor) live in
+ * EmailWorkerModule / NotificationsWorkerModule, imported only by
+ * WorkerModule. SchedulerModule (SchedulerProcessor + the scheduler's own
+ * repeatable-job registration) is entirely worker-side and intentionally
+ * absent from this import list. See test/worker-isolation.e2e-spec.ts,
+ * which fails if a processor is reintroduced here.
  */
 @Module({
   imports: [
@@ -123,7 +133,6 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     RouterResourcesModule,
     RoutersModule,
     SatisfactionModule,
-    SchedulerModule,
     SecurityModule,
     SettingsModule,
     SetupModule,
