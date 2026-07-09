@@ -123,6 +123,14 @@ export const customers = pgTable(
     index('customers_full_name_idx').on(t.fullName),
     index('customers_plan_id_idx').on(t.planId),
     index('customers_reseller_id_idx').on(t.resellerId),
+    // R6-DB-1: `resolveForPortal` falls back to lookup-by-email for any
+    // customer whose `user_id` link isn't populated yet, and it runs on every
+    // portal request across 8 endpoints — without this it seq-scans the whole
+    // customers table each time. Partial (email is nullable) keeps the index
+    // to the rows the lookup can actually match.
+    index('customers_email_idx')
+      .on(t.email)
+      .where(sql`${t.email} is not null`),
   ],
 );
 

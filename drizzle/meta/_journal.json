@@ -372,6 +372,13 @@
       "when": 1783552950843,
       "tag": "0052_add_payment_intent_gateway_reference",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1783570555668,
+      "tag": "0053_broad_bill_hollister",
+      "breakpoints": true
     }
   ]
 }
