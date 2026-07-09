@@ -81,6 +81,8 @@ describe('Money + billing mutating endpoints (e2e)', () => {
     dueDate: '2026-07-10',
     paidAt: '2026-07-08T00:00:00.000Z',
     lastRemindedAt: null,
+    type: 'regular',
+    note: null,
   };
 
   const BILLING_RUN_RESULT: BillingRunResult = { period: '2026-07', created: 3 };

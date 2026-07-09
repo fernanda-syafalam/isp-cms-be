@@ -27,6 +27,11 @@ export const InvoiceResponseSchema = z.object({
   dueDate: z.string(),
   paidAt: z.iso.datetime().nullable(),
   lastRemindedAt: z.iso.datetime().nullable(),
+  // `regular` (normal billing-cycle invoice) vs `adjustment` (proration /
+  // SLA-credit correction row, PR #121) — lets the FE label the latter
+  // instead of it appearing as an unexplained extra invoice.
+  type: z.enum(['regular', 'adjustment']),
+  note: z.string().nullable(),
 });
 
 export type InvoiceResponse = z.infer<typeof InvoiceResponseSchema>;

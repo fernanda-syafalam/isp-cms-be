@@ -32,6 +32,8 @@ function invoice(over: Partial<InvoiceResponse> = {}): InvoiceResponse {
     dueDate: '2026-06-10',
     paidAt: null,
     lastRemindedAt: null,
+    type: 'regular',
+    note: null,
     ...over,
   };
 }

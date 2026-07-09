@@ -16,7 +16,7 @@ import { Audit } from '../../common/decorators/audit.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { UserResponseDto } from './dto/user-response.dto';
+import { UserListResponseDto, UserResponseDto } from './dto/user-response.dto';
 import { UsersService } from './users.service';
 
 const CursorQuerySchema = z.object({
@@ -64,6 +64,7 @@ export class UsersController {
   }
 
   @Get()
+  @ZodSerializerDto(UserListResponseDto)
   async list(@Query() query: unknown) {
     // Coerced via zod — global ZodValidationPipe doesn't validate
     // plain query objects, so we parse here. The first business
@@ -72,10 +73,12 @@ export class UsersController {
     // needs it (rule of three).
     const { cursor, limit } = CursorQuerySchema.parse(query);
     const page = await this.users.list(cursor, limit);
+    // `toUserResponse` both strips (passwordHash/deletedAt) and ISO-converts
+    // `createdAt` — required now that `@ZodSerializerDto` validates against
+    // `UserListResponseSchema` (`createdAt: z.iso.datetime()`, a *string*
+    // schema) before the response is sent; a raw Date would fail that parse.
     return {
-      items: page.items.map(
-        ({ passwordHash: _passwordHash, deletedAt: _deletedAt, ...rest }) => rest,
-      ),
+      items: page.items.map(toUserResponse),
       nextCursor: page.nextCursor,
     };
   }
