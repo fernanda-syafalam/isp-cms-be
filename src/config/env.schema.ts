@@ -93,8 +93,21 @@ export const envSchema = z
       .default('info'),
 
     // CORS — comma-separated list of allowed origins for the browser SPA.
-    // No wildcard is allowed when credentials:true (ADR-0002 / cookie model).
-    CORS_ORIGINS: z.string().default('http://localhost:5173'),
+    // No wildcard allowed when credentials:true (ADR-0002 / cookie model) —
+    // enforce it at the schema so a misconfigured `CORS_ORIGINS=*` fails LOUD
+    // at boot (fail-fast, same posture as PAYMENT_MODE/NOTIFICATION_MODE)
+    // instead of surfacing later as a browser-rejected "login gagal" (R10-OPS-9).
+    CORS_ORIGINS: z
+      .string()
+      .default('http://localhost:5173')
+      .refine(
+        (v) =>
+          v
+            .split(',')
+            .map((s) => s.trim())
+            .every((o) => o !== '*'),
+        'CORS_ORIGINS cannot contain a wildcard (*) — credentials:true requires explicit origins',
+      ),
 
     // Cookie settings for the httpOnly refresh_token cookie.
     COOKIE_SECURE: z
