@@ -65,7 +65,30 @@ services:
   isp-redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    # R10-OPS-4: cap memory + fail loud. The BullMQ job backlog is NOT
+    # TTL-bound, so a stalled/slow consumer + a producer that keeps enqueuing
+    # can grow Redis without bound and OOM the whole host (taking managed PG /
+    # other co-located services with it). `noeviction` (not allkeys-lru) so a
+    # refresh token or a queued job is never silently evicted — better to fail
+    # a write loudly than lose a token/job. Container limit sits above
+    # --maxmemory to leave Redis its own overhead headroom.
+    command:
+      [
+        "redis-server",
+        "--save",
+        "60",
+        "1",
+        "--loglevel",
+        "warning",
+        "--maxmemory",
+        "256mb",
+        "--maxmemory-policy",
+        "noeviction",
+      ]
+    deploy:
+      resources:
+        limits:
+          memory: 384M
     volumes:
       - isp-redis-data:/data
     healthcheck:
@@ -107,6 +130,11 @@ services:
     image: isp-cms-be:dokploy
     restart: unless-stopped
     command: ["dist/main.js"]
+    # R10-OPS-3: Compose defaults to a 10s stop timeout before SIGKILL, which
+    # can truncate the graceful shutdown (drain in-flight HTTP + finish active
+    # BullMQ jobs + close DB/Redis) that main.ts's enableShutdownHooks + the
+    # R8-OBS-5 SIGTERM fix now do. Give the drain real headroom on rollout.
+    stop_grace_period: 30s
     environment: *app-env
     # argon2 password hashing on the login path is CPU-bound; give the API
     # a real CPU budget so a throttled container can't turn a ~150ms verify
@@ -138,6 +166,9 @@ services:
     image: isp-cms-be:dokploy
     restart: unless-stopped
     command: ["dist/worker.js"]
+    # R10-OPS-3: same rollout-drain headroom as api — the worker must finish
+    # its active BullMQ job (dunning send, scheduler tick) before SIGKILL.
+    stop_grace_period: 30s
     environment: *app-env
     deploy:
       resources:
