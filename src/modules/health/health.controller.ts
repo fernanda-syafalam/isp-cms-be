@@ -1,4 +1,5 @@
 import { Controller, Get, HttpCode, HttpStatus, ServiceUnavailableException } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { Public } from '../../common/decorators/public.decorator';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import { RedisService } from '../../infrastructure/redis/redis.service';
@@ -26,8 +27,14 @@ interface ReadinessStatus {
  * - `/readyz` (readiness) verifies the app can serve traffic by
  *   pinging every external dependency. New dependencies must be added
  *   here as they land.
+ *
+ * `@SkipThrottle()` keeps both probes off the Redis-backed rate limiter:
+ * a probe must never touch Redis, otherwise a Redis outage makes the
+ * liveness check itself hang/fail and the orchestrator kills a pod that
+ * is actually fine.
  */
 @Public()
+@SkipThrottle()
 @Controller()
 export class HealthController {
   constructor(

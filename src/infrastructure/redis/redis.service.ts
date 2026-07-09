@@ -3,6 +3,19 @@ import { ConfigService } from '@nestjs/config';
 import { Redis } from 'ioredis';
 import type { AppConfig } from '../../config/configuration';
 
+/** Strip the password from a redis:// URL so it is safe to log. */
+function redactRedisUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.password) {
+      parsed.password = '***';
+    }
+    return parsed.toString();
+  } catch {
+    return '<unparseable redis url>';
+  }
+}
+
 /**
  * Wraps a single shared ioredis client. Repositories and infra
  * adapters (throttler storage, future cache, BullMQ connection) inject
@@ -18,19 +31,45 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly config: ConfigService<{ app: AppConfig }, true>) {}
 
   async onModuleInit(): Promise<void> {
-    this.client = new Redis(this.config.get('app.redis.url', { infer: true }), {
+    const url = this.config.get('app.redis.url', { infer: true });
+    // Log the target host (password redacted) so a mis-injected env var
+    // is obvious in the deploy logs instead of surfacing as a silent
+    // fall-through to localhost.
+    this.logger.log(`connecting to redis at ${redactRedisUrl(url)}`);
+
+    this.client = new Redis(url, {
       // Lazy connect lets infra constructors register the client before
-      // the network round-trip happens; avoids bootstrap-time failures
-      // from temporary Redis hiccups.
+      // the network round-trip happens.
       lazyConnect: true,
-      maxRetriesPerRequest: 3,
-      // ioredis defaults to retrying forever; cap to keep failed
-      // requests from piling up.
+      // Fail fast instead of hanging a request for tens of seconds when
+      // Redis is unreachable: bound the connect, cap retries per command,
+      // and reject commands immediately rather than queueing them offline.
+      connectTimeout: 5_000,
+      maxRetriesPerRequest: 1,
+      enableOfflineQueue: false,
+      retryStrategy: (times) => Math.min(times * 500, 5_000),
     });
 
-    await this.client.connect();
-    await this.client.ping();
-    this.logger.log('redis client connected');
+    // Without a handler, ioredis re-emits connection failures as an
+    // 'Unhandled error event' — noisy and, in some Node versions, fatal.
+    this.client.on('error', (err) => {
+      this.logger.warn({ err: err.message }, 'redis client error');
+    });
+
+    try {
+      await this.client.connect();
+      await this.client.ping();
+      this.logger.log('redis client connected');
+    } catch (err) {
+      // Degrade gracefully: a Redis outage at boot must not crash-loop
+      // the whole API. Rate limiting fails open (ResilientThrottlerGuard)
+      // and /healthz stays up (SkipThrottle); auth flows that truly need
+      // Redis fail fast with a clear error instead of hanging.
+      this.logger.error(
+        { err: err instanceof Error ? err.message : String(err) },
+        'redis unavailable at startup — continuing in degraded mode',
+      );
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
