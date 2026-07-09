@@ -13,12 +13,20 @@ describe('BillingAutomationService', () => {
   let invoicesService: { run: ReturnType<typeof vi.fn> };
   let repo: Record<string, ReturnType<typeof vi.fn>>;
   let customers: {
-    findById: ReturnType<typeof vi.fn>;
+    findByIds: ReturnType<typeof vi.fn>;
     setBilling: ReturnType<typeof vi.fn>;
     findActiveBillable: ReturnType<typeof vi.fn>;
   };
   let secrets: { applyDisabledForCustomer: ReturnType<typeof vi.fn> };
   let notifications: { enqueue: ReturnType<typeof vi.fn> };
+
+  // Helper: build the batched findByIds mock's Promise<CustomerRow[]> return
+  // value from a plain id -> partial-row map, so each test can express "this
+  // id resolves to this row" the same way it used to for findById, while a
+  // deliberately-omitted id models a customer that vanished mid-run (the
+  // old findById -> null case).
+  const rowsFor = (byId: Record<string, Record<string, unknown>>) =>
+    Object.entries(byId).map(([id, fields]) => ({ id, ...fields }));
 
   beforeEach(async () => {
     invoicesService = { run: vi.fn() };
@@ -31,15 +39,17 @@ describe('BillingAutomationService', () => {
       markRemindedByIds: vi.fn(),
       customerIdsWithOverdue: vi.fn(),
       customerIdsWithPendingDueSoon: vi.fn(),
-      sumUnpaidByCustomer: vi.fn(),
-      existsForPeriod: vi.fn(),
+      sumUnpaidByCustomers: vi.fn(),
+      existingRegularForPeriod: vi.fn(),
     };
-    customers = { findById: vi.fn(), setBilling: vi.fn(), findActiveBillable: vi.fn() };
+    customers = { findByIds: vi.fn(), setBilling: vi.fn(), findActiveBillable: vi.fn() };
     secrets = { applyDisabledForCustomer: vi.fn() };
     notifications = { enqueue: vi.fn() };
     // Safe defaults so the dunning dispatch is a no-op unless a test opts in.
     repo.customerIdsWithOverdue.mockResolvedValue([]);
     repo.customerIdsWithPendingDueSoon.mockResolvedValue([]);
+    customers.findByIds.mockResolvedValue([]);
+    repo.sumUnpaidByCustomers.mockResolvedValue(new Map());
     const settings = {
       getBillingPolicy: vi.fn().mockResolvedValue({
         pkp: true,
@@ -67,10 +77,15 @@ describe('BillingAutomationService', () => {
     it('marks overdue then isolates only active debtors', async () => {
       repo.markOverduePastDue.mockResolvedValue(3);
       repo.customerIdsWithOverdue.mockResolvedValue(['c1', 'c2']);
-      customers.findById.mockImplementation((id: string) =>
-        Promise.resolve({ id, status: id === 'c1' ? 'aktif' : 'isolir', phone: null }),
+      customers.findByIds.mockResolvedValue(
+        rowsFor({ c1: { status: 'aktif', phone: null }, c2: { status: 'isolir', phone: null } }),
       );
-      repo.sumUnpaidByCustomer.mockResolvedValue(247_000);
+      repo.sumUnpaidByCustomers.mockResolvedValue(
+        new Map([
+          ['c1', 247_000],
+          ['c2', 247_000],
+        ]),
+      );
 
       const result = await service.isolirOverdue();
 
@@ -94,14 +109,18 @@ describe('BillingAutomationService', () => {
     it('enqueues an isolir notice to each newly-isolated customer with a phone', async () => {
       repo.markOverduePastDue.mockResolvedValue(1);
       repo.customerIdsWithOverdue.mockResolvedValue(['c1', 'c2']);
-      customers.findById.mockImplementation((id: string) =>
-        Promise.resolve(
-          id === 'c1'
-            ? { id, status: 'aktif', phone: '0812', fullName: 'Budi' }
-            : { id, status: 'aktif', phone: null, fullName: 'Tanpa Telepon' },
-        ),
+      customers.findByIds.mockResolvedValue(
+        rowsFor({
+          c1: { status: 'aktif', phone: '0812', fullName: 'Budi' },
+          c2: { status: 'aktif', phone: null, fullName: 'Tanpa Telepon' },
+        }),
       );
-      repo.sumUnpaidByCustomer.mockResolvedValue(300_000);
+      repo.sumUnpaidByCustomers.mockResolvedValue(
+        new Map([
+          ['c1', 300_000],
+          ['c2', 300_000],
+        ]),
+      );
 
       await service.isolirOverdue();
 
@@ -119,13 +138,10 @@ describe('BillingAutomationService', () => {
     it('does not fail the isolir run when the notification enqueue rejects (best-effort)', async () => {
       repo.markOverduePastDue.mockResolvedValue(1);
       repo.customerIdsWithOverdue.mockResolvedValue(['c1']);
-      customers.findById.mockResolvedValue({
-        id: 'c1',
-        status: 'aktif',
-        phone: '0812',
-        fullName: 'Budi',
-      });
-      repo.sumUnpaidByCustomer.mockResolvedValue(300_000);
+      customers.findByIds.mockResolvedValue(
+        rowsFor({ c1: { status: 'aktif', phone: '0812', fullName: 'Budi' } }),
+      );
+      repo.sumUnpaidByCustomers.mockResolvedValue(new Map([['c1', 300_000]]));
       notifications.enqueue.mockRejectedValue(new Error('queue down'));
 
       const result = await service.isolirOverdue();
@@ -134,6 +150,64 @@ describe('BillingAutomationService', () => {
       // completes even though the notice failed to enqueue.
       expect(result.isolated).toBe(1);
       expect(secrets.applyDisabledForCustomer).toHaveBeenCalledWith('c1', true);
+    });
+
+    // R6-DB-2 regression lock: proves the batched findByIds/sumUnpaidByCustomers
+    // rewrite selects the EXACT SAME target set as the old per-id
+    // findById/sumUnpaidByCustomer loop, across every branch at once — aktif
+    // with a phone (isolated + notified), aktif without a phone (isolated,
+    // not notified), non-aktif (skipped entirely), and an id present in the
+    // overdue cohort but ABSENT from findByIds's result (simulating a
+    // customer deleted mid-run) — which must behave exactly like the old
+    // `findById` returning null: silently skipped, no throw.
+    it('selects the exact same target set as the old per-id loop: aktif/non-aktif, phone/no-phone, and a deleted-mid-run id', async () => {
+      repo.markOverduePastDue.mockResolvedValue(4);
+      repo.customerIdsWithOverdue.mockResolvedValue(['c1', 'c2', 'c3', 'c4']);
+      // c4 is deliberately omitted from findByIds — models a row deleted
+      // between customerIdsWithOverdue() and the batched fetch.
+      customers.findByIds.mockResolvedValue(
+        rowsFor({
+          c1: { status: 'aktif', phone: '0812', fullName: 'Budi' },
+          c2: { status: 'aktif', phone: null, fullName: 'Tanpa Telepon' },
+          c3: { status: 'isolir', phone: '0813', fullName: 'Sudah Isolir' },
+        }),
+      );
+      repo.sumUnpaidByCustomers.mockResolvedValue(
+        new Map([
+          ['c1', 111_000],
+          ['c2', 222_000],
+          ['c3', 333_000],
+        ]),
+      );
+
+      const result = await service.isolirOverdue();
+
+      // Only c1 and c2 are aktif -> isolated. c3 (already isolir) and c4
+      // (deleted) are never touched.
+      expect(result.isolated).toBe(2);
+      expect(customers.setBilling).toHaveBeenCalledTimes(2);
+      expect(customers.setBilling).toHaveBeenCalledWith('c1', {
+        status: 'isolir',
+        outstanding: 111_000,
+        holdReason: 'overdue',
+      });
+      expect(customers.setBilling).toHaveBeenCalledWith('c2', {
+        status: 'isolir',
+        outstanding: 222_000,
+        holdReason: 'overdue',
+      });
+      expect(customers.setBilling).not.toHaveBeenCalledWith('c3', expect.anything());
+      expect(customers.setBilling).not.toHaveBeenCalledWith('c4', expect.anything());
+      // Router secret is disabled for the same 2 isolated customers.
+      expect(secrets.applyDisabledForCustomer).toHaveBeenCalledTimes(2);
+      expect(secrets.applyDisabledForCustomer).toHaveBeenCalledWith('c1', true);
+      expect(secrets.applyDisabledForCustomer).toHaveBeenCalledWith('c2', true);
+      // Only c1 has a phone -> only c1 gets a WhatsApp notice.
+      expect(notifications.enqueue).toHaveBeenCalledTimes(1);
+      expect(notifications.enqueue).toHaveBeenCalledWith(
+        { event: 'isolir', to: '0812', vars: { nama: 'Budi', jumlah: 'Rp111.000' } },
+        expect.stringMatching(/^isolir:c1:/),
+      );
     });
   });
 
@@ -151,14 +225,15 @@ describe('BillingAutomationService', () => {
     it('enqueues a WhatsApp dunning to each overdue debtor with a phone', async () => {
       repo.markRemindedOverdue.mockResolvedValue(2);
       repo.customerIdsWithOverdue.mockResolvedValue(['c1', 'c2']);
-      customers.findById.mockImplementation((id: string) =>
-        Promise.resolve(
-          id === 'c1'
-            ? { id, phone: '0812', fullName: 'Budi' }
-            : { id, phone: null, fullName: 'X' },
-        ),
+      customers.findByIds.mockResolvedValue(
+        rowsFor({ c1: { phone: '0812', fullName: 'Budi' }, c2: { phone: null, fullName: 'X' } }),
       );
-      repo.sumUnpaidByCustomer.mockResolvedValue(247_000);
+      repo.sumUnpaidByCustomers.mockResolvedValue(
+        new Map([
+          ['c1', 247_000],
+          ['c2', 247_000],
+        ]),
+      );
 
       await service.remind({});
 
@@ -182,8 +257,8 @@ describe('BillingAutomationService', () => {
     it('does not fail the reminder run when the notification enqueue rejects (best-effort)', async () => {
       repo.markRemindedOverdue.mockResolvedValue(1);
       repo.customerIdsWithOverdue.mockResolvedValue(['c1']);
-      customers.findById.mockResolvedValue({ id: 'c1', phone: '0812', fullName: 'Budi' });
-      repo.sumUnpaidByCustomer.mockResolvedValue(247_000);
+      customers.findByIds.mockResolvedValue(rowsFor({ c1: { phone: '0812', fullName: 'Budi' } }));
+      repo.sumUnpaidByCustomers.mockResolvedValue(new Map([['c1', 247_000]]));
       notifications.enqueue.mockRejectedValue(new Error('queue down'));
 
       const result = await service.remind({});
@@ -192,15 +267,50 @@ describe('BillingAutomationService', () => {
       // notice failed to enqueue.
       expect(result).toEqual({ reminded: 1, channel: 'whatsapp' });
     });
+
+    // R6-DB-2 regression lock for dispatchDunning: a customer id in the
+    // overdue cohort but absent from the batched findByIds (deleted
+    // mid-run) must be skipped exactly like the old findById -> null did —
+    // no throw, no enqueue — while phoned/phoneless siblings are handled
+    // independently.
+    it('skips a customer id missing from the batched findByIds (deleted mid-run) without throwing', async () => {
+      repo.markRemindedOverdue.mockResolvedValue(3);
+      repo.customerIdsWithOverdue.mockResolvedValue(['c1', 'c2', 'c3']);
+      // c3 is omitted — simulates a row deleted between
+      // customerIdsWithOverdue() and the batched fetch.
+      customers.findByIds.mockResolvedValue(
+        rowsFor({
+          c1: { phone: '0812', fullName: 'Budi' },
+          c2: { phone: null, fullName: 'Tanpa Telepon' },
+        }),
+      );
+      repo.sumUnpaidByCustomers.mockResolvedValue(
+        new Map([
+          ['c1', 50_000],
+          ['c2', 60_000],
+          ['c3', 70_000],
+        ]),
+      );
+
+      const result = await service.remind({});
+
+      expect(result).toEqual({ reminded: 3, channel: 'whatsapp' });
+      // Only c1 (has a phone and is present) gets a notice.
+      expect(notifications.enqueue).toHaveBeenCalledTimes(1);
+      expect(notifications.enqueue).toHaveBeenCalledWith(
+        { event: 'overdue', to: '0812', vars: { nama: 'Budi', jumlah: 'Rp50.000' } },
+        expect.stringMatching(/^dun:overdue:c1:/),
+      );
+    });
   });
 
   it('schedulerPreview counts to-bill (active without current invoice), dunning + isolir', async () => {
     customers.findActiveBillable.mockResolvedValue([{ id: 'c1' }, { id: 'c2' }]);
-    repo.existsForPeriod.mockImplementation((id: string) => Promise.resolve(id === 'c2'));
+    repo.existingRegularForPeriod.mockResolvedValue(new Set(['c2']));
     repo.countPendingDueSoon.mockResolvedValue(4);
     repo.countOverdueAll.mockResolvedValue(6);
     repo.customerIdsWithOverdue.mockResolvedValue(['c1']);
-    customers.findById.mockResolvedValue({ id: 'c1', status: 'aktif' });
+    customers.findByIds.mockResolvedValue(rowsFor({ c1: { status: 'aktif' } }));
 
     const result = await service.schedulerPreview();
     expect(result).toEqual({ toBill: 1, toRemindUpcoming: 4, toRemindOverdue: 6, toIsolir: 1 });
@@ -233,8 +343,18 @@ describe('BillingAutomationService', () => {
     repo.markRemindedOverdue.mockResolvedValue(2);
     repo.customerIdsWithOverdue.mockResolvedValue(['c1']);
     repo.customerIdsWithPendingDueSoon.mockResolvedValue(['c2']);
-    customers.findById.mockResolvedValue({ id: 'c1', phone: '0812', fullName: 'Budi' });
-    repo.sumUnpaidByCustomer.mockResolvedValue(100_000);
+    // findByIds/sumUnpaidByCustomers must echo back a row for WHATEVER ids
+    // are requested (dispatchDunning is called once per cohort — ['c2'] for
+    // due_soon, ['c1'] for overdue — then isolateActiveDebtors calls it
+    // again with ['c1']), same phone/fullName/amount for every id, mirroring
+    // the old findById/sumUnpaidByCustomer mocks that resolved to a fixed
+    // value regardless of the id passed in.
+    customers.findByIds.mockImplementation((ids: string[]) =>
+      Promise.resolve(ids.map((id) => ({ id, phone: '0812', fullName: 'Budi' }))),
+    );
+    repo.sumUnpaidByCustomers.mockImplementation((ids: string[]) =>
+      Promise.resolve(new Map(ids.map((id) => [id, 100_000]))),
+    );
     notifications.enqueue.mockRejectedValue(new Error('queue down'));
 
     const result = await service.schedulerRun();

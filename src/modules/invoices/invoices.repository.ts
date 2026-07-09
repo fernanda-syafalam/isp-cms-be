@@ -419,6 +419,51 @@ export class InvoicesRepository {
     return Number(row?.total ?? 0);
   }
 
+  // Batched sibling of sumUnpaidByCustomer — exact same balance-due
+  // expression and UNPAID_STATUSES filter, grouped by customer, used by the
+  // billing cron (R6-DB-2) so it stops issuing one sum query per customer
+  // id in a loop. A customer with no unpaid invoices is simply absent from
+  // the map (never a zero-valued key) — callers must treat a missing key
+  // as 0, exactly like sumUnpaidByCustomer's own coalesce(...,0) does for a
+  // single id. Empty input returns an empty Map WITHOUT querying.
+  async sumUnpaidByCustomers(customerIds: string[]): Promise<Map<string, number>> {
+    if (customerIds.length === 0) return new Map();
+    const rows = await this.db
+      .select({
+        customerId: invoices.customerId,
+        total: sql<string>`coalesce(sum(${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount}), 0)`,
+      })
+      .from(invoices)
+      .where(
+        and(
+          inArray(invoices.customerId, customerIds),
+          inArray(invoices.status, [...UNPAID_STATUSES]),
+        ),
+      )
+      .groupBy(invoices.customerId);
+    return new Map(rows.map((row) => [row.customerId, Number(row.total)]));
+  }
+
+  // Batched sibling of existsForPeriod — same type='regular' filter (see
+  // that method's doc for why the type filter matters), used by
+  // schedulerPreview (R6-DB-5) so it stops issuing one exists query per
+  // billable customer in a loop. Empty input returns an empty Set WITHOUT
+  // querying.
+  async existingRegularForPeriod(customerIds: string[], periodStart: string): Promise<Set<string>> {
+    if (customerIds.length === 0) return new Set();
+    const rows = await this.db
+      .selectDistinct({ customerId: invoices.customerId })
+      .from(invoices)
+      .where(
+        and(
+          inArray(invoices.customerId, customerIds),
+          eq(invoices.periodStart, periodStart),
+          eq(invoices.type, 'regular'),
+        ),
+      );
+    return new Set(rows.map((row) => row.customerId));
+  }
+
   async countOverdueByCustomer(customerId: string): Promise<number> {
     const [row] = await this.db
       .select({ value: count() })

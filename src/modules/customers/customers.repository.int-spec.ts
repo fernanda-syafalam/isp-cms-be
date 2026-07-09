@@ -418,6 +418,50 @@ describe('CustomersRepository (integration)', () => {
     expect(read?.lng).toBeCloseTo(110.6700456);
   });
 
+  // R6-DB-2: findByIds is the batched sibling of findById used by the
+  // billing cron — it must return the exact same per-row shape (joined
+  // planName/resellerName), just for many ids in one round-trip.
+  describe('findByIds', () => {
+    it('returns the same row shape as findById, for every requested id, ignoring unknown ids', async () => {
+      const [reseller] = await db
+        .insert(resellers)
+        .values({ name: 'Mitra A', area: 'Jepara' })
+        .returning();
+      if (!reseller) throw new Error('reseller seed failed');
+
+      const a = await repo.create({ fullName: 'Budi', phone: '0811', address: 'Jl. A', planId });
+      const b = await repo.create({
+        fullName: 'Ani',
+        phone: '0812',
+        address: 'Jl. B',
+        planId,
+        resellerId: reseller.id,
+      });
+      // A third customer NOT included in the requested id list — proves
+      // findByIds is scoped to the ids given, not every row in the table.
+      await repo.create({ fullName: 'Zaki', phone: '0810', address: 'Jl. Z', planId });
+
+      // A well-formed but nonexistent uuid — proves findByIds is scoped to
+      // rows that actually exist, not just to the ids given.
+      const unknownId = '00000000-0000-0000-0000-000000000000';
+      const rows = await repo.findByIds([a.id, b.id, unknownId]);
+
+      expect(rows).toHaveLength(2);
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      // Parity with findById's own read of the same rows, field for field.
+      expect(byId.get(a.id)).toEqual(await repo.findById(a.id));
+      expect(byId.get(b.id)).toEqual(await repo.findById(b.id));
+      // b's resellerName is derived via the same LEFT JOIN findById uses.
+      expect(byId.get(b.id)?.resellerName).toBe('Mitra A');
+      expect(byId.get(a.id)?.resellerName).toBeNull();
+    });
+
+    it('returns [] for an empty id list without querying', async () => {
+      await repo.create({ fullName: 'Budi', phone: '0811', address: 'Jl. A', planId });
+      expect(await repo.findByIds([])).toEqual([]);
+    });
+  });
+
   it('requestDataDeletion marks the row, and missing ids reject', async () => {
     const created = await repo.create({
       fullName: 'Budi',
