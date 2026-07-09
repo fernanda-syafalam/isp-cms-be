@@ -2,10 +2,11 @@ import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis'
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { ZodSerializerInterceptor, ZodValidationPipe } from 'nestjs-zod';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
+import { ResilientThrottlerGuard } from './common/guards/resilient-throttler.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { AuditInterceptor } from './common/interceptors/audit.interceptor';
 import { type AppConfig, appConfig } from './config/configuration';
@@ -142,9 +143,11 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     // Default-deny: every endpoint requires a JWT unless `@Public()` is
     // applied. Pilar 4.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
-    // Per-IP rate limit. ThrottlerGuard runs after JwtAuthGuard so
-    // unauthenticated traffic still counts against the same bucket.
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Per-IP rate limit. Runs after JwtAuthGuard so unauthenticated
+    // traffic still counts against the same bucket. Uses the resilient
+    // variant so a Redis (storage) outage fails open instead of 500-ing
+    // every request.
+    { provide: APP_GUARD, useClass: ResilientThrottlerGuard },
     // Coarse RBAC. No-op unless a handler opts in with @Roles(...).
     // Resource ownership ("only owner of order X") still belongs in
     // the service, not here. Pilar 4.
