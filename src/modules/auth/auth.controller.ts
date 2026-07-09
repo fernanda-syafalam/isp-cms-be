@@ -31,7 +31,9 @@ const COOKIE_PATH = '/v1/auth';
 /**
  * Captures the request metadata a freshly minted session is tagged with
  * (SEC-2) — the `userAgent`/`ip` shown back on the security page's
- * session list. `req.ip` already honours `trustProxy: true` (main.ts).
+ * session list. `req.ip` honours the bounded `trustProxy` setting (main.ts,
+ * default 1 hop) — behind the single ingress it is the real client IP, not a
+ * spoofable X-Forwarded-For value.
  */
 function sessionMetaFrom(req: FastifyRequest): SessionMeta {
   const ua = req.headers['user-agent'];
@@ -162,6 +164,10 @@ export class AuthController {
    * rotation/TTL (single-use); a compromised session is cut by logout.
    */
   @AnyAuthenticatedRole()
+  // R5-SEC-2: tighten beyond the global 100/window — the handler re-checks the
+  // CURRENT password, so an attacker holding a stolen access token could
+  // otherwise brute-force it. Mirrors the login route's tight throttle.
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Audit('auth.change_password')
   @Post('change-password')
   @HttpCode(HttpStatus.NO_CONTENT)
