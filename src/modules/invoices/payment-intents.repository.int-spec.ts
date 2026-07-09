@@ -121,6 +121,36 @@ describe('PaymentIntentsRepository (integration)', () => {
     expect(found?.expiresAt).toBeInstanceOf(Date);
   });
 
+  // ADR-0016: `gatewayReference` is nullable (simulation mode never sets
+  // it in the real schema sense — the gateway seam fills it in the
+  // service layer) and stores Tripay's real transaction reference in live
+  // mode, for reconciliation. Proves the additive migration
+  // (0052_add_payment_intent_gateway_reference.sql) round-trips against
+  // the real schema.
+  it('persists and reads back a null gatewayReference by default', async () => {
+    const created = await repo.create(pending());
+    expect(created.gatewayReference).toBeNull();
+    const found = await repo.findById(created.id);
+    expect(found?.gatewayReference).toBeNull();
+  });
+
+  it('persists and reads back a live-mode gatewayReference', async () => {
+    const created = await repo.create(pending({ gatewayReference: 'T1234567890' }));
+    const found = await repo.findById(created.id);
+    expect(found?.gatewayReference).toBe('T1234567890');
+  });
+
+  // ADR-0016: PaymentIntentsService.create mints the id BEFORE inserting
+  // (so it can hand it to the gateway as merchant_ref up front) and passes
+  // it explicitly rather than relying on the column's `defaultRandom()`.
+  // Proves the real schema/driver accepts an explicit PK on insert.
+  it('accepts an explicitly-supplied id instead of the column default', async () => {
+    const explicitId = '00000000-0000-4000-8000-0000000000aa';
+    const created = await repo.create(pending({ id: explicitId }));
+    expect(created.id).toBe(explicitId);
+    expect(await repo.findById(explicitId)).not.toBeNull();
+  });
+
   it('returns null for an unknown intent', async () => {
     expect(await repo.findById('00000000-0000-0000-0000-0000000000ff')).toBeNull();
   });

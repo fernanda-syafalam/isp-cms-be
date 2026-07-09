@@ -1,0 +1,62 @@
+import { describe, expect, it } from 'vitest';
+import { envSchema } from './env.schema';
+
+// Minimal valid baseline — every var envSchema requires unconditionally,
+// independent of PAYMENT_MODE. Mirrors test/setup.ts's fixed test values.
+function baseEnv(over: Record<string, string> = {}): Record<string, string> {
+  return {
+    DATABASE_URL: 'postgres://app:app@localhost:5432/app',
+    JWT_SECRET: 'test-secret-must-be-at-least-32-characters-long',
+    TWOFA_ENC_KEY: 'vnteJd7CUd7akqlbonvugRw6MNVSqV88K3ijn82XeoM=',
+    ...over,
+  };
+}
+
+describe('envSchema — PAYMENT_MODE (ADR-0016)', () => {
+  it('defaults to simulation and does not require any TRIPAY_* var', () => {
+    const parsed = envSchema.parse(baseEnv());
+    expect(parsed.PAYMENT_MODE).toBe('simulation');
+  });
+
+  it('accepts PAYMENT_MODE=live with all four TRIPAY_* vars present', () => {
+    const parsed = envSchema.parse(
+      baseEnv({
+        PAYMENT_MODE: 'live',
+        TRIPAY_API_KEY: 'key',
+        TRIPAY_PRIVATE_KEY: 'secret',
+        TRIPAY_MERCHANT_CODE: 'T0001',
+        TRIPAY_BASE_URL: 'https://tripay.co.id/api',
+      }),
+    );
+    expect(parsed.PAYMENT_MODE).toBe('live');
+  });
+
+  it('fails fast when PAYMENT_MODE=live and every TRIPAY_* var is missing', () => {
+    const result = envSchema.safeParse(baseEnv({ PAYMENT_MODE: 'live' }));
+    expect(result.success).toBe(false);
+    const paths = result.success ? [] : result.error.issues.map((i) => i.path.join('.'));
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        'TRIPAY_API_KEY',
+        'TRIPAY_PRIVATE_KEY',
+        'TRIPAY_MERCHANT_CODE',
+        'TRIPAY_BASE_URL',
+      ]),
+    );
+  });
+
+  it('fails fast when PAYMENT_MODE=live and only one TRIPAY_* var is missing', () => {
+    const result = envSchema.safeParse(
+      baseEnv({
+        PAYMENT_MODE: 'live',
+        TRIPAY_API_KEY: 'key',
+        TRIPAY_PRIVATE_KEY: 'secret',
+        TRIPAY_MERCHANT_CODE: 'T0001',
+        // TRIPAY_BASE_URL intentionally omitted
+      }),
+    );
+    expect(result.success).toBe(false);
+    const paths = result.success ? [] : result.error.issues.map((i) => i.path.join('.'));
+    expect(paths).toEqual(['TRIPAY_BASE_URL']);
+  });
+});

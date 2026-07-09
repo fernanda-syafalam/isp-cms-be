@@ -2,8 +2,11 @@ import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PaymentIntent } from '../../infrastructure/database/schema/invoices.schema';
+import { CustomersRepository } from '../customers/customers.repository';
 import type { InvoiceResponse } from './dto/invoice-response.dto';
 import { InvoicesService } from './invoices.service';
+import { PaymentGateway } from './payment-gateway/payment-gateway';
+import { SimulationPaymentGateway } from './payment-gateway/simulation-payment.gateway';
 import { PaymentIntentsRepository } from './payment-intents.repository';
 import { PaymentIntentsService } from './payment-intents.service';
 
@@ -44,6 +47,7 @@ function intentRow(over: Partial<PaymentIntent> = {}): PaymentIntent {
     status: 'pending',
     vaNumber: null,
     qrPayload: 'ID.MOCK.QRIS|qris|INV-2026-100|116000',
+    gatewayReference: 'SIM-00000000-0000-0000-0000-0000000000f1',
     // A fresh intent is valid for 24h. Anchor to the run clock so the
     // not-yet-expired path never rots into a date-based flake; the
     // already-expired path overrides this with a fixed past date.
@@ -58,6 +62,7 @@ describe('PaymentIntentsService', () => {
   let service: PaymentIntentsService;
   let repo: Record<string, ReturnType<typeof vi.fn>>;
   let invoices: Record<string, ReturnType<typeof vi.fn>>;
+  let customers: Record<string, ReturnType<typeof vi.fn>>;
 
   beforeEach(async () => {
     repo = {
@@ -71,11 +76,20 @@ describe('PaymentIntentsService', () => {
       findById: vi.fn(),
       pay: vi.fn(),
     };
+    customers = {
+      findById: vi.fn(async () => null),
+    };
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
         PaymentIntentsService,
         { provide: PaymentIntentsRepository, useValue: repo },
         { provide: InvoicesService, useValue: invoices },
+        { provide: CustomersRepository, useValue: customers },
+        // The REAL simulation gateway (not a mock) — proves the create()
+        // refactor stays byte-compatible with the pre-adapter mock VA/QR
+        // behaviour (regression coverage for the Tripay seam). The gateway
+        // implementation itself has its own dedicated spec.
+        { provide: PaymentGateway, useClass: SimulationPaymentGateway },
       ],
     }).compile();
     service = moduleRef.get(PaymentIntentsService);
@@ -227,6 +241,134 @@ describe('PaymentIntentsService', () => {
       await expect(service.confirm(INTENT_ID)).rejects.toBeInstanceOf(ConflictException);
       expect(repo.markExpired).toHaveBeenCalledWith(INTENT_ID);
       expect(invoices.pay).not.toHaveBeenCalled();
+    });
+  });
+
+  // The Tripay webhook's settlement path (ADR-0016) — reuses confirm()
+  // internally, so these focus on the extra checks the webhook needs:
+  // resolve-by-reference, reference/amount validation, and dedupe.
+  describe('settleFromGateway (webhook settlement, ADR-0016)', () => {
+    const GATEWAY_REFERENCE = 'T1234567890';
+
+    it('settles a matching paid callback via confirm()', async () => {
+      repo.findById.mockResolvedValue(
+        intentRow({ status: 'pending', gatewayReference: GATEWAY_REFERENCE }),
+      );
+      invoices.findById.mockResolvedValue(invoice({ balanceDue: 116_000 }));
+      repo.markPaid.mockResolvedValue(intentRow({ status: 'paid' }));
+
+      const result = await service.settleFromGateway({
+        reference: GATEWAY_REFERENCE,
+        invoiceRef: INTENT_ID,
+        amount: 116_000,
+      });
+
+      expect(result).toEqual({ settled: true });
+      expect(invoices.pay).toHaveBeenCalledWith(INVOICE_ID, { method: 'qris' });
+      expect(repo.markPaid).toHaveBeenCalledWith(INTENT_ID);
+    });
+
+    it('is idempotent for a redelivered callback on an already-settled intent (one settle, no double ledger row)', async () => {
+      repo.findById.mockResolvedValue(
+        intentRow({ status: 'paid', gatewayReference: GATEWAY_REFERENCE }),
+      );
+
+      const result = await service.settleFromGateway({
+        reference: GATEWAY_REFERENCE,
+        invoiceRef: INTENT_ID,
+        amount: 116_000,
+      });
+
+      expect(result).toEqual({ settled: true });
+      expect(invoices.pay).not.toHaveBeenCalled();
+      expect(repo.markPaid).not.toHaveBeenCalled();
+    });
+
+    // M1: a deterministic non-settle condition is reported via the return
+    // value, NOT a thrown exception — the controller must be able to 200
+    // (acknowledge, no retry) rather than ask Tripay to retry a permanent
+    // condition forever. See settleFromGateway's doc comment.
+    it('returns settled:false with reason "amount_mismatch" (does not throw) when the callback amount does not match balanceDue', async () => {
+      repo.findById.mockResolvedValue(
+        intentRow({ status: 'pending', gatewayReference: GATEWAY_REFERENCE }),
+      );
+      invoices.findById.mockResolvedValue(invoice({ balanceDue: 116_000 }));
+
+      const result = await service.settleFromGateway({
+        reference: GATEWAY_REFERENCE,
+        invoiceRef: INTENT_ID,
+        amount: 1, // attacker/bug: far below the real balance due
+      });
+
+      expect(result).toEqual({ settled: false, reason: 'amount_mismatch' });
+      expect(invoices.pay).not.toHaveBeenCalled();
+      expect(repo.markPaid).not.toHaveBeenCalled();
+    });
+
+    it('returns settled:false with reason "reference_mismatch" (does not throw) when the callback reference does not match the one recorded at charge-create time', async () => {
+      repo.findById.mockResolvedValue(
+        intentRow({ status: 'pending', gatewayReference: 'T-the-real-one' }),
+      );
+
+      const result = await service.settleFromGateway({
+        reference: 'T-a-forged-one',
+        invoiceRef: INTENT_ID,
+        amount: 116_000,
+      });
+
+      expect(result).toEqual({ settled: false, reason: 'reference_mismatch' });
+      expect(invoices.pay).not.toHaveBeenCalled();
+    });
+
+    it('returns settled:false with reason "unknown_intent" (does not throw) for an unknown invoiceRef (merchant_ref)', async () => {
+      repo.findById.mockResolvedValue(null);
+
+      const result = await service.settleFromGateway({
+        reference: GATEWAY_REFERENCE,
+        invoiceRef: 'missing',
+        amount: 1,
+      });
+
+      expect(result).toEqual({ settled: false, reason: 'unknown_intent' });
+      expect(invoices.pay).not.toHaveBeenCalled();
+    });
+  });
+
+  // L3: a verified but non-'paid' callback ('expired'/'failed') marks the
+  // intent expired immediately instead of waiting for the hourly sweep —
+  // and never touches the invoice/money path.
+  describe('markGatewayNonSettlement (L3)', () => {
+    it('marks a pending intent expired', async () => {
+      repo.findById.mockResolvedValue(intentRow({ status: 'pending' }));
+
+      await service.markGatewayNonSettlement(INTENT_ID);
+
+      expect(repo.markExpired).toHaveBeenCalledWith(INTENT_ID);
+      expect(invoices.pay).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op for an already-paid intent (never touches money)', async () => {
+      repo.findById.mockResolvedValue(intentRow({ status: 'paid' }));
+
+      await service.markGatewayNonSettlement(INTENT_ID);
+
+      expect(repo.markExpired).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op for an already-expired intent (idempotent for a redelivered callback)', async () => {
+      repo.findById.mockResolvedValue(intentRow({ status: 'expired' }));
+
+      await service.markGatewayNonSettlement(INTENT_ID);
+
+      expect(repo.markExpired).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op for an unknown intent', async () => {
+      repo.findById.mockResolvedValue(null);
+
+      await service.markGatewayNonSettlement('missing');
+
+      expect(repo.markExpired).not.toHaveBeenCalled();
     });
   });
 

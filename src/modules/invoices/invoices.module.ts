@@ -1,4 +1,6 @@
 import { Module, forwardRef } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import type { AppConfig } from '../../config/configuration';
 import { CustomersModule } from '../customers/customers.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ResellersModule } from '../resellers/resellers.module';
@@ -10,6 +12,10 @@ import { BillingController } from './billing.controller';
 import { InvoicesController } from './invoices.controller';
 import { InvoicesRepository } from './invoices.repository';
 import { InvoicesService } from './invoices.service';
+import { PaymentGateway } from './payment-gateway/payment-gateway';
+import { SimulationPaymentGateway } from './payment-gateway/simulation-payment.gateway';
+import { TripayPaymentGateway } from './payment-gateway/tripay-payment.gateway';
+import { TripayWebhookController } from './payment-gateway/tripay-webhook.controller';
 import { PaymentIntentsController } from './payment-intents.controller';
 import { PaymentIntentsRepository } from './payment-intents.repository';
 import { PaymentIntentsService } from './payment-intents.service';
@@ -44,6 +50,10 @@ import { PaymentsController } from './payments.controller';
     PaymentsController,
     PaymentIntentsController,
     BillingController,
+    // Tripay's settlement callback (ADR-0016) — @Public(), authenticated by
+    // HMAC signature, not JWT. Lives in payment-gateway/ alongside the
+    // adapter it depends on.
+    TripayWebhookController,
   ],
   providers: [
     InvoicesService,
@@ -51,6 +61,21 @@ import { PaymentsController } from './payments.controller';
     BillingAutomationService,
     PaymentIntentsService,
     PaymentIntentsRepository,
+    // Select the payment gateway by PAYMENT_MODE (ADR-0016): 'live' charges
+    // through Tripay + verifies its webhook; 'simulation' (default)
+    // reproduces the existing dev/demo mock. Same DI-token-selection
+    // pattern as RouterAdapter in router-resources.module.ts.
+    SimulationPaymentGateway,
+    TripayPaymentGateway,
+    {
+      provide: PaymentGateway,
+      inject: [ConfigService, SimulationPaymentGateway, TripayPaymentGateway],
+      useFactory: (
+        config: ConfigService<{ app: AppConfig }, true>,
+        simulation: SimulationPaymentGateway,
+        live: TripayPaymentGateway,
+      ) => (config.get('app.payment.mode', { infer: true }) === 'live' ? live : simulation),
+    },
   ],
   // PaymentIntentsService is exported for the portal's customer-scoped
   // pay-intent endpoints (P0.4). BillingAutomationService + InvoicesService

@@ -49,6 +49,15 @@ export const appConfig = registerAs('app', () => {
       mode: env.ROUTEROS_MODE,
       apiPassword: env.ROUTEROS_API_PASSWORD,
     },
+    payment: {
+      mode: env.PAYMENT_MODE,
+      tripay: {
+        apiKey: env.TRIPAY_API_KEY,
+        privateKey: env.TRIPAY_PRIVATE_KEY,
+        merchantCode: env.TRIPAY_MERCHANT_CODE,
+        baseUrl: env.TRIPAY_BASE_URL,
+      },
+    },
   } as const;
 });
 
