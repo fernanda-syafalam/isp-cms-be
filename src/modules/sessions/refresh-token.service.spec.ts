@@ -63,12 +63,12 @@ describe('RefreshTokenService', () => {
   });
 
   it('revoke is safe to call with an unknown token', async () => {
-    await expect(service.revoke('nope')).resolves.toBeUndefined();
+    await expect(service.revoke('nope')).resolves.toBeNull();
   });
 
-  it('revoke invalidates a previously minted token', async () => {
+  it('revoke invalidates a previously minted token and resolves the owning userId', async () => {
     const { token } = await service.mint('user-2', meta);
-    await service.revoke(token);
+    await expect(service.revoke(token)).resolves.toEqual({ userId: 'user-2' });
     await expect(service.rotate(token)).rejects.toBeInstanceOf(UnauthorizedException);
   });
 

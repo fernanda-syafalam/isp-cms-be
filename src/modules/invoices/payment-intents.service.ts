@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { notifyBestEffort } from '../../common/notifications/notify-best-effort';
 import type {
   PaymentIntent,
   PaymentIntent as PaymentIntentRow,
 } from '../../infrastructure/database/schema/invoices.schema';
+import { AuditRepository } from '../audit/audit.repository';
 import { CustomersRepository } from '../customers/customers.repository';
 import type { CreatePaymentIntentInput } from './dto/create-payment-intent.dto';
 import type { InvoiceResponse } from './dto/invoice-response.dto';
@@ -44,6 +46,12 @@ export class PaymentIntentsService {
     // Tripay's create-transaction call needs the customer's contact details
     // (email/phone) — `invoices` only carries the denormalized name.
     private readonly customers: CustomersRepository,
+    // R8-OBS-3: the real gateway webhook settles money without ever going
+    // through an `@Audit`-decorated controller route (it's `@Public`, no
+    // handler-level 2xx-keyed interceptor hook applies here) — this is the
+    // only place a successful `payment.settle_gateway` row can be written.
+    // AuditModule is @Global(), so no extra module import is required.
+    private readonly auditRepo: AuditRepository,
   ) {}
 
   async create(input: CreatePaymentIntentInput): Promise<PaymentIntentResponse> {
@@ -236,6 +244,23 @@ export class PaymentIntentsService {
       );
     }
     await this.settleIntent(intent);
+    // R8-OBS-3: the queryable trail for an automated gateway settlement.
+    // Best-effort — a failed audit insert must NEVER roll back or 5xx a
+    // settlement that already moved money (same posture as notifyBestEffort,
+    // ADR-0012); log and continue.
+    await notifyBestEffort(
+      this.logger,
+      () =>
+        this.auditRepo.record({
+          actor: 'tripay-webhook',
+          action: 'payment.settle_gateway',
+          entity: 'invoice',
+          entityId: intent.invoiceId,
+          summary: `payment.settle_gateway success intentId=${intent.id} reference=${parsed.reference} amount=${parsed.amount}`,
+        }),
+      { intentId: intent.id, invoiceId: intent.invoiceId, reference: parsed.reference },
+      'audit persist failed (payment.settle_gateway)',
+    );
     return { settled: true };
   }
 

@@ -109,7 +109,7 @@ export class AuthController {
   ): Promise<void> {
     const rawToken = req.cookies[REFRESH_COOKIE];
     if (rawToken) {
-      await this.auth.logout(rawToken);
+      await this.auth.logout(rawToken, sessionMetaFrom(req));
     }
     // Clear regardless — idempotent for the browser.
     reply.clearCookie(REFRESH_COOKIE, { path: COOKIE_PATH });

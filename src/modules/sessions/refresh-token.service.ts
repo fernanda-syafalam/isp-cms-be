@@ -224,14 +224,18 @@ return 1
 
   /**
    * Best-effort logout — invalidate a specific refresh token and drop its
-   * session record. Safe to call with an unknown token; returns silently.
+   * session record. Safe to call with an unknown token; resolves `null`
+   * rather than throwing. Returns the resolved `userId` on a real revoke so
+   * the caller (AuthService, R8-OBS-2) can attribute the `auth.logout`
+   * audit row to a real actor instead of a NOT-NULL placeholder.
    */
-  async revoke(rawToken: string): Promise<void> {
+  async revoke(rawToken: string): Promise<{ userId: string } | null> {
     const key = this.refreshKey(rawToken);
     const stored = await this.redis.client.getdel(key);
-    if (!stored) return;
+    if (!stored) return null;
     const { userId, sessionId } = JSON.parse(stored) as StoredRefreshToken;
     await this.forgetSession(userId, sessionId);
+    return { userId };
   }
 
   /**

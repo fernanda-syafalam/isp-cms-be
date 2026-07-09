@@ -13,6 +13,7 @@ import {
 } from '../../infrastructure/database/schema/invoices.schema';
 import { plans } from '../../infrastructure/database/schema/plans.schema';
 import { applyMigrations } from '../../test-utils/apply-migrations';
+import type { AuditRepository } from '../audit/audit.repository';
 import { CustomersRepository } from '../customers/customers.repository';
 import type { NotificationsService } from '../notifications/notifications.service';
 import { ResellersRepository } from '../resellers/resellers.repository';
@@ -78,12 +79,16 @@ describe('PaymentIntentsService.settleFromGateway — concurrent delivery (integ
     );
 
     // settleFromGateway/confirm() never call the gateway (that's only
-    // create()'s concern, minting a NEW charge) — stub it too.
+    // create()'s concern, minting a NEW charge) — stub it too. AuditRepository
+    // (R8-OBS-3) is a best-effort side channel here too, same posture as
+    // notificationsStub above — never asserted on by this concurrency test.
+    const auditStub = { record: async () => undefined } as unknown as AuditRepository;
     paymentIntentsService = new PaymentIntentsService(
       paymentIntentsRepo,
       invoicesService,
       {} as unknown as PaymentGateway,
       customersRepo,
+      auditStub,
     );
 
     const [plan] = await db
