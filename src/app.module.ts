@@ -15,7 +15,6 @@ import { DrizzleModule } from './infrastructure/database/drizzle.module';
 import { AppLoggerModule } from './infrastructure/logger/logger.module';
 import { QueueModule } from './infrastructure/queue/queue.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
-import { RedisService } from './infrastructure/redis/redis.service';
 import { AccountingModule } from './modules/accounting/accounting.module';
 import { AcsModule } from './modules/acs/acs.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
@@ -89,8 +88,8 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     // wiring is exercised by hand or in a future integration suite
     // when the throttler logic itself needs coverage.
     ThrottlerModule.forRootAsync({
-      inject: [ConfigService, RedisService],
-      useFactory: (config: ConfigService<{ app: AppConfig }, true>, redis: RedisService) => {
+      inject: [ConfigService],
+      useFactory: (config: ConfigService<{ app: AppConfig }, true>) => {
         const throttlers = [
           {
             ttl: config.get('app.throttler.ttlMs', { infer: true }),
@@ -100,9 +99,15 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
         if (config.get('app.nodeEnv', { infer: true }) === 'test') {
           return { throttlers };
         }
+        // Pass the URL, NOT RedisService.client: this factory runs during DI,
+        // before RedisService.onModuleInit assigns `client`, so `client` is
+        // undefined here. ThrottlerStorageRedisService(undefined) falls to its
+        // `new Redis(undefined)` branch → 127.0.0.1:6379, which failed forever
+        // (rate limiting silently dead + [ioredis] ECONNREFUSED spam). Given a
+        // string it does `new Redis(url)` and reaches the configured Redis.
         return {
           throttlers,
-          storage: new ThrottlerStorageRedisService(redis.client),
+          storage: new ThrottlerStorageRedisService(config.get('app.redis.url', { infer: true })),
         };
       },
     }),
