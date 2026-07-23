@@ -65,6 +65,7 @@ describe('InvoicesService', () => {
       list: vi.fn(),
       findById: vi.fn(),
       create: vi.fn(),
+      createBilled: vi.fn(),
       existsForPeriod: vi.fn(),
       markPaid: vi.fn(),
       recordPayment: vi.fn(),
@@ -545,14 +546,14 @@ describe('InvoicesService', () => {
         { id: 'c2', fullName: 'Budi', planPriceMonthly: 300_000, billingAnchorDay: null },
       ]);
       repo.existsForPeriod.mockImplementation((id: string) => Promise.resolve(id === 'c2'));
-      repo.create.mockResolvedValue(pendingInvoice);
+      repo.createBilled.mockResolvedValue(pendingInvoice);
 
       const result = await service.run();
 
       expect(result.created).toBe(1);
       expect(result.period).toMatch(/^\d{4}-\d{2}$/);
-      expect(repo.create).toHaveBeenCalledTimes(1);
-      expect(repo.create).toHaveBeenCalledWith(
+      expect(repo.createBilled).toHaveBeenCalledTimes(1);
+      expect(repo.createBilled).toHaveBeenCalledWith(
         expect.objectContaining({
           customerId: 'c1',
           amount: 200_000,
@@ -560,24 +561,31 @@ describe('InvoicesService', () => {
           discountAmount: 0,
           status: 'pending',
         }),
+        [], // no pending SLA credits for this customer
       );
     });
 
-    // C3: a freshly-billed customer must show their new debt immediately —
-    // not `outstanding = 0` until they pay or cross into isolir.
-    it('refreshes the newly-billed customer outstanding via the same sumUnpaidByCustomer recompute pay() uses', async () => {
+    // M2: create + SLA-credit absorption + the outstanding refresh are one
+    // repository-owned transaction now (createBilled) — the service just
+    // has to call it with the resolved discount/creditIds; the repository's
+    // own int-spec (invoices.repository.int-spec.ts) proves the actual
+    // outstanding/credit-status writes land atomically.
+    it('delegates invoice creation + SLA-credit absorption + outstanding refresh to the single createBilled transaction', async () => {
       customers.findActiveBillable.mockResolvedValue([
         { id: 'c1', fullName: 'Ani', planPriceMonthly: 200_000, billingAnchorDay: null },
       ]);
       repo.existsForPeriod.mockResolvedValue(false);
-      repo.create.mockResolvedValue({ ...pendingInvoice, id: 'inv-c1', customerId: 'c1' });
-      // The customer's only other unpaid invoice plus this new one.
-      repo.sumUnpaidByCustomer.mockResolvedValue(222_000);
+      repo.createBilled.mockResolvedValue({ ...pendingInvoice, id: 'inv-c1', customerId: 'c1' });
 
       await service.run();
 
-      expect(repo.sumUnpaidByCustomer).toHaveBeenCalledWith('c1');
-      expect(customers.setBilling).toHaveBeenCalledWith('c1', { outstanding: 222_000 });
+      expect(repo.createBilled).toHaveBeenCalledWith(
+        expect.objectContaining({ customerId: 'c1' }),
+        [],
+      );
+      // The old separate round-trips must be gone from the service path.
+      expect(repo.sumUnpaidByCustomer).not.toHaveBeenCalled();
+      expect(customers.setBilling).not.toHaveBeenCalled();
     });
 
     it('honors billingAnchorDay for the due date instead of the settings dueDays policy', async () => {
@@ -585,15 +593,16 @@ describe('InvoicesService', () => {
         { id: 'c1', fullName: 'Ani', planPriceMonthly: 200_000, billingAnchorDay: 15 },
       ]);
       repo.existsForPeriod.mockResolvedValue(false);
-      repo.create.mockResolvedValue(pendingInvoice);
+      repo.createBilled.mockResolvedValue(pendingInvoice);
 
       await service.run();
 
-      expect(repo.create).toHaveBeenCalledWith(
+      expect(repo.createBilled).toHaveBeenCalledWith(
         expect.objectContaining({
           // Day-of-month 15, within the period being billed (not dueDays-based).
           dueDate: expect.stringMatching(/-15$/),
         }),
+        [],
       );
     });
 
@@ -602,27 +611,27 @@ describe('InvoicesService', () => {
         { id: 'c1', fullName: 'Ani', planPriceMonthly: 200_000, billingAnchorDay: 31 },
       ]);
       repo.existsForPeriod.mockResolvedValue(false);
-      repo.create.mockResolvedValue(pendingInvoice);
+      repo.createBilled.mockResolvedValue(pendingInvoice);
 
       await service.run();
 
-      expect(repo.create).toHaveBeenCalledWith(
+      expect(repo.createBilled).toHaveBeenCalledWith(
         expect.objectContaining({ dueDate: expect.stringMatching(/-28$/) }),
+        [],
       );
     });
 
-    it('absorbs a pending SLA credit into discountAmount and marks it applied with the new invoiceId (no double-deduction)', async () => {
+    it('resolves a pending SLA credit into discountAmount and passes its id through to createBilled for absorption', async () => {
       customers.findActiveBillable.mockResolvedValue([
         { id: 'c1', fullName: 'Ani', planPriceMonthly: 200_000, billingAnchorDay: null },
       ]);
       repo.existsForPeriod.mockResolvedValue(false);
-      const created = {
+      repo.createBilled.mockResolvedValue({
         ...pendingInvoice,
         id: 'inv-new',
         customerId: 'c1',
         discountAmount: 50_000,
-      };
-      repo.create.mockResolvedValue(created);
+      });
       slaCreditsFake.findPendingByCustomer.mockResolvedValue([
         { id: 'credit-1', customerId: 'c1', amount: 50_000, status: 'pending' },
       ]);
@@ -631,12 +640,12 @@ describe('InvoicesService', () => {
 
       // 200_000 + 22_000 (PPN) gross; the 50_000 credit fits under that, so it's
       // taken in full as the discount line — never separately subtracted from
-      // outstanding (the C3 refresh only reads invoices.paidAmount/total via
-      // sumUnpaidByCustomer, so the discount and the outstanding stay consistent).
-      expect(repo.create).toHaveBeenCalledWith(
+      // outstanding (createBilled's single transaction keeps the discount and
+      // the outstanding refresh consistent — see its doc).
+      expect(repo.createBilled).toHaveBeenCalledWith(
         expect.objectContaining({ customerId: 'c1', discountAmount: 50_000 }),
+        ['credit-1'],
       );
-      expect(slaCreditsFake.markAppliedWithInvoice).toHaveBeenCalledWith(['credit-1'], 'inv-new');
     });
 
     it('caps the discount at the invoice gross total when pending credits exceed it', async () => {
@@ -644,8 +653,7 @@ describe('InvoicesService', () => {
         { id: 'c1', fullName: 'Ani', planPriceMonthly: 200_000, billingAnchorDay: null },
       ]);
       repo.existsForPeriod.mockResolvedValue(false);
-      const created = { ...pendingInvoice, id: 'inv-new', customerId: 'c1' };
-      repo.create.mockResolvedValue(created);
+      repo.createBilled.mockResolvedValue({ ...pendingInvoice, id: 'inv-new', customerId: 'c1' });
       // Gross total = 200_000 + 22_000 = 222_000; credits sum to 300_000.
       slaCreditsFake.findPendingByCustomer.mockResolvedValue([
         { id: 'credit-1', customerId: 'c1', amount: 200_000, status: 'pending' },
@@ -654,12 +662,9 @@ describe('InvoicesService', () => {
 
       await service.run();
 
-      expect(repo.create).toHaveBeenCalledWith(
+      expect(repo.createBilled).toHaveBeenCalledWith(
         expect.objectContaining({ discountAmount: 222_000 }),
-      );
-      expect(slaCreditsFake.markAppliedWithInvoice).toHaveBeenCalledWith(
         ['credit-1', 'credit-2'],
-        'inv-new',
       );
     });
 
@@ -670,7 +675,7 @@ describe('InvoicesService', () => {
         { id: 'c2', fullName: 'Budi', planPriceMonthly: 300_000, billingAnchorDay: null },
       ]);
       repo.existsForPeriod.mockResolvedValue(false);
-      repo.create.mockImplementation((input: { customerId: string }) =>
+      repo.createBilled.mockImplementation((input: { customerId: string }) =>
         Promise.resolve({
           ...pendingInvoice,
           id: `inv-${input.customerId}`,
@@ -687,7 +692,7 @@ describe('InvoicesService', () => {
 
       await service.run();
 
-      expect(repo.create).toHaveBeenCalledTimes(2);
+      expect(repo.createBilled).toHaveBeenCalledTimes(2);
       // c1 has a phone -> enqueued once; c2 has none -> skipped.
       expect(notifications.enqueue).toHaveBeenCalledTimes(1);
       expect(notifications.enqueue).toHaveBeenCalledWith(
@@ -704,40 +709,87 @@ describe('InvoicesService', () => {
         'invoice_created:inv-c1',
       );
     });
+
+    // D7: one bad billable record must never abort the rest of the nightly
+    // billing run — the other customers still get billed, and the failure
+    // is surfaced in `failed` / `failedCustomerIds` instead of throwing out
+    // of run() and leaving the remaining cohort unbilled.
+    it('creates invoices for the remaining customers and reports the failure when one customer throws mid-batch', async () => {
+      customers.findActiveBillable.mockResolvedValue([
+        { id: 'c1', fullName: 'Ani', planPriceMonthly: 200_000, billingAnchorDay: null },
+        { id: 'c2', fullName: 'Budi', planPriceMonthly: 300_000, billingAnchorDay: null },
+        { id: 'c3', fullName: 'Citra', planPriceMonthly: 150_000, billingAnchorDay: null },
+      ]);
+      repo.existsForPeriod.mockResolvedValue(false);
+      // c2's transactional createBilled fails (e.g. a DB constraint
+      // violation, or the SLA-credit/outstanding step inside it); c1 and c3
+      // must still be billed. Because the failure is inside createBilled's
+      // own transaction, c2 gets NO invoice at all (rolled back) rather than
+      // a partially-written one — that's the M2 guarantee this test locks.
+      repo.createBilled.mockImplementation((input: { customerId: string }) =>
+        input.customerId === 'c2'
+          ? Promise.reject(new Error('constraint violation'))
+          : Promise.resolve({
+              ...pendingInvoice,
+              id: `inv-${input.customerId}`,
+              customerId: input.customerId,
+            }),
+      );
+
+      const result = await service.run();
+
+      expect(result.created).toBe(2);
+      expect(result.failed).toBe(1);
+      expect(result.failedCustomerIds).toEqual(['c2']);
+      expect(repo.createBilled).toHaveBeenCalledWith(
+        expect.objectContaining({ customerId: 'c1' }),
+        [],
+      );
+      expect(repo.createBilled).toHaveBeenCalledWith(
+        expect.objectContaining({ customerId: 'c3' }),
+        [],
+      );
+    });
   });
 
   describe('generateFirstInvoice', () => {
-    // C3: an onboarded customer's first bill must show up in their
+    // C3 / M2: an onboarded customer's first bill must show up in their
     // outstanding balance right away — not sit at 0 until they pay or go
-    // isolir — using the exact same sumUnpaidByCustomer recompute as pay().
-    it('creates the invoice and refreshes the customer outstanding to the non-zero recomputed sum', async () => {
+    // isolir. Creation + the outstanding refresh are now the same single
+    // createBilled transaction run() uses (see its doc).
+    it('creates the invoice via createBilled with no SLA credits to absorb', async () => {
       customers.findBillingInfo.mockResolvedValue({
         fullName: 'Ani',
         planPriceMonthly: 200_000,
         billingAnchorDay: null,
       });
       repo.existsForPeriod.mockResolvedValue(false);
-      repo.create.mockResolvedValue({ ...pendingInvoice, id: 'inv-first', customerId: 'c1' });
-      repo.sumUnpaidByCustomer.mockResolvedValue(222_000);
+      repo.createBilled.mockResolvedValue({
+        ...pendingInvoice,
+        id: 'inv-first',
+        customerId: 'c1',
+      });
 
       await service.generateFirstInvoice('c1');
 
-      expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ customerId: 'c1' }));
-      expect(repo.sumUnpaidByCustomer).toHaveBeenCalledWith('c1');
-      expect(customers.setBilling).toHaveBeenCalledWith('c1', { outstanding: 222_000 });
-    });
-
-    it('is a no-op (and never refreshes outstanding) when the customer is unknown', async () => {
-      customers.findBillingInfo.mockResolvedValue(null);
-
-      await service.generateFirstInvoice('missing');
-
-      expect(repo.create).not.toHaveBeenCalled();
+      expect(repo.createBilled).toHaveBeenCalledWith(
+        expect.objectContaining({ customerId: 'c1' }),
+        [],
+      );
+      // The old separate round-trips must be gone from the service path.
       expect(repo.sumUnpaidByCustomer).not.toHaveBeenCalled();
       expect(customers.setBilling).not.toHaveBeenCalled();
     });
 
-    it('is idempotent: skips (and never refreshes outstanding again) when a period invoice already exists', async () => {
+    it('is a no-op when the customer is unknown', async () => {
+      customers.findBillingInfo.mockResolvedValue(null);
+
+      await service.generateFirstInvoice('missing');
+
+      expect(repo.createBilled).not.toHaveBeenCalled();
+    });
+
+    it('is idempotent: skips when a period invoice already exists', async () => {
       customers.findBillingInfo.mockResolvedValue({
         fullName: 'Ani',
         planPriceMonthly: 200_000,
@@ -747,9 +799,7 @@ describe('InvoicesService', () => {
 
       await service.generateFirstInvoice('c1');
 
-      expect(repo.create).not.toHaveBeenCalled();
-      expect(repo.sumUnpaidByCustomer).not.toHaveBeenCalled();
-      expect(customers.setBilling).not.toHaveBeenCalled();
+      expect(repo.createBilled).not.toHaveBeenCalled();
     });
 
     // ADR-0012: the customer's very first bill also fires invoice_created.
@@ -760,7 +810,11 @@ describe('InvoicesService', () => {
         billingAnchorDay: null,
       });
       repo.existsForPeriod.mockResolvedValue(false);
-      repo.create.mockResolvedValue({ ...pendingInvoice, id: 'inv-first', customerId: 'c1' });
+      repo.createBilled.mockResolvedValue({
+        ...pendingInvoice,
+        id: 'inv-first',
+        customerId: 'c1',
+      });
       customers.findById.mockResolvedValue({ id: 'c1', phone: '0811', fullName: 'Ani' });
 
       await service.generateFirstInvoice('c1');

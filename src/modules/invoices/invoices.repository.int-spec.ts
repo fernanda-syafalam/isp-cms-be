@@ -8,6 +8,7 @@ import * as schema from '../../infrastructure/database/schema';
 import { customers } from '../../infrastructure/database/schema/customers.schema';
 import { invoices, payments } from '../../infrastructure/database/schema/invoices.schema';
 import { plans } from '../../infrastructure/database/schema/plans.schema';
+import { slaCredits } from '../../infrastructure/database/schema/sla-credits.schema';
 import { applyMigrations } from '../../test-utils/apply-migrations';
 import { InvoicesRepository } from './invoices.repository';
 
@@ -60,6 +61,10 @@ describe('InvoicesRepository (integration)', () => {
 
   beforeEach(async () => {
     await db.delete(payments);
+    // sla_credits.applied_invoice_id FKs into invoices — clear it first
+    // (createBilled's tests below insert credits that reference an
+    // invoice), otherwise deleting invoices would violate the FK.
+    await db.delete(slaCredits);
     await db.delete(invoices);
   });
 
@@ -116,6 +121,67 @@ describe('InvoicesRepository (integration)', () => {
     const regular = await repo.create(newInvoice({ periodStart: '2026-06-01' }));
     expect(regular.type).toBe('regular');
     expect(await repo.existsForPeriod(customerId, '2026-06-01')).toBe(true);
+  });
+
+  // M2: create + SLA-credit absorption + the customer outstanding refresh
+  // now land in ONE transaction (createBilled) — a crash partway through
+  // must roll everything back so the customer is retried next run instead
+  // of being permanently skipped (existsForPeriod) with a half-committed
+  // invoice.
+  describe('createBilled', () => {
+    beforeEach(async () => {
+      // slaCredits is already cleared by the outer beforeEach (FK order).
+      await db
+        .update(customers)
+        .set({ outstanding: 0, status: 'aktif' })
+        .where(eq(customers.id, customerId));
+    });
+
+    it('creates the invoice, marks the given pending credits applied against it, and refreshes customers.outstanding', async () => {
+      const [credit] = await db
+        .insert(slaCredits)
+        .values({
+          customerId,
+          customerName: 'Budi',
+          amount: 50_000,
+          reason: 'SLA breach compensation',
+          status: 'pending',
+        })
+        .returning();
+      if (!credit) throw new Error('credit seed failed');
+
+      const invoice = await repo.createBilled(newInvoice({ discountAmount: 50_000 }), [credit.id]);
+
+      const [creditRow] = await db.select().from(slaCredits).where(eq(slaCredits.id, credit.id));
+      expect(creditRow?.status).toBe('applied');
+      expect(creditRow?.appliedInvoiceId).toBe(invoice.id);
+
+      const [customerRow] = await db.select().from(customers).where(eq(customers.id, customerId));
+      // amount 200_000 + taxAmount 22_000 - discountAmount 50_000 = 172_000.
+      expect(customerRow?.outstanding).toBe(172_000);
+    });
+
+    it('with no creditIds, skips the credit update entirely and still refreshes outstanding', async () => {
+      const invoice = await repo.createBilled(newInvoice(), []);
+
+      expect(invoice.discountAmount).toBe(0);
+      const [customerRow] = await db.select().from(customers).where(eq(customers.id, customerId));
+      expect(customerRow?.outstanding).toBe(222_000); // 200_000 + 22_000 tax, no discount
+    });
+
+    it('rolls back the invoice insert (and the outstanding refresh) when the credit-absorption step fails mid-transaction', async () => {
+      // An invalid uuid forces Postgres to throw INSIDE the transaction,
+      // AFTER the invoice insert already ran — the real test of atomicity
+      // (a synchronous failure on the very first statement would prove
+      // nothing about rollback).
+      await expect(repo.createBilled(newInvoice(), ['not-a-valid-uuid'])).rejects.toThrow();
+
+      // The invoice must NOT exist — rolled back along with the failed
+      // credit update, not left half-committed.
+      expect(await repo.existsForPeriod(customerId, '2026-06-01')).toBe(false);
+      const [customerRow] = await db.select().from(customers).where(eq(customers.id, customerId));
+      expect(customerRow?.outstanding).toBe(0);
+    });
   });
 
   // R6-DB-5: existingRegularForPeriod is the batched sibling of

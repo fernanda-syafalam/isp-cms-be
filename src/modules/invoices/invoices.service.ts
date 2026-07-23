@@ -205,35 +205,55 @@ export class InvoicesService {
 
     const billables = await this.customers.findActiveBillable();
     let created = 0;
+    const failedCustomerIds: string[] = [];
     for (const customer of billables) {
-      if (await this.repo.existsForPeriod(customer.id, periodStart)) continue;
-      const amount = customer.planPriceMonthly;
-      const taxAmount = policy.pkp ? ppnOf(amount, policy.ppnRate) : 0;
-      const { discountAmount, creditIds } = await this.resolveSlaDiscount(
-        customer.id,
-        amount + taxAmount,
-      );
-      const invoice = await this.repo.create({
-        customerId: customer.id,
-        customerName: customer.fullName,
-        periodStart,
-        periodEnd,
-        dueDate: dueDateFor(customer.billingAnchorDay, periodStart, now, policy.dueDays),
-        amount,
-        taxAmount,
-        discountAmount,
-        status: 'pending',
-      });
-      await this.absorbSlaCredits(creditIds, invoice.id);
-      // C3: a freshly-billed customer must show their new debt immediately,
-      // not just once they pay or cross into isolir.
-      await this.refreshOutstanding(customer.id);
-      await this.notifyInvoiceCreated(invoice);
-      created += 1;
+      try {
+        if (await this.repo.existsForPeriod(customer.id, periodStart)) continue;
+        const amount = customer.planPriceMonthly;
+        const taxAmount = policy.pkp ? ppnOf(amount, policy.ppnRate) : 0;
+        const { discountAmount, creditIds } = await this.resolveSlaDiscount(
+          customer.id,
+          amount + taxAmount,
+        );
+        // M2: create + SLA-credit absorption + the outstanding refresh all
+        // land in ONE DB transaction inside the repository (mirrors `pay()`'s
+        // C2 comment above) — a failure partway through rolls the invoice
+        // back entirely, so this customer is retried on the next run instead
+        // of being permanently skipped by `existsForPeriod` with an
+        // un-absorbed credit or a stale `outstanding`.
+        const invoice = await this.repo.createBilled(
+          {
+            customerId: customer.id,
+            customerName: customer.fullName,
+            periodStart,
+            periodEnd,
+            dueDate: dueDateFor(customer.billingAnchorDay, periodStart, now, policy.dueDays),
+            amount,
+            taxAmount,
+            discountAmount,
+            status: 'pending',
+          },
+          creditIds,
+        );
+        await this.notifyInvoiceCreated(invoice);
+        created += 1;
+      } catch (err) {
+        // D7: one bad billable record (e.g. a stale plan reference) must
+        // never abort the rest of the nightly billing run — log, record the
+        // failure, and continue with the next customer.
+        this.logger.error(
+          { customerId: customer.id, err },
+          'invoice generation failed for customer',
+        );
+        failedCustomerIds.push(customer.id);
+      }
     }
 
-    this.logger.log({ period: periodLabel, created }, 'billing run');
-    return { period: periodLabel, created };
+    this.logger.log(
+      { period: periodLabel, created, failed: failedCustomerIds.length },
+      'billing run',
+    );
+    return { period: periodLabel, created, failed: failedCustomerIds.length, failedCustomerIds };
   }
 
   /**
@@ -257,21 +277,24 @@ export class InvoicesService {
       customerId,
       amount + taxAmount,
     );
-    const invoice = await this.repo.create({
-      customerId,
-      customerName: info.fullName,
-      periodStart,
-      periodEnd,
-      dueDate: dueDateFor(info.billingAnchorDay, periodStart, now, policy.dueDays),
-      amount,
-      taxAmount,
-      discountAmount,
-      status: 'pending',
-    });
-    await this.absorbSlaCredits(creditIds, invoice.id);
-    // C3: an onboarded/first-billed customer must show their new debt
-    // immediately — not `outstanding = 0` until they pay or go isolir.
-    await this.refreshOutstanding(customerId);
+    // M2: same single-transaction create as run() above — see createBilled's
+    // doc. An onboarded/first-billed customer must show their new debt
+    // immediately (C3), and a mid-way failure must never leave a committed
+    // invoice with an un-absorbed credit or a stale `outstanding`.
+    const invoice = await this.repo.createBilled(
+      {
+        customerId,
+        customerName: info.fullName,
+        periodStart,
+        periodEnd,
+        dueDate: dueDateFor(info.billingAnchorDay, periodStart, now, policy.dueDays),
+        amount,
+        taxAmount,
+        discountAmount,
+        status: 'pending',
+      },
+      creditIds,
+    );
     await this.notifyInvoiceCreated(invoice);
     this.logger.log({ customerId }, 'first invoice generated');
   }
@@ -295,23 +318,6 @@ export class InvoicesService {
       discountAmount: Math.min(creditSum, grossTotal),
       creditIds: pending.map((credit) => credit.id),
     };
-  }
-
-  private async absorbSlaCredits(creditIds: string[], invoiceId: string): Promise<void> {
-    if (creditIds.length === 0) return;
-    await this.slaCredits.markAppliedWithInvoice(creditIds, invoiceId);
-  }
-
-  /**
-   * Refresh one customer's `outstanding` from the same `sumUnpaidByCustomer`
-   * recompute `pay()`'s transaction uses (C3) — never a hand-computed delta.
-   * A freshly-created invoice only ever ADDS to the balance, so unlike
-   * `pay()` this never needs to consider isolir reactivation (that only
-   * ever follows a balance going DOWN to zero).
-   */
-  private async refreshOutstanding(customerId: string): Promise<void> {
-    const outstanding = await this.repo.sumUnpaidByCustomer(customerId);
-    await this.customers.setBilling(customerId, { outstanding });
   }
 
   /**

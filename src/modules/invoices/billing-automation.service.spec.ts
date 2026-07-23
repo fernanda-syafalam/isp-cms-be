@@ -38,6 +38,7 @@ describe('BillingAutomationService', () => {
       markRemindedDueSoon: vi.fn(),
       markRemindedByIds: vi.fn(),
       customerIdsWithOverdue: vi.fn(),
+      customerIdsIsolirEligible: vi.fn(),
       customerIdsWithPendingDueSoon: vi.fn(),
       sumUnpaidByCustomers: vi.fn(),
       existingRegularForPeriod: vi.fn(),
@@ -47,6 +48,9 @@ describe('BillingAutomationService', () => {
     notifications = { enqueue: vi.fn() };
     // Safe defaults so the dunning dispatch is a no-op unless a test opts in.
     repo.customerIdsWithOverdue.mockResolvedValue([]);
+    // D2: isolir selection reads its own grace-filtered query, decoupled
+    // from customerIdsWithOverdue (which still drives dunning).
+    repo.customerIdsIsolirEligible.mockResolvedValue([]);
     repo.customerIdsWithPendingDueSoon.mockResolvedValue([]);
     customers.findByIds.mockResolvedValue([]);
     repo.sumUnpaidByCustomers.mockResolvedValue(new Map());
@@ -76,7 +80,7 @@ describe('BillingAutomationService', () => {
   describe('isolirOverdue', () => {
     it('marks overdue then isolates only active debtors', async () => {
       repo.markOverduePastDue.mockResolvedValue(3);
-      repo.customerIdsWithOverdue.mockResolvedValue(['c1', 'c2']);
+      repo.customerIdsIsolirEligible.mockResolvedValue(['c1', 'c2']);
       customers.findByIds.mockResolvedValue(
         rowsFor({ c1: { status: 'aktif', phone: null }, c2: { status: 'isolir', phone: null } }),
       );
@@ -90,6 +94,8 @@ describe('BillingAutomationService', () => {
       const result = await service.isolirOverdue();
 
       expect(repo.markOverduePastDue).toHaveBeenCalledWith(25_000);
+      // D2: the isolir cohort is now read via the grace-filtered query.
+      expect(repo.customerIdsIsolirEligible).toHaveBeenCalledWith(3);
       // c1 (aktif) gets isolated; c2 (already isolir) is skipped
       expect(customers.setBilling).toHaveBeenCalledTimes(1);
       // Auto-isolir is punitive (P3.A.3): records the overdue hold reason.
@@ -101,14 +107,14 @@ describe('BillingAutomationService', () => {
       // ADR-0008: isolating a debtor disables their PPPoE secret on the router.
       expect(secrets.applyDisabledForCustomer).toHaveBeenCalledTimes(1);
       expect(secrets.applyDisabledForCustomer).toHaveBeenCalledWith('c1', true);
-      expect(result).toEqual({ markedOverdue: 3, isolated: 1 });
+      expect(result).toEqual({ markedOverdue: 3, isolated: 1, failed: 0, failedCustomerIds: [] });
     });
 
     // ADR-0012: the exact "overdue → isolir surprise" this ADR exists to
     // prevent — the newly-isolated customer must be told via WhatsApp.
     it('enqueues an isolir notice to each newly-isolated customer with a phone', async () => {
       repo.markOverduePastDue.mockResolvedValue(1);
-      repo.customerIdsWithOverdue.mockResolvedValue(['c1', 'c2']);
+      repo.customerIdsIsolirEligible.mockResolvedValue(['c1', 'c2']);
       customers.findByIds.mockResolvedValue(
         rowsFor({
           c1: { status: 'aktif', phone: '0812', fullName: 'Budi' },
@@ -137,7 +143,7 @@ describe('BillingAutomationService', () => {
 
     it('does not fail the isolir run when the notification enqueue rejects (best-effort)', async () => {
       repo.markOverduePastDue.mockResolvedValue(1);
-      repo.customerIdsWithOverdue.mockResolvedValue(['c1']);
+      repo.customerIdsIsolirEligible.mockResolvedValue(['c1']);
       customers.findByIds.mockResolvedValue(
         rowsFor({ c1: { status: 'aktif', phone: '0812', fullName: 'Budi' } }),
       );
@@ -149,6 +155,7 @@ describe('BillingAutomationService', () => {
       // The isolir enforcement (status flip + router secret disable) still
       // completes even though the notice failed to enqueue.
       expect(result.isolated).toBe(1);
+      expect(result.failed).toBe(0);
       expect(secrets.applyDisabledForCustomer).toHaveBeenCalledWith('c1', true);
     });
 
@@ -162,9 +169,9 @@ describe('BillingAutomationService', () => {
     // `findById` returning null: silently skipped, no throw.
     it('selects the exact same target set as the old per-id loop: aktif/non-aktif, phone/no-phone, and a deleted-mid-run id', async () => {
       repo.markOverduePastDue.mockResolvedValue(4);
-      repo.customerIdsWithOverdue.mockResolvedValue(['c1', 'c2', 'c3', 'c4']);
+      repo.customerIdsIsolirEligible.mockResolvedValue(['c1', 'c2', 'c3', 'c4']);
       // c4 is deliberately omitted from findByIds — models a row deleted
-      // between customerIdsWithOverdue() and the batched fetch.
+      // between customerIdsIsolirEligible() and the batched fetch.
       customers.findByIds.mockResolvedValue(
         rowsFor({
           c1: { status: 'aktif', phone: '0812', fullName: 'Budi' },
@@ -208,6 +215,83 @@ describe('BillingAutomationService', () => {
         { event: 'isolir', to: '0812', vars: { nama: 'Budi', jumlah: 'Rp111.000' } },
         expect.stringMatching(/^isolir:c1:/),
       );
+    });
+
+    // D2: isolir selection must honor the configured grace period. The
+    // actual dueDate + graceDays < today comparison lives in the repository
+    // (see customerIdsIsolirEligible's int-spec); at the service layer we
+    // lock that isolirGraceDays from settings is what gets passed through,
+    // and that only the ids the (grace-filtered) query returns are ever
+    // touched — a customer still within grace is never even considered.
+    it('only isolates customers the grace-filtered query returns, using the configured isolirGraceDays', async () => {
+      repo.markOverduePastDue.mockResolvedValue(2);
+      // c1: beyond grace -> returned by the eligible query -> isolated.
+      // c2: within grace -> the repo query itself excludes it, so it never
+      // reaches this service at all.
+      repo.customerIdsIsolirEligible.mockResolvedValue(['c1']);
+      customers.findByIds.mockResolvedValue(
+        rowsFor({ c1: { status: 'aktif', phone: null }, c2: { status: 'aktif', phone: null } }),
+      );
+      repo.sumUnpaidByCustomers.mockResolvedValue(new Map([['c1', 200_000]]));
+
+      const result = await service.isolirOverdue();
+
+      // isolirGraceDays comes from settings.getBillingPolicy() (3 in the
+      // shared test fixture) and must reach the repository call unchanged.
+      expect(repo.customerIdsIsolirEligible).toHaveBeenCalledWith(3);
+      expect(customers.setBilling).toHaveBeenCalledTimes(1);
+      expect(customers.setBilling).toHaveBeenCalledWith('c1', {
+        status: 'isolir',
+        outstanding: 200_000,
+        holdReason: 'overdue',
+      });
+      expect(customers.setBilling).not.toHaveBeenCalledWith('c2', expect.anything());
+      expect(result.isolated).toBe(1);
+    });
+
+    // D7: one bad customer record (DB write or router enforcement throwing)
+    // must never abort the rest of the nightly isolir sweep — the other
+    // customers still get isolated, and the failure is surfaced in `failed`
+    // / `failedCustomerIds` instead of aborting the whole batch.
+    it('isolates the remaining customers and reports the failure when one customer throws mid-batch', async () => {
+      repo.markOverduePastDue.mockResolvedValue(3);
+      repo.customerIdsIsolirEligible.mockResolvedValue(['c1', 'c2', 'c3']);
+      customers.findByIds.mockResolvedValue(
+        rowsFor({
+          c1: { status: 'aktif', phone: null, fullName: 'Ani' },
+          c2: { status: 'aktif', phone: null, fullName: 'Budi' },
+          c3: { status: 'aktif', phone: null, fullName: 'Citra' },
+        }),
+      );
+      repo.sumUnpaidByCustomers.mockResolvedValue(
+        new Map([
+          ['c1', 100_000],
+          ['c2', 200_000],
+          ['c3', 300_000],
+        ]),
+      );
+      // c2's router enforcement fails (e.g. Mikrotik outage); c1 and c3
+      // must still be isolated.
+      secrets.applyDisabledForCustomer.mockImplementation((id: string) =>
+        id === 'c2' ? Promise.reject(new Error('router unreachable')) : Promise.resolve(1),
+      );
+
+      const result = await service.isolirOverdue();
+
+      expect(customers.setBilling).toHaveBeenCalledWith('c1', expect.objectContaining({}));
+      expect(customers.setBilling).toHaveBeenCalledWith('c3', expect.objectContaining({}));
+      // M1 (fail-closed ordering): the router disable runs BEFORE the DB
+      // status flip, so a failed disable for c2 must leave c2's status
+      // untouched (still 'aktif') — the next sweep's eligibility query will
+      // pick c2 up again and retry, instead of a permanently-online
+      // customer stuck at status='isolir'.
+      expect(customers.setBilling).not.toHaveBeenCalledWith('c2', expect.anything());
+      expect(result).toEqual({
+        markedOverdue: 3,
+        isolated: 2,
+        failed: 1,
+        failedCustomerIds: ['c2'],
+      });
     });
   });
 
@@ -317,7 +401,12 @@ describe('BillingAutomationService', () => {
   });
 
   it('schedulerRun chains run -> overdue -> dun -> isolir', async () => {
-    invoicesService.run.mockResolvedValue({ period: '2026-06', created: 7 });
+    invoicesService.run.mockResolvedValue({
+      period: '2026-06',
+      created: 7,
+      failed: 0,
+      failedCustomerIds: [],
+    });
     repo.markOverduePastDue.mockResolvedValue(2);
     repo.markRemindedDueSoon.mockResolvedValue(3);
     repo.markRemindedOverdue.mockResolvedValue(2);
@@ -327,9 +416,11 @@ describe('BillingAutomationService', () => {
     expect(result).toEqual({
       period: '2026-06',
       created: 7,
+      billingFailed: 0,
       remindedUpcoming: 3,
       remindedOverdue: 2,
       isolated: 0,
+      isolationFailed: 0,
     });
   });
 
@@ -337,7 +428,12 @@ describe('BillingAutomationService', () => {
   // scheduled run — the invoices already created by invoices.run() (and the
   // overdue/reminded marks) must still be reported back.
   it('schedulerRun still completes (invoices created, marks recorded) when every dunning enqueue rejects', async () => {
-    invoicesService.run.mockResolvedValue({ period: '2026-06', created: 7 });
+    invoicesService.run.mockResolvedValue({
+      period: '2026-06',
+      created: 7,
+      failed: 0,
+      failedCustomerIds: [],
+    });
     repo.markOverduePastDue.mockResolvedValue(2);
     repo.markRemindedDueSoon.mockResolvedValue(3);
     repo.markRemindedOverdue.mockResolvedValue(2);
@@ -363,9 +459,11 @@ describe('BillingAutomationService', () => {
     expect(result).toEqual({
       period: '2026-06',
       created: 7,
+      billingFailed: 0,
       remindedUpcoming: 3,
       remindedOverdue: 2,
       isolated: 0,
+      isolationFailed: 0,
     });
   });
 });

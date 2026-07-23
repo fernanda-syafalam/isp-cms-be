@@ -15,9 +15,21 @@ describe('SchedulerProcessor', () => {
   let processor: SchedulerProcessor;
 
   beforeEach(() => {
-    invoices = { run: vi.fn().mockResolvedValue({ period: '2026-06', created: 0 }) };
+    invoices = {
+      run: vi.fn().mockResolvedValue({
+        period: '2026-06',
+        created: 0,
+        failed: 0,
+        failedCustomerIds: [],
+      }),
+    };
     billing = {
-      isolirOverdue: vi.fn().mockResolvedValue({ markedOverdue: 0, isolated: 0 }),
+      isolirOverdue: vi.fn().mockResolvedValue({
+        markedOverdue: 0,
+        isolated: 0,
+        failed: 0,
+        failedCustomerIds: [],
+      }),
       remind: vi.fn().mockResolvedValue({ reminded: 0, channel: 'whatsapp' }),
     };
     tickets = { scanSla: vi.fn().mockResolvedValue({ breached: 0 }) };
@@ -40,6 +52,49 @@ describe('SchedulerProcessor', () => {
   it('routes billing.isolir-overdue to billing.isolirOverdue', async () => {
     await run(SCHEDULER_JOBS.billingIsolirOverdue.name);
     expect(billing.isolirOverdue).toHaveBeenCalledTimes(1);
+  });
+
+  // H1: a partial-batch failure inside the resilient (D7) run()/isolirOverdue()
+  // must still fail the JOB so BullMQ retries + onFailed alerts fire, instead
+  // of silently swallowing the dropped customers.
+  it('throws when invoices.run() reports a partial-batch failure, so the job retries', async () => {
+    invoices.run.mockResolvedValue({
+      period: '2026-06',
+      created: 2,
+      failed: 1,
+      failedCustomerIds: ['c9'],
+    });
+    await expect(run(SCHEDULER_JOBS.billingRun.name)).rejects.toThrow(/c9/);
+  });
+
+  it('does not throw when invoices.run() has zero failures', async () => {
+    invoices.run.mockResolvedValue({
+      period: '2026-06',
+      created: 2,
+      failed: 0,
+      failedCustomerIds: [],
+    });
+    await expect(run(SCHEDULER_JOBS.billingRun.name)).resolves.toBeUndefined();
+  });
+
+  it('throws when billing.isolirOverdue() reports a partial-batch failure, so the job retries', async () => {
+    billing.isolirOverdue.mockResolvedValue({
+      markedOverdue: 3,
+      isolated: 2,
+      failed: 1,
+      failedCustomerIds: ['c7'],
+    });
+    await expect(run(SCHEDULER_JOBS.billingIsolirOverdue.name)).rejects.toThrow(/c7/);
+  });
+
+  it('does not throw when billing.isolirOverdue() has zero failures', async () => {
+    billing.isolirOverdue.mockResolvedValue({
+      markedOverdue: 3,
+      isolated: 3,
+      failed: 0,
+      failedCustomerIds: [],
+    });
+    await expect(run(SCHEDULER_JOBS.billingIsolirOverdue.name)).resolves.toBeUndefined();
   });
 
   it('routes billing.dunning to billing.remind with no explicit ids', async () => {

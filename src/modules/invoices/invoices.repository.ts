@@ -11,6 +11,7 @@ import {
   invoices,
   payments,
 } from '../../infrastructure/database/schema/invoices.schema';
+import { slaCredits } from '../../infrastructure/database/schema/sla-credits.schema';
 import type { InvoiceListResponse, InvoiceSummary } from './dto/invoice-response.dto';
 import type { PaymentReconciliation } from './dto/payment-reconciliation.dto';
 
@@ -167,6 +168,54 @@ export class InvoicesRepository {
       throw new Error('invoices.insert returned no row');
     }
     return row;
+  }
+
+  /**
+   * Create a billing-run invoice and, in the SAME transaction (M2, mirrors
+   * `recordPayment`'s C2 pattern / `SlaCreditsRepository.applyWithInvoiceCredit`):
+   * absorb the given pending SLA credits into it, and refresh the customer's
+   * `outstanding`. Previously `InvoicesService.run()`/`generateFirstInvoice()`
+   * did this as three separate round-trips — `create`, then
+   * `SlaCreditsRepository.markAppliedWithInvoice`, then a public
+   * `sumUnpaidByCustomer` + `CustomersRepository.setBilling` — so a crash
+   * between them left a committed invoice with un-absorbed SLA credits (the
+   * customer overbilled) or a stale `outstanding`, and `existsForPeriod`
+   * would then skip that customer on every retry (the invoice already
+   * "exists" for the period, so the next run never revisits it).
+   *
+   * Same deliberate "one repository per table" exception `recordPayment` /
+   * `SlaCreditsRepository.applyWithInvoiceCredit` document: this reaches
+   * into `sla_credits` and `customers` directly so both stay inside the new
+   * invoice's transaction. `creditIds` is empty for most customers (no
+   * pending SLA credit) — the credit UPDATE is skipped entirely then.
+   */
+  async createBilled(input: NewInvoice, creditIds: string[]): Promise<Invoice> {
+    return this.db.transaction(async (tx) => {
+      const [invoice] = await tx.insert(invoices).values(input).returning();
+      if (!invoice) {
+        throw new Error('invoices.insert returned no row');
+      }
+
+      if (creditIds.length > 0) {
+        await tx
+          .update(slaCredits)
+          .set({
+            status: 'applied',
+            appliedInvoiceId: invoice.id,
+            appliedAt: sql`now()`,
+            updatedAt: sql`now()`,
+          })
+          .where(and(inArray(slaCredits.id, creditIds), eq(slaCredits.status, 'pending')));
+      }
+
+      // Reuses the same helper `recordPayment` uses — see its doc. The
+      // reactivate-if-isolir branch it also computes is a no-op here in
+      // practice (a freshly-billed customer only ever ADDS to `outstanding`,
+      // see the original `refreshOutstanding`'s doc in the service), but
+      // reusing the one audited implementation beats a parallel copy.
+      await this.refreshOutstandingTx(tx, invoice.customerId);
+      return invoice;
+    });
   }
 
   // True if the customer already has a REGULAR invoice for this period —
@@ -361,13 +410,14 @@ export class InvoicesRepository {
   /**
    * Recompute `customers.outstanding` from `sumUnpaidByCustomer`'s exact
    * expression and persist it, inside the caller's transaction — shared by
-   * `recordPayment` (C2) and available to any other write that must keep
-   * `outstanding` in sync within the same transaction (C3 refreshes it
-   * outside a transaction via the public `sumUnpaidByCustomer` + the
-   * customers repository instead, since invoice-create has no invoice-row
-   * lock to hold open). Reactivates an isolir customer whose balance just
-   * reached zero — mirrors `InvoicesService.refreshCustomerBilling`'s old
-   * gate (strictly on the balance, never on "no more overdue invoices").
+   * `recordPayment` (C2) and `createBilled` (M2), and available to any
+   * other write that must keep `outstanding` in sync within the same
+   * transaction. Reactivates an isolir customer whose balance just reached
+   * zero — mirrors `InvoicesService.refreshCustomerBilling`'s old gate
+   * (strictly on the balance, never on "no more overdue invoices"). In
+   * `createBilled` this reactivation branch is a practical no-op: a
+   * freshly-created invoice only ever ADDS to the balance, so it can't be
+   * the write that brings an isolir customer's outstanding down to zero.
    */
   private async refreshOutstandingTx(tx: DbTx, customerId: string): Promise<boolean> {
     const [sumRow] = await tx
@@ -554,6 +604,34 @@ export class InvoicesRepository {
       .selectDistinct({ customerId: invoices.customerId })
       .from(invoices)
       .where(eq(invoices.status, 'overdue'));
+    return rows.map((r) => r.customerId);
+  }
+
+  /**
+   * Distinct customers whose oldest overdue invoice is past due by MORE
+   * than `graceDays` (D2): dueDate + graceDays < today. Matching on any
+   * overdue row is equivalent to checking only the customer's oldest one —
+   * a later invoice's dueDate is >= the oldest invoice's dueDate, so if the
+   * later one already clears `dueDate + graceDays < today`, the oldest
+   * (smaller dueDate) clears it too. This intentionally does not change
+   * `markOverduePastDue`/`customerIdsWithOverdue` (dunning still fires as
+   * soon as an invoice is overdue) — only isolir selection respects grace.
+   * TODO(TIME-1): `current_date` is evaluated in the container's UTC clock,
+   * same known basis as the other date comparisons in this file — not
+   * fixed here.
+   */
+  async customerIdsIsolirEligible(graceDays: number): Promise<string[]> {
+    const rows = await this.db
+      .selectDistinct({ customerId: invoices.customerId })
+      .from(invoices)
+      .where(
+        and(
+          eq(invoices.status, 'overdue'),
+          // Cast the bound param: `date + unknown` is ambiguous in Postgres,
+          // same reasoning as the other `+ ${days}::int` casts in this file.
+          sql`${invoices.dueDate} + ${graceDays}::int < current_date`,
+        ),
+      );
     return rows.map((r) => r.customerId);
   }
 

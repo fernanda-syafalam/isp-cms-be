@@ -32,12 +32,39 @@ export class SchedulerProcessor extends WorkerHost {
   async process(job: Job): Promise<void> {
     const name = job.name as SchedulerJobName;
     switch (name) {
-      case SCHEDULER_JOBS.billingRun.name:
-        await this.invoices.run();
+      case SCHEDULER_JOBS.billingRun.name: {
+        const result = await this.invoices.run();
+        // H1: run() is now resilient per-customer (D7) — one bad billable
+        // record no longer throws out of the batch, it's recorded in
+        // `failed`/`failedCustomerIds` instead. That's the right behavior
+        // for the batch itself, but a job that silently drops customers
+        // must still be visible to ops: re-throw here so BullMQ retries the
+        // JOB and `onFailed` logs/alerts, same as the pre-D7 throw-on-first-
+        // error behavior did. The manual HTTP path (BillingController#run)
+        // deliberately does NOT do this — it returns the result object
+        // as-is so a human operator can read `failed`/`failedCustomerIds`
+        // directly in the response instead of an opaque error.
+        if (result.failed > 0) {
+          throw new Error(
+            `billing run: ${result.failed} customer(s) failed: ${result.failedCustomerIds.join(', ')}`,
+          );
+        }
         return;
-      case SCHEDULER_JOBS.billingIsolirOverdue.name:
-        await this.billing.isolirOverdue();
+      }
+      case SCHEDULER_JOBS.billingIsolirOverdue.name: {
+        const result = await this.billing.isolirOverdue();
+        // H1: same reasoning as billingRun above — isolateActiveDebtors()
+        // is resilient per-customer (D7); re-throw at the job boundary so a
+        // partially-failed isolir sweep still retries + alerts instead of
+        // silently under-enforcing. BillingController#isolirOverdue (the
+        // manual HTTP path) keeps returning the result object as-is.
+        if (result.failed > 0) {
+          throw new Error(
+            `isolir sweep: ${result.failed} customer(s) failed: ${result.failedCustomerIds.join(', ')}`,
+          );
+        }
         return;
+      }
       case SCHEDULER_JOBS.billingDunning.name:
         await this.billing.remind({});
         return;
