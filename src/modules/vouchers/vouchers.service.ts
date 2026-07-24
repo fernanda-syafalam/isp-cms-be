@@ -19,10 +19,10 @@ export class VouchersService {
     private readonly repo: VouchersRepository,
     // Resolve the buyer + credit their bill when a voucher is sold at a loket.
     private readonly customers: CustomersRepository,
-    // Validates an incoming resellerId FK before it reaches the DB (P3.D.3,
-    // mirrors CustomersService.requireResellerIfProvided, P3.D.2). The actual
-    // ledger write on redeem happens inside VouchersRepository.settle's own
-    // transaction — this repo is only used for the pre-flight existence check.
+    // Validates an incoming resellerId FK before it reaches the DB, used only
+    // by `generateBatch` (mirrors CustomersService.requireResellerIfProvided,
+    // P3.D.2). NOT used by `redeem` — ADR-0018 decision #2 (reseller OFF
+    // day-1) / ABUSE-2 removed the redeem-time resellerId entirely.
     private readonly resellers: ResellersRepository,
   ) {}
 
@@ -58,15 +58,15 @@ export class VouchersService {
    * `customerName` it is a sale to that subscriber (their outstanding
    * balance is credited by the voucher's face value, floored at zero, and
    * the redemption is linked to them). Without one it is an anonymous
-   * hotspot redemption — status only, no billing effect. When a reseller is
-   * attributed (the `resellerId` override, or the voucher's own minted-batch
-   * reseller) and their commission rate is > 0, a commission ledger entry is
-   * posted. All four writes happen atomically in
-   * `VouchersRepository.settle` — this service only resolves the
-   * human-supplied `customerName` into a customer id before delegating.
+   * hotspot redemption — status only, no billing effect. Both writes happen
+   * atomically in `VouchersRepository.settle` — this service only resolves
+   * the human-supplied `customerName` into a customer id before delegating.
+   *
+   * ADR-0018 decision #2 (reseller OFF day-1) / ABUSE-2: redeem never posts a
+   * reseller commission and never takes a `resellerId` from the caller — see
+   * `RedeemVoucherSchema` and `VouchersRepository.settle`.
    */
   async redeem(id: string, input: RedeemVoucherInput = {}): Promise<VoucherResponse> {
-    await this.requireResellerIfProvided(input.resellerId);
     const customerId = input.customerName
       ? await this.customers.findIdByFullName(input.customerName)
       : null;
@@ -74,7 +74,6 @@ export class VouchersService {
     await this.repo.settle(id, {
       redeemedCustomerId: customerId,
       usedBy: input.customerName ?? null,
-      resellerId: input.resellerId ?? null,
     });
 
     // Re-read through the joined view so the response carries resellerName
