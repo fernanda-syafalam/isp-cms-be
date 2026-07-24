@@ -36,13 +36,14 @@ export class BillingAutomationService {
     private readonly settings: SettingsService,
   ) {}
 
-  /** Mark overdue + apply late fee, then suspend active debtors. */
+  /** Mark overdue + apply late fee, then suspend active debtors past grace. */
   async isolirOverdue(): Promise<IsolirResult> {
-    const { lateFeeIdr } = await this.settings.getBillingPolicy();
+    const { lateFeeIdr, isolirGraceDays } = await this.settings.getBillingPolicy();
     const markedOverdue = await this.repo.markOverduePastDue(lateFeeIdr);
-    const isolated = await this.isolateActiveDebtors();
-    this.logger.log({ markedOverdue, isolated }, 'billing isolir-overdue');
-    return { markedOverdue, isolated };
+    const { isolated, failed, failedCustomerIds } =
+      await this.isolateActiveDebtors(isolirGraceDays);
+    this.logger.log({ markedOverdue, isolated, failed }, 'billing isolir-overdue');
+    return { markedOverdue, isolated, failed, failedCustomerIds };
   }
 
   /** Send dunning. With explicit ids: those unpaid; otherwise all overdue. */
@@ -78,8 +79,8 @@ export class BillingAutomationService {
 
   /** Run the full cycle: bill -> mark overdue -> dun -> auto-isolir. */
   async schedulerRun(): Promise<SchedulerRunResult> {
-    const { period, created } = await this.invoices.run();
-    const { lateFeeIdr } = await this.settings.getBillingPolicy();
+    const { period, created, failed: billingFailed } = await this.invoices.run();
+    const { lateFeeIdr, isolirGraceDays } = await this.settings.getBillingPolicy();
     await this.repo.markOverduePastDue(lateFeeIdr);
     const remindedUpcoming = await this.repo.markRemindedDueSoon(REMIND_UPCOMING_DAYS);
     const remindedOverdue = await this.repo.markRemindedOverdue();
@@ -89,9 +90,20 @@ export class BillingAutomationService {
       await this.repo.customerIdsWithPendingDueSoon(REMIND_UPCOMING_DAYS),
     );
     await this.dispatchDunning('overdue', await this.repo.customerIdsWithOverdue());
-    const isolated = await this.isolateActiveDebtors();
-    this.logger.log({ period, created, isolated }, 'billing scheduler run');
-    return { period, created, remindedUpcoming, remindedOverdue, isolated };
+    const { isolated, failed: isolationFailed } = await this.isolateActiveDebtors(isolirGraceDays);
+    this.logger.log(
+      { period, created, billingFailed, isolated, isolationFailed },
+      'billing scheduler run',
+    );
+    return {
+      period,
+      created,
+      billingFailed,
+      remindedUpcoming,
+      remindedOverdue,
+      isolated,
+      isolationFailed,
+    };
   }
 
   // Enqueue one WhatsApp dunning message per customer in the cohort. The job id
@@ -139,10 +151,14 @@ export class BillingAutomationService {
     }
   }
 
-  // Suspend (isolir) only currently-active customers that have an overdue
-  // invoice, refreshing their outstanding balance. Returns how many moved.
-  private async isolateActiveDebtors(): Promise<number> {
-    const ids = await this.repo.customerIdsWithOverdue();
+  // Suspend (isolir) only currently-active customers whose oldest overdue
+  // invoice is past due by more than the configured grace period (D2),
+  // refreshing their outstanding balance. Returns how many moved, plus how
+  // many failed (D7: one bad record must never abort the rest of the sweep).
+  private async isolateActiveDebtors(
+    graceDays: number,
+  ): Promise<{ isolated: number; failed: number; failedCustomerIds: string[] }> {
+    const ids = await this.repo.customerIdsIsolirEligible(graceDays);
     const period = currentPeriodStart();
     // R6-DB-2: same batched-fetch-then-loop-side-effects shape as
     // dispatchDunning above. A deleted-mid-run id is simply absent from
@@ -154,18 +170,27 @@ export class BillingAutomationService {
     ]);
     const customersById = new Map(customersRows.map((c) => [c.id, c]));
     let isolated = 0;
+    const failedCustomerIds: string[] = [];
     for (const id of ids) {
       const customer = customersById.get(id);
-      if (customer?.status === 'aktif') {
+      if (customer?.status !== 'aktif') continue;
+      try {
         // Missing key = 0, mirroring sumUnpaidByCustomer's coalesce(...,0).
         const outstanding = outstandingByCustomer.get(id) ?? 0;
+        // M1 (fail-closed ordering): enforce on the router BEFORE flipping
+        // the DB status. If applyDisabledForCustomer throws (e.g. a
+        // Mikrotik outage), the customer is left status='aktif' — the next
+        // sweep's customerIdsIsolirEligible/`status === 'aktif'` check picks
+        // them up again and retries the disable. The old order (DB flip
+        // first) could leave a customer status='isolir' but still online
+        // forever, since every later sweep's `status === 'aktif'` guard
+        // would skip them (ADR-0008).
+        await this.secrets.applyDisabledForCustomer(id, true);
         await this.customers.setBilling(id, {
           status: 'isolir',
           outstanding,
           holdReason: 'overdue',
         });
-        // Enforce on the router: disable the customer's PPPoE secret (ADR-0008).
-        await this.secrets.applyDisabledForCustomer(id, true);
         // The exact "overdue → isolir surprise" ADR-0012 was written to
         // prevent: tell the customer they were just cut off. jobId is per
         // customer + month, same granularity as dispatchDunning, so a
@@ -175,9 +200,15 @@ export class BillingAutomationService {
           await this.notifyIsolir(id, customer.fullName, customer.phone, outstanding, period);
         }
         isolated += 1;
+      } catch (err) {
+        // D7: a single customer's DB write or router enforcement failing
+        // (e.g. a Mikrotik outage) must never abort the rest of the nightly
+        // isolir sweep — log, record the failure, and continue.
+        this.logger.error({ customerId: id, err }, 'isolir enforcement failed for customer');
+        failedCustomerIds.push(id);
       }
     }
-    return isolated;
+    return { isolated, failed: failedCustomerIds.length, failedCustomerIds };
   }
 
   // Best-effort (ADR-0012): a queue outage must never abort the isolir

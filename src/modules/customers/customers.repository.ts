@@ -503,10 +503,10 @@ export class CustomersRepository {
    * partly spent." Instead the WHOLE credit is deferred by inserting a
    * pending `sla_credits` row — the exact same pending-absorption
    * mechanism a real SLA credit already uses
-   * (`findPendingByCustomer` -> `resolveSlaDiscount` -> `absorbSlaCredits`),
-   * so a future billing run picks it up in full. The credit the customer
-   * earned is never silently dropped — only ever fully applied now, or
-   * fully deferred.
+   * (`findPendingByCustomer` -> `resolveSlaDiscount` ->
+   * `InvoicesRepository.createBilled`, M2), so a future billing run picks
+   * it up in full. The credit the customer earned is never silently
+   * dropped — only ever fully applied now, or fully deferred.
    */
   private async applyCreditTx(
     tx: DbTx,

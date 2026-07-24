@@ -85,15 +85,27 @@ describe('Money + billing mutating endpoints (e2e)', () => {
     note: null,
   };
 
-  const BILLING_RUN_RESULT: BillingRunResult = { period: '2026-07', created: 3 };
-  const ISOLIR_RESULT: IsolirResult = { markedOverdue: 2, isolated: 1 };
+  const BILLING_RUN_RESULT: BillingRunResult = {
+    period: '2026-07',
+    created: 3,
+    failed: 0,
+    failedCustomerIds: [],
+  };
+  const ISOLIR_RESULT: IsolirResult = {
+    markedOverdue: 2,
+    isolated: 1,
+    failed: 0,
+    failedCustomerIds: [],
+  };
   const REMIND_RESULT: RemindResult = { reminded: 5, channel: 'whatsapp' };
   const SCHEDULER_RUN_RESULT: SchedulerRunResult = {
     period: '2026-07',
     created: 3,
+    billingFailed: 0,
     remindedUpcoming: 2,
     remindedOverdue: 1,
     isolated: 1,
+    isolationFailed: 0,
   };
 
   const PENDING_INTENT: PaymentIntentResponse = {

@@ -8,7 +8,17 @@ import { customers } from '../../infrastructure/database/schema/customers.schema
 import { invoices } from '../../infrastructure/database/schema/invoices.schema';
 import { plans } from '../../infrastructure/database/schema/plans.schema';
 import { applyMigrations } from '../../test-utils/apply-migrations';
+import { SlaCreditsRepository } from '../sla-credits/sla-credits.repository';
 import { InvoicesRepository } from './invoices.repository';
+
+// `YYYY-MM-DD` for `n` days before today, in UTC — same basis the
+// container's Postgres `current_date` uses (TODO(TIME-1) tracks the
+// separate, known UTC-vs-local skew; not addressed here).
+function sqlDaysAgo(n: number): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - n);
+  return d.toISOString().slice(0, 10);
+}
 
 /**
  * Real Postgres integration test for the billing-automation repo methods
@@ -47,7 +57,8 @@ describe('InvoicesRepository billing-automation (integration)', () => {
     if (!customer) throw new Error('customer seed failed');
     customerId = customer.id;
 
-    repo = new InvoicesRepository({ db } as unknown as DrizzleService);
+    const drizzleService = { db } as unknown as DrizzleService;
+    repo = new InvoicesRepository(drizzleService, new SlaCreditsRepository(drizzleService));
   }, 60_000);
 
   afterAll(async () => {
@@ -90,6 +101,78 @@ describe('InvoicesRepository billing-automation (integration)', () => {
 
     // the overdue one now carries the late fee + total includes it
     expect(await repo.sumUnpaidByCustomer(customerId)).toBe(200_000 + 25_000 + 200_000);
+  });
+
+  // D2: isolir eligibility must respect the configured grace period —
+  // dueDate + graceDays < today, evaluated against the real Postgres
+  // `current_date` (not JS date math).
+  it('customerIdsIsolirEligible only returns customers past grace, not customers still within it', async () => {
+    const graceDays = 3;
+    await db.insert(invoices).values([
+      {
+        // Due 2 days ago: within the 3-day grace window -> NOT eligible.
+        customerId,
+        customerName: 'Budi',
+        periodStart: '2026-04-01',
+        periodEnd: '2026-04-30',
+        amount: 200_000,
+        dueDate: sqlDaysAgo(2),
+        status: 'overdue',
+      },
+    ]);
+    expect(await repo.customerIdsIsolirEligible(graceDays)).toEqual([]);
+
+    await db.delete(invoices);
+    await db.insert(invoices).values([
+      {
+        // Due 5 days ago: beyond the 3-day grace window -> eligible.
+        customerId,
+        customerName: 'Budi',
+        periodStart: '2026-04-01',
+        periodEnd: '2026-04-30',
+        amount: 200_000,
+        dueDate: sqlDaysAgo(5),
+        status: 'overdue',
+      },
+    ]);
+    expect(await repo.customerIdsIsolirEligible(graceDays)).toEqual([customerId]);
+  });
+
+  // D2 off-by-one lock: the comparison is `dueDate + graceDays < current_date`
+  // (strict), not `<=`. With grace=3, a due date exactly 3 days ago lands ON
+  // the boundary (dueDate + 3 == today) and must NOT be eligible yet; 4 days
+  // ago is the first day past the boundary and must be eligible.
+  it('customerIdsIsolirEligible treats the exact grace boundary as strict-less-than', async () => {
+    const graceDays = 3;
+
+    await db.insert(invoices).values([
+      {
+        // Due exactly 3 days ago: dueDate + graceDays == today -> NOT eligible.
+        customerId,
+        customerName: 'Budi',
+        periodStart: '2026-04-01',
+        periodEnd: '2026-04-30',
+        amount: 200_000,
+        dueDate: sqlDaysAgo(3),
+        status: 'overdue',
+      },
+    ]);
+    expect(await repo.customerIdsIsolirEligible(graceDays)).toEqual([]);
+
+    await db.delete(invoices);
+    await db.insert(invoices).values([
+      {
+        // Due 4 days ago: dueDate + graceDays == today - 1 < today -> eligible.
+        customerId,
+        customerName: 'Budi',
+        periodStart: '2026-04-01',
+        periodEnd: '2026-04-30',
+        amount: 200_000,
+        dueDate: sqlDaysAgo(4),
+        status: 'overdue',
+      },
+    ]);
+    expect(await repo.customerIdsIsolirEligible(graceDays)).toEqual([customerId]);
   });
 
   it('markRemindedOverdue stamps last_reminded_at on overdue invoices', async () => {

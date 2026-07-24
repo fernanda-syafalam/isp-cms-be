@@ -56,12 +56,12 @@ describe('PaymentIntentsService.settleFromGateway — concurrent delivery (integ
     await applyMigrations(pool);
 
     const drizzleService = { db } as unknown as DrizzleService;
-    invoicesRepo = new InvoicesRepository(drizzleService);
+    const slaCreditsRepo = new SlaCreditsRepository(drizzleService);
+    invoicesRepo = new InvoicesRepository(drizzleService, slaCreditsRepo);
     paymentIntentsRepo = new PaymentIntentsRepository(drizzleService);
     const customersRepo = new CustomersRepository(drizzleService);
     const secretsRepo = new SecretsRepository(drizzleService);
     const resellersRepo = new ResellersRepository(drizzleService);
-    const slaCreditsRepo = new SlaCreditsRepository(drizzleService);
     // Never exercised by pay()/settleFromGateway() — see file doc comment.
     const settingsStub = {} as unknown as SettingsService;
     const notificationsStub = {

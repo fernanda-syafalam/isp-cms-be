@@ -170,9 +170,9 @@ export class SlaCreditsRepository {
    * future invoice is not a code path that exists. Instead the credit is
    * left `status: 'pending'`, UNTOUCHED — the exact same pending-absorption
    * mechanism (`findPendingByCustomer` -> `resolveSlaDiscount` ->
-   * `absorbSlaCredits`, `invoices.service.ts`) a newly-created credit
-   * already relies on, so a future billing run picks it up in full. A
-   * credit the customer earned is never silently consumed for nothing.
+   * `InvoicesRepository.createBilled`, M2) a newly-created credit already
+   * relies on, so a future billing run picks it up in full. A credit the
+   * customer earned is never silently consumed for nothing.
    *
    * `SELECT ... FOR UPDATE` locks this credit row first (idempotency
    * re-check, defense in depth — the service already guards this), then
@@ -295,10 +295,22 @@ export class SlaCreditsRepository {
    * (P3.A.4): transitions them straight to 'applied' and stamps the invoice
    * that absorbed them, in one statement so a billing-run retry cannot
    * double-apply. No-op for an empty batch.
+   *
+   * Optional `executor` (M2, dedup follow-up): pass the caller's open `tx`
+   * handle to run this UPDATE as part of a LARGER transaction instead of
+   * its own — `InvoicesRepository.createBilled` does this so the new
+   * invoice, the credit absorption, and the outstanding refresh commit (or
+   * roll back) together. Defaults to `this.db` (its own implicit
+   * transaction) for every other caller. This is the one place the
+   * 'applied' SET shape is written — do not duplicate it elsewhere.
    */
-  async markAppliedWithInvoice(ids: string[], invoiceId: string): Promise<number> {
+  async markAppliedWithInvoice(
+    ids: string[],
+    invoiceId: string,
+    executor: Db | DbTx = this.db,
+  ): Promise<number> {
     if (ids.length === 0) return 0;
-    const result = await this.db
+    const result = await executor
       .update(slaCredits)
       .set({
         status: 'applied',

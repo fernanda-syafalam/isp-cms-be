@@ -15,6 +15,11 @@ export class RemindDto extends createZodDto(RemindSchema) {}
 export const IsolirResultSchema = z.object({
   markedOverdue: z.number().int().nonnegative(),
   isolated: z.number().int().nonnegative(),
+  // D7: one bad customer record must never abort the rest of the isolir
+  // sweep — surfaced here so an operator/metric sees partial-batch failures
+  // instead of a silently-truncated batch.
+  failed: z.number().int().nonnegative(),
+  failedCustomerIds: z.array(z.uuid()),
 });
 export type IsolirResult = z.infer<typeof IsolirResultSchema>;
 export class IsolirResultDto extends createZodDto(IsolirResultSchema) {}
@@ -41,9 +46,15 @@ export class SchedulerPreviewDto extends createZodDto(SchedulerPreviewSchema) {}
 export const SchedulerRunResultSchema = z.object({
   period: z.string(),
   created: z.number().int().nonnegative(),
+  // D7: aggregated from BillingRunResult['failed'] (invoices.run()) — a
+  // failed invoice-creation for one customer never aborts the rest of the
+  // nightly cycle.
+  billingFailed: z.number().int().nonnegative(),
   remindedUpcoming: z.number().int().nonnegative(),
   remindedOverdue: z.number().int().nonnegative(),
   isolated: z.number().int().nonnegative(),
+  // D7: aggregated from IsolirResult['failed'] (isolateActiveDebtors()).
+  isolationFailed: z.number().int().nonnegative(),
 });
 export type SchedulerRunResult = z.infer<typeof SchedulerRunResultSchema>;
 export class SchedulerRunResultDto extends createZodDto(SchedulerRunResultSchema) {}
