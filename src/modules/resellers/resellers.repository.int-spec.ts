@@ -204,6 +204,22 @@ describe('ResellersRepository (integration)', () => {
     ).rejects.toThrow();
   });
 
+  // DB-4: `commission_pct` is now `numeric(6, 5)` (was `real`/float4). 0.055
+  // has no exact float4 representation but is exact in base-10 numeric, and
+  // the drizzle `mode: 'number'` mapping must return a JS `number`, not a
+  // string, all the way through the repository (a missed cast here turns
+  // `amount * commissionPct` into `NaN`/string-concat at the invoice/voucher
+  // commission call sites).
+  it('a commission rate inexact in float4 (0.055) round-trips exactly as a number', async () => {
+    const r = await seed({ commissionPct: 0.055 });
+    expect(r.commissionPct).toBe(0.055);
+    expect(typeof r.commissionPct).toBe('number');
+
+    const updated = await repo.update(r.id, { commissionPct: 0.055 });
+    expect(updated.commissionPct).toBe(0.055);
+    expect(typeof updated.commissionPct).toBe('number');
+  });
+
   it('credits and debits the balance atomically with a running ledger', async () => {
     const r = await seed({ balance: 0 });
     const afterTopup = await repo.addLedgerEntry(r.id, {
