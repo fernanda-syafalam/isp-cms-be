@@ -11,7 +11,7 @@ import {
   invoices,
   payments,
 } from '../../infrastructure/database/schema/invoices.schema';
-import { slaCredits } from '../../infrastructure/database/schema/sla-credits.schema';
+import { SlaCreditsRepository } from '../sla-credits/sla-credits.repository';
 import type { InvoiceListResponse, InvoiceSummary } from './dto/invoice-response.dto';
 import type { PaymentReconciliation } from './dto/payment-reconciliation.dto';
 
@@ -73,7 +73,15 @@ const NOT_YET_OVERDUE_STATUSES = ['pending', 'partial'] as const;
  */
 @Injectable()
 export class InvoicesRepository {
-  constructor(private readonly drizzle: DrizzleService) {}
+  constructor(
+    private readonly drizzle: DrizzleService,
+    // M2 dedup follow-up: createBilled delegates the SLA-credit 'applied'
+    // write to SlaCreditsRepository's own tx-accepting
+    // markAppliedWithInvoice (passing this transaction's `tx` handle) so
+    // that SET shape has exactly one owner — mirrors InvoicesService's
+    // identical injection for the read side (resolveSlaDiscount).
+    private readonly slaCredits: SlaCreditsRepository,
+  ) {}
 
   private get db() {
     return this.drizzle.db;
@@ -183,11 +191,17 @@ export class InvoicesRepository {
    * would then skip that customer on every retry (the invoice already
    * "exists" for the period, so the next run never revisits it).
    *
-   * Same deliberate "one repository per table" exception `recordPayment` /
-   * `SlaCreditsRepository.applyWithInvoiceCredit` document: this reaches
-   * into `sla_credits` and `customers` directly so both stay inside the new
-   * invoice's transaction. `creditIds` is empty for most customers (no
-   * pending SLA credit) — the credit UPDATE is skipped entirely then.
+   * The credit absorption itself is NOT re-implemented here (dedup
+   * follow-up, PR review): it calls back into the injected
+   * `SlaCreditsRepository.markAppliedWithInvoice`, passing this
+   * transaction's `tx` handle, so the 'applied' SET shape keeps exactly one
+   * owner. Only the `customers.outstanding` refresh is the deliberate "one
+   * repository per table" exception `recordPayment` /
+   * `SlaCreditsRepository.applyWithInvoiceCredit` document — reached into
+   * directly so it stays inside the new invoice's transaction. `creditIds`
+   * is empty for most customers (no pending SLA credit) — the credit
+   * UPDATE is a no-op then (see `markAppliedWithInvoice`'s own empty-array
+   * guard).
    */
   async createBilled(input: NewInvoice, creditIds: string[]): Promise<Invoice> {
     return this.db.transaction(async (tx) => {
@@ -196,17 +210,7 @@ export class InvoicesRepository {
         throw new Error('invoices.insert returned no row');
       }
 
-      if (creditIds.length > 0) {
-        await tx
-          .update(slaCredits)
-          .set({
-            status: 'applied',
-            appliedInvoiceId: invoice.id,
-            appliedAt: sql`now()`,
-            updatedAt: sql`now()`,
-          })
-          .where(and(inArray(slaCredits.id, creditIds), eq(slaCredits.status, 'pending')));
-      }
+      await this.slaCredits.markAppliedWithInvoice(creditIds, invoice.id, tx);
 
       // Reuses the same helper `recordPayment` uses — see its doc. The
       // reactivate-if-isolir branch it also computes is a no-op here in

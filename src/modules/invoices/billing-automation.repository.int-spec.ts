@@ -8,6 +8,7 @@ import { customers } from '../../infrastructure/database/schema/customers.schema
 import { invoices } from '../../infrastructure/database/schema/invoices.schema';
 import { plans } from '../../infrastructure/database/schema/plans.schema';
 import { applyMigrations } from '../../test-utils/apply-migrations';
+import { SlaCreditsRepository } from '../sla-credits/sla-credits.repository';
 import { InvoicesRepository } from './invoices.repository';
 
 // `YYYY-MM-DD` for `n` days before today, in UTC — same basis the
@@ -56,7 +57,8 @@ describe('InvoicesRepository billing-automation (integration)', () => {
     if (!customer) throw new Error('customer seed failed');
     customerId = customer.id;
 
-    repo = new InvoicesRepository({ db } as unknown as DrizzleService);
+    const drizzleService = { db } as unknown as DrizzleService;
+    repo = new InvoicesRepository(drizzleService, new SlaCreditsRepository(drizzleService));
   }, 60_000);
 
   afterAll(async () => {
@@ -130,6 +132,43 @@ describe('InvoicesRepository billing-automation (integration)', () => {
         periodEnd: '2026-04-30',
         amount: 200_000,
         dueDate: sqlDaysAgo(5),
+        status: 'overdue',
+      },
+    ]);
+    expect(await repo.customerIdsIsolirEligible(graceDays)).toEqual([customerId]);
+  });
+
+  // D2 off-by-one lock: the comparison is `dueDate + graceDays < current_date`
+  // (strict), not `<=`. With grace=3, a due date exactly 3 days ago lands ON
+  // the boundary (dueDate + 3 == today) and must NOT be eligible yet; 4 days
+  // ago is the first day past the boundary and must be eligible.
+  it('customerIdsIsolirEligible treats the exact grace boundary as strict-less-than', async () => {
+    const graceDays = 3;
+
+    await db.insert(invoices).values([
+      {
+        // Due exactly 3 days ago: dueDate + graceDays == today -> NOT eligible.
+        customerId,
+        customerName: 'Budi',
+        periodStart: '2026-04-01',
+        periodEnd: '2026-04-30',
+        amount: 200_000,
+        dueDate: sqlDaysAgo(3),
+        status: 'overdue',
+      },
+    ]);
+    expect(await repo.customerIdsIsolirEligible(graceDays)).toEqual([]);
+
+    await db.delete(invoices);
+    await db.insert(invoices).values([
+      {
+        // Due 4 days ago: dueDate + graceDays == today - 1 < today -> eligible.
+        customerId,
+        customerName: 'Budi',
+        periodStart: '2026-04-01',
+        periodEnd: '2026-04-30',
+        amount: 200_000,
+        dueDate: sqlDaysAgo(4),
         status: 'overdue',
       },
     ]);

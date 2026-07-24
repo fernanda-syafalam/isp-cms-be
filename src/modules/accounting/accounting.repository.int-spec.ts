@@ -8,6 +8,7 @@ import { customers } from '../../infrastructure/database/schema/customers.schema
 import { invoices } from '../../infrastructure/database/schema/invoices.schema';
 import { plans } from '../../infrastructure/database/schema/plans.schema';
 import { InvoicesRepository } from '../invoices/invoices.repository';
+import { SlaCreditsRepository } from '../sla-credits/sla-credits.repository';
 
 /**
  * Real Postgres integration test for the accounting seam
@@ -81,7 +82,12 @@ describe('Accounting seam — InvoicesRepository.findPaidInPeriod (integration)'
     if (!customer) throw new Error('customer seed failed');
     customerId = customer.id;
 
-    repo = new InvoicesRepository({ db } as unknown as DrizzleService);
+    // This suite never calls createBilled — sla_credits isn't even part of
+    // this file's hand-mirrored DDL — but InvoicesRepository now requires
+    // an SlaCreditsRepository collaborator (M2 dedup follow-up), so it
+    // still needs a real instance to construct.
+    const drizzleService = { db } as unknown as DrizzleService;
+    repo = new InvoicesRepository(drizzleService, new SlaCreditsRepository(drizzleService));
   }, 60_000);
 
   afterAll(async () => {

@@ -10,6 +10,7 @@ import { invoices, payments } from '../../infrastructure/database/schema/invoice
 import { plans } from '../../infrastructure/database/schema/plans.schema';
 import { slaCredits } from '../../infrastructure/database/schema/sla-credits.schema';
 import { applyMigrations } from '../../test-utils/apply-migrations';
+import { SlaCreditsRepository } from '../sla-credits/sla-credits.repository';
 import { InvoicesRepository } from './invoices.repository';
 
 /**
@@ -51,7 +52,11 @@ describe('InvoicesRepository (integration)', () => {
     if (!customer) throw new Error('customer seed failed');
     customerId = customer.id;
 
-    repo = new InvoicesRepository({ db } as unknown as DrizzleService);
+    // createBilled (M2) delegates credit absorption to a real
+    // SlaCreditsRepository instance, sharing this test's db — its own
+    // markAppliedWithInvoice int-spec lives in sla-credits.repository.int-spec.ts.
+    const drizzleService = { db } as unknown as DrizzleService;
+    repo = new InvoicesRepository(drizzleService, new SlaCreditsRepository(drizzleService));
   }, 60_000);
 
   afterAll(async () => {
