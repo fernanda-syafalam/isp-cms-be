@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { sql } from 'drizzle-orm';
 import { type NodePgDatabase, drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
+import { WIB_TIMEZONE } from '../../common/utils/wib-date';
 import type { AppConfig } from '../../config/configuration';
 import * as schema from './schema';
 
@@ -27,6 +28,28 @@ export class DrizzleService implements OnModuleInit, OnModuleDestroy {
     this.pool = new Pool({
       connectionString: this.config.get('app.database.url', { infer: true }),
       max: this.config.get('app.database.poolSize', { infer: true }),
+      // TIME-1 layer 2: pin the Postgres SESSION timezone to Asia/Jakarta
+      // explicitly, on every physical connection this pool opens. This is
+      // a *separate* fix from setting `TZ=Asia/Jakarta` on the container
+      // (layer 1, Dockerfile/compose) — the container's TZ only affects
+      // the Node process's own clock (`new Date()`), it does NOT change
+      // what a managed Postgres server considers `current_date`/`now()` to
+      // be, since that is governed by the connection's own session
+      // TimeZone setting, not the client's OS. SQL like
+      // `invoices.repository.ts`'s `dueDate + graceDays < current_date`
+      // (isolir eligibility) was silently evaluating `current_date`
+      // against whatever the DB server's own default TimeZone happens to
+      // be (UTC on most managed Postgres) — never explicit, never
+      // guaranteed to match the business's WIB clock.
+      //
+      // `options: '-c timezone=...'` is sent as a libpq startup parameter,
+      // so it applies to every connection in the pool at connect time —
+      // no extra query, no `pool.on('connect', ...)` listener to keep in
+      // sync, and it can't be silently skipped if a caller reuses a
+      // connection. Verified against a real Postgres 16 container: `SHOW
+      // timezone` / `current_setting('TIMEZONE')` both read back
+      // 'Asia/Jakarta', and `current_date` reflects the WIB calendar day.
+      options: `-c timezone=${WIB_TIMEZONE}`,
       // Send TCP keepalives. The managed Postgres is reached through the
       // Docker Swarm overlay VIP, whose IPVS load balancer silently drops
       // idle TCP flows. Without keepalives node-postgres keeps handing out a

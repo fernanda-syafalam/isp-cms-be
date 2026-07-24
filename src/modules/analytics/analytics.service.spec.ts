@@ -205,6 +205,37 @@ describe('AnalyticsService', () => {
       expect(result.slaCompliance).toBe(1);
       expect(result.commandCenter.churnRate).toBe(0);
     });
+
+    // TIME-1 regression: the pure-function proof lives in wib-date.spec.ts;
+    // this asserts the same boundary end-to-end through getDashboard()'s
+    // arAging output, using the real `new Date()` clock (via fake timers)
+    // instead of an injected instant.
+    it('buckets an invoice due "yesterday UTC" as overdue when it is already past midnight WIB (TIME-1)', async () => {
+      // 18:00 UTC = 01:00 WIB the next day — the due date is still "today"
+      // by the UTC clock but already 1 day overdue on the WIB calendar the
+      // business runs on.
+      vi.setSystemTime(new Date('2026-07-23T18:00:00.000Z'));
+      invoices.listUnpaid.mockResolvedValue([
+        {
+          status: 'overdue',
+          amount: 100_000,
+          lateFee: 5_000,
+          taxAmount: 11_000,
+          discountAmount: 0,
+          paidAmount: 0,
+          dueDate: '2026-07-23',
+        },
+      ]);
+
+      const result = await service.getDashboard();
+
+      expect(result.arAging).toEqual([
+        { bucket: 'Belum jatuh tempo', amount: 0 },
+        { bucket: '1–30 hari', amount: 116_000 },
+        { bucket: '31–60 hari', amount: 0 },
+        { bucket: '> 60 hari', amount: 0 },
+      ]);
+    });
   });
 
   describe('getReports', () => {

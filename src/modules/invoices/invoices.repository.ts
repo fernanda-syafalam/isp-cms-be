@@ -527,6 +527,12 @@ export class InvoicesRepository {
   }
 
   // --- Billing automation ---------------------------------------------
+  //
+  // TIME-1: every `current_date`/`now()` in this section is a Postgres-side
+  // SQL literal, evaluated against the connection's SESSION timezone — see
+  // `customerIdsIsolirEligible`'s doc comment for why that's a distinct fix
+  // from the Node-process `TZ` env var, and `drizzle.service.ts` for where
+  // the session timezone is actually pinned to Asia/Jakarta.
 
   /**
    * Flip pending/partial invoices past their due date to overdue + apply
@@ -620,9 +626,18 @@ export class InvoicesRepository {
    * (smaller dueDate) clears it too. This intentionally does not change
    * `markOverduePastDue`/`customerIdsWithOverdue` (dunning still fires as
    * soon as an invoice is overdue) — only isolir selection respects grace.
-   * TODO(TIME-1): `current_date` is evaluated in the container's UTC clock,
-   * same known basis as the other date comparisons in this file — not
-   * fixed here.
+   * TIME-1 (fixed): `current_date`/`now()` here (and in the rest of this
+   * file's overdue/reminder/isolir queries) are evaluated against the
+   * connection's Postgres SESSION timezone, which `DrizzleService` now
+   * pins explicitly to Asia/Jakarta at connect time (`options: '-c
+   * timezone=...'`) — see that file's doc comment. Before that fix,
+   * `current_date` silently fell back to the DB server's own default
+   * timezone (typically UTC on a managed Postgres), which is a *different*
+   * bug from the Node-process TZ issue: setting `TZ=Asia/Jakarta` on the
+   * container does NOT change what a remote Postgres server considers
+   * `current_date` to be — that's governed purely by the session's
+   * TimeZone GUC. An int-spec asserting the session timezone lives in
+   * `drizzle.service.timezone.int-spec.ts`.
    */
   async customerIdsIsolirEligible(graceDays: number): Promise<string[]> {
     const rows = await this.db

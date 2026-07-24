@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { notifyBestEffort } from '../../common/notifications/notify-best-effort';
 import { formatIdr } from '../../common/utils/format-idr';
+import { wibDateString } from '../../common/utils/wib-date';
 import type { Invoice, Payment } from '../../infrastructure/database/schema/invoices.schema';
 import { CustomersRepository } from '../customers/customers.repository';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -388,15 +389,49 @@ function ppnOf(amount: number, rate: number): number {
   return Math.round(amount * rate);
 }
 
-// --- date helpers (whole-day, UTC) ------------------------------------
+// --- date helpers (whole-day, WIB calendar) ----------------------------
+//
+// TIME-1 (corrected — see the CONFIRMED bug this replaced): this basis is
+// deliberately the WIB (Asia/Jakarta) calendar day, NOT UTC. It used to be
+// UTC and that was itself deliberate — until the billing/isolir/dunning
+// cron (scheduler.constants.ts) started firing with `tz: Asia/Jakarta`.
+// The billing run fires 02:00 WIB on the 1st, which is 19:00 UTC on the
+// LAST day of the previous month — a UTC-based `currentPeriod()` read at
+// that exact instant would return the PREVIOUS month: `existsForPeriod`
+// would already be true (idempotency check for a period that never
+// actually got billed), 0 invoices would be created, and `dueDateFor`
+// would derive a due date in the past, making the (non-existent) invoice
+// immediately overdue/isolir-eligible. Every function below goes through
+// `wibDateString`/a WIB calendar-day anchor instead of raw `getUTC*` on
+// `now` for exactly this reason.
+//
+// billing-automation.service.ts's currentPeriodStart() MUST stay on this
+// same WIB basis — see that function's doc comment. Both sides must agree
+// with each other AND with the WIB cron trigger, the WIB Postgres session
+// `current_date` (drizzle.service.ts), and the WIB grace/aging math
+// (wib-date.ts) — moving only one of them out of sync reintroduces this
+// bug in a different shape.
+//
+// Pre-go-live note: no production invoices exist yet, so this is not a
+// data migration — it only changes how *future* dueDate/periodStart
+// values are computed, which is TIME-1's whole intent.
+
+// Midnight UTC representing `now`'s WIB calendar day — a pure calendar-date
+// value (no time-of-day), safe input for the getUTC*-based arithmetic below
+// (`addDays`/`isoDate`/`Date.UTC`), which only ever needs to reason about
+// calendar days, never instants.
+function wibDateAnchor(now: Date): Date {
+  return new Date(`${wibDateString(now)}T00:00:00.000Z`);
+}
 
 function currentPeriod(now: Date): {
   periodStart: string;
   periodEnd: string;
   periodLabel: string;
 } {
-  const year = now.getUTCFullYear();
-  const month = now.getUTCMonth(); // 0-based
+  const anchor = wibDateAnchor(now);
+  const year = anchor.getUTCFullYear();
+  const month = anchor.getUTCMonth(); // 0-based
   const mm = String(month + 1).padStart(2, '0');
   const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
   return {
@@ -422,7 +457,8 @@ function isoDate(date: Date): string {
  * Invoice due date (P3.A.4): when the customer has a `billingAnchorDay`,
  * the due date is that day-of-month (clamped 1..28, since not every month
  * has a 29th-31st) within the billing period being invoiced. Otherwise it
- * falls back to the settings `dueDays` policy, `dueDays` after `now`.
+ * falls back to the settings `dueDays` policy, `dueDays` after `now`'s WIB
+ * calendar day (TIME-1 — see this section's doc comment).
  */
 function dueDateFor(
   billingAnchorDay: number | null,
@@ -431,7 +467,11 @@ function dueDateFor(
   fallbackDueDays: number,
 ): string {
   if (billingAnchorDay == null) {
-    return isoDate(addDays(now, fallbackDueDays));
+    // TIME-1: anchor on `now`'s WIB calendar day first, not the raw instant
+    // — see this section's doc comment for why (`addDays`/`isoDate` are
+    // pure getUTC* calendar arithmetic and only correct given a calendar
+    // anchor, not an arbitrary instant).
+    return isoDate(addDays(wibDateAnchor(now), fallbackDueDays));
   }
   const day = Math.min(28, Math.max(1, billingAnchorDay));
   const [year, month] = periodStart.split('-'); // 'YYYY-MM-01' -> ['YYYY', 'MM', '01']

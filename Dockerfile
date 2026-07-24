@@ -51,7 +51,24 @@ FROM gcr.io/distroless/nodejs${NODE_VERSION}-debian12 AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production
+# TIME-1 layer 1: the business (WIB / Asia/Jakarta, UTC+7, no DST) is the
+# process clock, not UTC — without this, `new Date()` and BullMQ's cron
+# scheduler (when a job omits an explicit `tz`, see scheduler.constants.ts)
+# both silently run on the container's UTC clock. Node reads zoneinfo from
+# `/usr/share/zoneinfo`; verified present in this exact base image
+# (gcr.io/distroless/nodejs22-debian12) by running it with
+# `-e TZ=Asia/Jakarta` and checking `Intl.DateTimeFormat().resolvedOptions().
+# timeZone`. The `COPY --from=build /usr/share/zoneinfo` below is belt-and-
+# suspenders insurance on top of that: if a future base-image bump ever
+# drops zoneinfo, Node does NOT throw for an unresolvable TZ — it silently
+# falls back to UTC, exactly the bug this fixes, and neither
+# `drizzle.service.timezone.int-spec.ts` nor `wib-date.spec.ts` would catch
+# that regression (both are deliberately TZ-independent — see wib-date.ts).
+# The `build` stage (node:22-bookworm-slim) already carries `tzdata`, so
+# this COPY is free (no extra install).
+ENV TZ=Asia/Jakarta
 
+COPY --from=build /usr/share/zoneinfo /usr/share/zoneinfo
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/drizzle ./drizzle

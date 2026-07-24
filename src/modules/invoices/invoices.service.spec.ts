@@ -565,6 +565,67 @@ describe('InvoicesService', () => {
       );
     });
 
+    // TIME-1 regression: the billing cron now fires with `tz: Asia/Jakarta`
+    // (scheduler.constants.ts), so '0 2 1 * *' fires at 2026-08-01 02:00
+    // WIB — which is 2026-07-31T19:00:00Z. A UTC-based currentPeriod() read
+    // at that instant would wrongly return period '2026-07' (existsForPeriod
+    // would already be true for July, so 0 invoices get created; and any
+    // that did would get a July — already-past — due date, making them
+    // immediately overdue/isolir-eligible). This is exactly the boundary
+    // case none of the mid-month tests above exercise.
+    it('at the WIB-cron trigger instant (2026-08-01 02:00 WIB), the period is August — not July', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-07-31T19:00:00.000Z'));
+      try {
+        customers.findActiveBillable.mockResolvedValue([
+          { id: 'c1', fullName: 'Ani', planPriceMonthly: 200_000, billingAnchorDay: null },
+        ]);
+        repo.existsForPeriod.mockResolvedValue(false);
+        repo.createBilled.mockResolvedValue({ ...pendingInvoice, id: 'inv-c1', customerId: 'c1' });
+
+        const result = await service.run();
+
+        expect(result.period).toBe('2026-08');
+        expect(repo.existsForPeriod).toHaveBeenCalledWith('c1', '2026-08-01');
+        expect(repo.createBilled).toHaveBeenCalledWith(
+          expect.objectContaining({
+            periodStart: '2026-08-01',
+            periodEnd: '2026-08-31',
+            // Fallback due date (no billingAnchorDay): dueDays=10 after the
+            // WIB calendar day the cron fired on (2026-08-01), not July.
+            dueDate: '2026-08-11',
+          }),
+          [],
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    // Same boundary, but through the billingAnchorDay path (P3.A.4) — this
+    // is the "immediately overdue" half of the bug: a July-past due date on
+    // an invoice that should be for August.
+    it('at the WIB-cron trigger instant, a billingAnchorDay due date lands in August, not July', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-07-31T19:00:00.000Z'));
+      try {
+        customers.findActiveBillable.mockResolvedValue([
+          { id: 'c1', fullName: 'Ani', planPriceMonthly: 200_000, billingAnchorDay: 15 },
+        ]);
+        repo.existsForPeriod.mockResolvedValue(false);
+        repo.createBilled.mockResolvedValue({ ...pendingInvoice, id: 'inv-c1', customerId: 'c1' });
+
+        await service.run();
+
+        expect(repo.createBilled).toHaveBeenCalledWith(
+          expect.objectContaining({ periodStart: '2026-08-01', dueDate: '2026-08-15' }),
+          [],
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     // M2: create + SLA-credit absorption + the outstanding refresh are one
     // repository-owned transaction now (createBilled) — the service just
     // has to call it with the resolved discount/creditIds; the repository's

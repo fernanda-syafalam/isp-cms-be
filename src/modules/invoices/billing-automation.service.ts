@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { formatIdr } from '../../common/utils/format-idr';
+import { wibDateString } from '../../common/utils/wib-date';
 import { CustomersRepository } from '../customers/customers.repository';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SecretEnforcementService } from '../router-resources/secret-enforcement.service';
@@ -246,8 +247,25 @@ export class BillingAutomationService {
   }
 }
 
+// TIME-1 (corrected — see the CONFIRMED bug this replaced): this MUST be
+// the WIB calendar day, not UTC. The billing/isolir/dunning cron
+// (scheduler.constants.ts) now fires with `tz: Asia/Jakarta` — e.g. the
+// billing run fires 02:00 WIB on the 1st, which is 19:00 UTC on the LAST
+// day of the previous month. A UTC-based getUTCMonth()/getUTCFullYear()
+// read at that exact instant returns the PREVIOUS month, so the isolir
+// jobId's period (and any lookup keyed on it) would silently land on the
+// wrong billing period at every month boundary. Using wibDateString(now)
+// instead reads the period the cron itself intends: the WIB calendar day
+// it just fired on.
+//
+// This value is only ever used to build a dedup jobId
+// ("dun:<event>:<id>:<period>" / "isolir:<id>:<period>") and to look up
+// existingRegularForPeriod against invoices.service.ts's
+// InvoicesService.run()/currentPeriod() — see that file's doc comment,
+// which is now ALSO WIB-based. Both sides must stay on the same basis (WIB)
+// or a period rollover could double-send a dunning notice or miss an
+// existing-invoice check.
 function currentPeriodStart(): string {
-  const now = new Date();
-  const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
-  return `${now.getUTCFullYear()}-${mm}-01`;
+  const [year, month] = wibDateString(new Date()).split('-');
+  return `${year}-${month}-01`;
 }

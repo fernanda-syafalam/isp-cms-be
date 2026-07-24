@@ -34,6 +34,13 @@
 x-app-env: &app-env
   NODE_ENV: production
   PORT: "3000"
+  # TIME-1: the business clock is WIB (Asia/Jakarta), not UTC. The
+  # Dockerfile already sets `ENV TZ=Asia/Jakarta` as the image default;
+  # this is belt-and-suspenders (matches the pattern of every other value
+  # here) and lets Dokploy override it per-environment if ever needed.
+  # Applies to api + worker + migrate — the BullMQ cron scheduler (worker)
+  # and any `new Date()` business logic (api) must agree on the same clock.
+  TZ: ${TZ:-Asia/Jakarta}
   DATABASE_URL: ${DATABASE_URL}
   DATABASE_POOL_SIZE: ${DATABASE_POOL_SIZE:-10}
   # Defaults to the co-located isp-redis service. `:-` also wins when the

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { daysBetweenDates, wibDateString } from '../../common/utils/wib-date';
 import type { Invoice } from '../../infrastructure/database/schema/invoices.schema';
 import { CustomersRepository } from '../customers/customers.repository';
 import { DevicesRepository } from '../devices/devices.repository';
@@ -26,7 +27,6 @@ const MONTH_LABELS = [
   'Nov',
   'Dec',
 ] as const;
-const DAY_MS = 86_400_000;
 
 /**
  * Read-only cross-module rollup for the operations dashboard and business
@@ -201,11 +201,15 @@ function fillRevenue(
 }
 
 // Receivable aging from unpaid invoices, bucketed by days past the due date.
+// TIME-1: bucketed against the WIB calendar day, not a raw getTime() diff —
+// see wib-date.ts's doc comment for why a getTime() instant diff against a
+// UTC-midnight-parsed due date is off by a day right around WIB midnight.
 function buildAging(unpaid: Invoice[], now: Date): Array<{ bucket: string; amount: number }> {
   const aging = { future: 0, b30: 0, b60: 0, b60plus: 0 };
+  const today = wibDateString(now);
   for (const inv of unpaid) {
     const total = invoiceBalanceDue(inv);
-    const days = Math.floor((now.getTime() - new Date(inv.dueDate).getTime()) / DAY_MS);
+    const days = daysBetweenDates(inv.dueDate, today);
     if (days <= 0) aging.future += total;
     else if (days <= 30) aging.b30 += total;
     else if (days <= 60) aging.b60 += total;
