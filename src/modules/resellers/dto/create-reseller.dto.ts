@@ -9,10 +9,10 @@ export const CreateResellerSchema = z
   .object({
     name: z.string().trim().min(1).max(120),
     area: z.string().trim().min(1).max(120),
-    // Commission rate as a fraction (e.g. 0.05 = 5%) — matches
-    // resellers.commission_pct; kept permissive to 100 to match the
-    // existing PATCH validation (UpdateResellerSchema).
-    commissionPct: z.number().nonnegative().max(100).default(0),
+    // Commission rate as a fraction (e.g. 0.05 = 5%), 0..1 (ADR-0010).
+    // Bounded to 1 to match the numeric(6,5) column (max 9.99999) — a >1
+    // fraction is both nonsensical (>100%) and would overflow to a DB 500.
+    commissionPct: z.number().nonnegative().max(1).default(0),
     status: z.enum(['active', 'inactive']).optional(),
   })
   .strict();

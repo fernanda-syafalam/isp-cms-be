@@ -1,10 +1,10 @@
 import { sql } from 'drizzle-orm';
 import {
+  decimal,
   index,
   integer,
   pgEnum,
   pgTable,
-  real,
   timestamp,
   uniqueIndex,
   uuid,
@@ -29,7 +29,15 @@ export const resellers = pgTable(
     area: varchar('area', { length: 120 }).notNull(),
     balance: integer('balance').notNull().default(0), // whole IDR
     // Commission rate as a fraction (e.g. 0.05 = 5%).
-    commissionPct: real('commission_pct').notNull().default(0),
+    // DB-4: was `real` (float4) — reseller is dormant after ABUSE-2 but
+    // still read on the batch/attribution path (invoices.service
+    // postResellerCommission / vouchers.repository), so cast it too.
+    // `numeric(6, 5)` + `mode: 'number'` — same rationale as
+    // settings.schema.ts taxPpnRate; the driver-value cast happens at the
+    // column boundary, so `Reseller.commissionPct` stays a plain `number`.
+    commissionPct: decimal('commission_pct', { precision: 6, scale: 5, mode: 'number' })
+      .notNull()
+      .default(0),
     status: resellerStatus('status').notNull().default('active'),
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),

@@ -57,6 +57,30 @@ describe('schema drift guard — real migrations produce the expected money-crit
     return rows[0]?.is_nullable === 'NO';
   }
 
+  async function numericPrecisionScale(
+    table: string,
+    column: string,
+  ): Promise<{ dataType: string; precision: number | null; scale: number | null }> {
+    const { rows } = await pool.query<{
+      data_type: string;
+      numeric_precision: number | null;
+      numeric_scale: number | null;
+    }>(
+      `select data_type, numeric_precision, numeric_scale
+       from information_schema.columns
+       where table_name = $1 and column_name = $2`,
+      [table, column],
+    );
+    if (rows.length === 0) {
+      throw new Error(`column ${table}.${column} not found in the migrated schema`);
+    }
+    return {
+      dataType: rows[0]?.data_type as string,
+      precision: rows[0]?.numeric_precision ?? null,
+      scale: rows[0]?.numeric_scale ?? null,
+    };
+  }
+
   async function hasForeignKey(table: string, column: string, refTable: string): Promise<boolean> {
     const { rows } = await pool.query<{ count: string }>(
       `
@@ -126,6 +150,32 @@ describe('schema drift guard — real migrations produce the expected money-crit
       expect(await isNotNull('reseller_ledger', 'reseller_id')).toBe(true);
       expect(await isNotNull('reseller_ledger', 'amount')).toBe(true);
       expect(await isNotNull('reseller_ledger', 'balance_after')).toBe(true);
+    });
+  });
+
+  describe('DB-4: money-adjacent rate columns are exact numeric, not float4', () => {
+    // Both columns multiply straight into a rupiah amount
+    // (invoices.service.ts `ppnOf` / `postResellerCommission`) — `real`
+    // (float4, ~7 significant digits) risked off-by-one-rupiah error at
+    // boundary rounding. Migration 0054 moved both to `numeric(6, 5)`.
+    it('app_settings.tax_ppn_rate is numeric(6, 5)', async () => {
+      const { dataType, precision, scale } = await numericPrecisionScale(
+        'app_settings',
+        'tax_ppn_rate',
+      );
+      expect(dataType).toBe('numeric');
+      expect(precision).toBe(6);
+      expect(scale).toBe(5);
+    });
+
+    it('resellers.commission_pct is numeric(6, 5)', async () => {
+      const { dataType, precision, scale } = await numericPrecisionScale(
+        'resellers',
+        'commission_pct',
+      );
+      expect(dataType).toBe('numeric');
+      expect(precision).toBe(6);
+      expect(scale).toBe(5);
     });
   });
 
