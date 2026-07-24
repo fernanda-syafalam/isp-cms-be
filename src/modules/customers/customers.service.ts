@@ -190,6 +190,33 @@ export class CustomersService {
   // suspend (voluntary) and isolate (non-payment) both land on `isolir`;
   // they differ only in intent + audit action. activate clears the
   // balance (payment received); resume keeps it.
+  //
+  // Every verb below funnels through `transition()`, the single seam
+  // ADR-0004 (Locked rule 3) names as the manual-write gate. `transition()`
+  // enforces `CUSTOMER_LEGAL_TRANSITIONS` (D6/NL-2) — see that table for the
+  // full from -> to graph and the same-state policy.
+  //
+  // System-driven (automated) status writes do NOT go through `transition()`
+  // and are therefore NOT covered by this table guard — by design. There are
+  // two such seams (ADR-0004 rule 3 predates them describing a single
+  // `setBilling` seam; the reactivation path has since moved — reconcile in a
+  // follow-up so the ADR is not stale):
+  //   1. Auto overdue -> isolir: `BillingAutomationService.isolateActiveDebtors()`
+  //      via `CustomersRepository.setBilling(...)`.
+  //   2. Post-payment reactivation isolir -> aktif: a guarded write to
+  //      `customers.status` INSIDE `InvoicesRepository.recordPayment`'s
+  //      transaction (`refreshOutstandingTx`, reactivate when
+  //      `status === 'isolir' && outstanding === 0`) — NOT `setBilling`. It
+  //      lives in the payment transaction on purpose (the status flip is
+  //      atomic with the settle); do not re-route it just to unify the seam.
+  // Both automated seams gate on the customer's current status inline before
+  // writing, so they only ever emit the two ADR-legal auto edges
+  // (`aktif->isolir`, `isolir->aktif`) — but that correctness lives in those
+  // call sites, not in this table.
+  // Follow-up (not covered here): `WorkOrdersService.complete() ->
+  // customers.markInstalled()` flips a customer to `aktif` + provisions a
+  // secret with no current-status check (guarded only by WO idempotency) —
+  // the same status-flip+provision class as D6, reached via WO completion.
 
   async suspend(id: string): Promise<CustomerResponse> {
     // Voluntary hold (cuti) — a customer request, not a debt (P3.A.3).
@@ -332,6 +359,13 @@ export class CustomersService {
     opts: { clearOutstanding?: boolean; holdReason?: CustomerRow['holdReason'] },
     verb: string,
   ): Promise<CustomerResponse> {
+    // D6/NL-2: read the current status and validate BEFORE any write — the
+    // DB update (repo.setStatus) and the network enforcement side effect
+    // (secrets.applyDisabledForCustomer) must never fire for an illegal
+    // pair. requireById() also gives the existing 404-on-missing-customer
+    // behaviour for free.
+    const current = await this.requireById(id);
+    assertLegalCustomerTransition(current.status, status);
     const row = await this.repo.setStatus(id, status, opts);
     // Network enforcement (ADR-0008): the PPPoE secret follows the lifecycle —
     // any non-active state cuts the session, `aktif` restores it. No-op while
@@ -368,6 +402,69 @@ export class CustomersService {
 // '' means "no email" in the UI; store null.
 function normalizeEmail(email: string): string | null {
   return email === '' ? null : email;
+}
+
+/**
+ * D6/NL-2 (go-live defect): the canonical lifecycle graph locked in
+ * ADR-0004's "Transition table (locked)" — every edge below cites the ADR
+ * row that authorizes it. This is the from -> to allow-list `transition()`
+ * enforces; anything not listed for a given `from` is illegal.
+ *
+ * - `prospek -> instalasi`: ADR-0004 row "prospek | instalasi | onboard()".
+ *   Not reachable through `transition()` today (onboard() writes the status
+ *   via repo.create(), a separate entry point per ADR-0004's "Entry points"
+ *   section) — listed anyway so the table stays a complete, ADR-faithful
+ *   graph for any future caller of `transition()`, and so it is directly
+ *   unit-testable.
+ * - `instalasi -> aktif`: ADR-0004 row "instalasi | aktif | WO complete() ->
+ *   markInstalled". Reached via `CustomersRepository.markInstalled` (work
+ *   orders), not `transition()` — same rationale as above.
+ * - `aktif -> isolir`: ADR-0004 rows "aktif|isolir|suspend()" and
+ *   "aktif|isolir|isolate()" (manual verbs; the third row, auto overdue,
+ *   goes through `setBilling`, not this seam — see the class-level note).
+ * - `isolir -> aktif`: ADR-0004 rows "isolir|aktif|resume()" and
+ *   "isolir|aktif|activate()" (manual verbs; the third row, auto payment
+ *   reactivation, also goes through `setBilling`).
+ * - `aktif -> berhenti` and `isolir -> berhenti`: ADR-0004 rows
+ *   "aktif|berhenti|stop()" and "isolir|berhenti|stop()".
+ * - `berhenti`: terminal — ADR-0004's canonical graph ends `berhenti -->
+ *   [*]` with no outgoing edge. `berhenti -> aktif` and `berhenti -> isolir`
+ *   are therefore illegal by omission (this is the D6 bug: today
+ *   `activate()` on a churned customer silently re-enables their PPPoE
+ *   secret for free).
+ * - `prospek -> aktif`: illegal by omission — ADR-0004 has no such edge; a
+ *   prospect must pass through `instalasi` (provisioning) first. This is
+ *   the other half of the D6 bug (skipping install/provisioning).
+ *
+ * Same-state (X -> X) policy: deliberately NOT included for any status.
+ * None of ADR-0004's locked edges are self-loops, and in practice a
+ * same-state call is a UI double-submit / stale client, not a real intent
+ * change — reject it explicitly (400) rather than a silent no-op, so the
+ * mistake is visible at the call site instead of looking like it worked.
+ * (One legitimate same-state case ADR-0004 does not cover — reclassifying
+ * an `isolir` customer's `holdReason`, e.g. overdue -> voluntary, without
+ * leaving `isolir` — is out of scope for this guard; flag as a follow-up
+ * if that workflow is needed.)
+ */
+export const CUSTOMER_LEGAL_TRANSITIONS: Readonly<
+  Record<CustomerRow['status'], readonly CustomerRow['status'][]>
+> = {
+  prospek: ['instalasi'],
+  instalasi: ['aktif'],
+  aktif: ['isolir', 'berhenti'],
+  isolir: ['aktif', 'berhenti'],
+  berhenti: [],
+};
+
+/** Throws `BadRequestException` when `from -> to` is not in the ADR-0004 graph. */
+export function assertLegalCustomerTransition(
+  from: CustomerRow['status'],
+  to: CustomerRow['status'],
+): void {
+  const allowed = CUSTOMER_LEGAL_TRANSITIONS[from];
+  if (!allowed.includes(to)) {
+    throw new BadRequestException(`cannot transition from ${from} to ${to}`);
+  }
 }
 
 /**

@@ -7,7 +7,7 @@ import { ResellersRepository } from '../resellers/resellers.repository';
 import { SecretEnforcementService } from '../router-resources/secret-enforcement.service';
 import { SettingsService } from '../settings/settings.service';
 import { type CustomerRow, CustomersRepository } from './customers.repository';
-import { CustomersService } from './customers.service';
+import { CustomersService, assertLegalCustomerTransition } from './customers.service';
 
 const PLAN_ID = '00000000-0000-0000-0000-0000000000b1';
 
@@ -463,6 +463,9 @@ describe('CustomersService', () => {
 
   describe('lifecycle', () => {
     it('distinguishes voluntary suspend (cuti) from punitive isolate (P3.A.3)', async () => {
+      // Both land on isolir from aktif — the only ADR-0004-legal manual
+      // entry into isolir (suspend()/isolate() rows).
+      repo.findById.mockResolvedValue({ ...sampleRow, status: 'aktif' });
       repo.setStatus.mockResolvedValue({ ...sampleRow, status: 'isolir' });
       await service.suspend(sampleRow.id);
       expect(repo.setStatus).toHaveBeenCalledWith(sampleRow.id, 'isolir', {
@@ -475,6 +478,7 @@ describe('CustomersService', () => {
     });
 
     it('activate clears the outstanding balance', async () => {
+      repo.findById.mockResolvedValue({ ...sampleRow, status: 'isolir' });
       repo.setStatus.mockResolvedValue({
         ...sampleRow,
         status: 'aktif',
@@ -487,12 +491,14 @@ describe('CustomersService', () => {
     });
 
     it('resume keeps the balance', async () => {
+      repo.findById.mockResolvedValue({ ...sampleRow, status: 'isolir' });
       repo.setStatus.mockResolvedValue({ ...sampleRow, status: 'aktif' });
       await service.resume(sampleRow.id);
       expect(repo.setStatus).toHaveBeenCalledWith(sampleRow.id, 'aktif', {});
     });
 
     it('stop churns the customer', async () => {
+      repo.findById.mockResolvedValue({ ...sampleRow, status: 'aktif' });
       repo.setStatus.mockResolvedValue({ ...sampleRow, status: 'berhenti' });
       const result = await service.stop(sampleRow.id);
       expect(repo.setStatus).toHaveBeenCalledWith(sampleRow.id, 'berhenti', {});
@@ -504,6 +510,8 @@ describe('CustomersService', () => {
     it('disables the PPPoE secret on every non-active transition', async () => {
       for (const status of ['isolir', 'berhenti'] as const) {
         secrets.applyDisabledForCustomer.mockClear();
+        // Both isolate() and stop() are legal from aktif.
+        repo.findById.mockResolvedValue({ ...sampleRow, status: 'aktif' });
         repo.setStatus.mockResolvedValue({ ...sampleRow, status });
         await (status === 'isolir' ? service.isolate(sampleRow.id) : service.stop(sampleRow.id));
         expect(secrets.applyDisabledForCustomer).toHaveBeenCalledWith(sampleRow.id, true);
@@ -511,9 +519,91 @@ describe('CustomersService', () => {
     });
 
     it('re-enables the PPPoE secret when the customer goes active', async () => {
+      repo.findById.mockResolvedValue({ ...sampleRow, status: 'isolir' });
       repo.setStatus.mockResolvedValue({ ...sampleRow, status: 'aktif', outstanding: 0 });
       await service.activate(sampleRow.id);
       expect(secrets.applyDisabledForCustomer).toHaveBeenCalledWith(sampleRow.id, false);
+    });
+  });
+
+  // D6/NL-2 (go-live defect, ADR-0004): transition() must reject any
+  // from -> to pair not in the locked graph, and must do so BEFORE any DB
+  // write or network side effect.
+  describe('lifecycle guard (D6/NL-2, ADR-0004)', () => {
+    it('rejects berhenti -> aktif (activate on a churned customer) with 400, no write, no side effect', async () => {
+      repo.findById.mockResolvedValue({ ...sampleRow, status: 'berhenti' });
+
+      await expect(service.activate(sampleRow.id)).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(repo.setStatus).not.toHaveBeenCalled();
+      expect(secrets.applyDisabledForCustomer).not.toHaveBeenCalled();
+    });
+
+    it('rejects berhenti -> isolir with 400 (berhenti is terminal)', async () => {
+      repo.findById.mockResolvedValue({ ...sampleRow, status: 'berhenti' });
+
+      await expect(service.isolate(sampleRow.id)).rejects.toBeInstanceOf(BadRequestException);
+      expect(repo.setStatus).not.toHaveBeenCalled();
+    });
+
+    it('rejects prospek -> aktif (activate before install/provisioning) with 400', async () => {
+      repo.findById.mockResolvedValue({ ...sampleRow, status: 'prospek' });
+
+      await expect(service.activate(sampleRow.id)).rejects.toBeInstanceOf(BadRequestException);
+      expect(repo.setStatus).not.toHaveBeenCalled();
+      expect(secrets.applyDisabledForCustomer).not.toHaveBeenCalled();
+    });
+
+    it('rejects a same-state call (aktif -> aktif via resume) with 400', async () => {
+      repo.findById.mockResolvedValue({ ...sampleRow, status: 'aktif' });
+
+      await expect(service.resume(sampleRow.id)).rejects.toBeInstanceOf(BadRequestException);
+      expect(repo.setStatus).not.toHaveBeenCalled();
+    });
+
+    it('allows isolir -> aktif (reactivation / pay-to-reconnect)', async () => {
+      repo.findById.mockResolvedValue({ ...sampleRow, status: 'isolir' });
+      repo.setStatus.mockResolvedValue({ ...sampleRow, status: 'aktif' });
+
+      await expect(service.activate(sampleRow.id)).resolves.toMatchObject({ status: 'aktif' });
+      expect(repo.setStatus).toHaveBeenCalledWith(sampleRow.id, 'aktif', {
+        clearOutstanding: true,
+      });
+    });
+
+    it('allows aktif -> isolir (isolate for non-payment)', async () => {
+      repo.findById.mockResolvedValue({ ...sampleRow, status: 'aktif' });
+      repo.setStatus.mockResolvedValue({ ...sampleRow, status: 'isolir' });
+
+      await expect(service.isolate(sampleRow.id)).resolves.toMatchObject({ status: 'isolir' });
+      expect(repo.setStatus).toHaveBeenCalledWith(sampleRow.id, 'isolir', {
+        holdReason: 'overdue',
+      });
+    });
+
+    // These two edges (prospek -> instalasi, instalasi -> aktif) are legal
+    // per ADR-0004's locked graph but are reached via onboard()/markInstalled
+    // — not via a transition() verb — so they are exercised directly against
+    // the exported guard, keeping the table's full coverage testable.
+    it('exposes prospek -> instalasi and instalasi -> aktif as legal in the guard table', () => {
+      expect(() => assertLegalCustomerTransition('prospek', 'instalasi')).not.toThrow();
+      expect(() => assertLegalCustomerTransition('instalasi', 'aktif')).not.toThrow();
+    });
+
+    it('rejects instalasi -> isolir and instalasi -> berhenti in the guard table', () => {
+      expect(() => assertLegalCustomerTransition('instalasi', 'isolir')).toThrow(
+        BadRequestException,
+      );
+      expect(() => assertLegalCustomerTransition('instalasi', 'berhenti')).toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('error message names the illegal from/to pair', async () => {
+      repo.findById.mockResolvedValue({ ...sampleRow, status: 'berhenti' });
+      await expect(service.activate(sampleRow.id)).rejects.toThrow(
+        'cannot transition from berhenti to aktif',
+      );
     });
   });
 
