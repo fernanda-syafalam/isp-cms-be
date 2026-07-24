@@ -197,5 +197,25 @@ describe('Vouchers mutating endpoints (e2e)', () => {
       });
       expect(res.statusCode).toBe(403);
     });
+
+    // ABUSE-2 / ADR-0018 decision #2: a caller can no longer direct voucher
+    // commission by naming a resellerId in the redeem body. `.strict()` on
+    // `RedeemVoucherSchema` (ZodValidationPipe) 400s the request before it
+    // ever reaches the service, rather than silently dropping the field.
+    it('400s a resellerId in the body (ZodValidationPipe .strict() wiring, ABUSE-2)', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/v1/vouchers/${VOUCHER_ID}/redeem`,
+        payload: {
+          customerName: 'Budi Santoso',
+          resellerId: '00000000-0000-4000-8000-0000000000ff',
+        },
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${await tokenFor('staff')}`,
+        },
+      });
+      expect(res.statusCode).toBe(400);
+    });
   });
 });

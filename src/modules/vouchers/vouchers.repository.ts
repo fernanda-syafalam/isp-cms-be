@@ -65,14 +65,16 @@ export interface VoucherSummary {
 }
 
 // Input to the transactional settlement (P3.D.3) — see `settle()`.
+//
+// Deliberately has NO `resellerId` field. ADR-0018 decision #2 (reseller OFF
+// day-1) / ABUSE-2: redeem must never post a reseller commission, and must
+// never let a caller pick a commission target — see `postVoucherCommission`'s
+// doc comment for how to re-enable this later if reseller ever comes back on.
 export interface SettleVoucherInput {
   // Subscriber the voucher was sold to (loket sale) — resolved by the
   // service. Null/absent for an anonymous hotspot redemption.
   redeemedCustomerId?: string | null;
   usedBy?: string | null;
-  // Overrides the voucher's minted-batch reseller for this one redemption.
-  // Null/absent falls back to the voucher's own `resellerId`.
-  resellerId?: string | null;
 }
 
 /**
@@ -162,17 +164,17 @@ export class VouchersRepository {
   /**
    * Redeem a voucher — the full loket settlement, in ONE DB transaction
    * (P3.D.3, ADR-0010). This is money code: the voucher flip, the payment
-   * ledger row, the customer's AR allocation and the reseller commission
-   * either all land together or none do.
+   * ledger row and the customer's AR allocation either all land together or
+   * none do.
    *
    * Steps, all inside `tx`:
    *  1. `SELECT ... FOR UPDATE` the voucher — locks the row so a concurrent
    *     second settle on the same id blocks until this transaction commits,
    *     then re-reads a status that is no longer 'unused'.
    *  2. Idempotency guard: if the voucher is already `used`, return it
-   *     unchanged — no new payment, no second AR allocation, no second
-   *     commission. A retried/duplicated settle call is always safe.
-   *     (An `expired` voucher may never be redeemed — throws 422.)
+   *     unchanged — no new payment, no second AR allocation. A
+   *     retried/duplicated settle call is always safe. (An `expired` voucher
+   *     may never be redeemed — throws 422.)
    *  3. Flip the voucher to `used` (usedAt/usedBy/redeemedCustomerId).
    *  4. If sold to a subscriber, allocate the voucher's face value across
    *     their unpaid invoices oldest-first via `allocateToInvoices` — see
@@ -184,22 +186,19 @@ export class VouchersRepository {
    *     an exact-cash cash-drawer transaction, P3.A.4 — this keeps
    *     `InvoicesRepository.reconciliation()`'s cash tendered/change
    *     roll-up balanced; that query itself is untouched).
-   *  6. If a reseller is attributed (override param or the voucher's own
-   *     `resellerId`) and its commissionPct > 0, append a `commission`
-   *     `reseller_ledger` entry keyed `ref = 'voucher:'+id` and move the
-   *     reseller's balance — reusing the exact idempotency key shape from
-   *     `ResellersRepository.postCommissionForInvoice` (P3.D.1). The
-   *     `reseller_ledger_reseller_type_ref_idx` partial unique index is the
-   *     hard backstop: even if this in-process existence check ever raced,
-   *     the DB itself rejects a second (resellerId, 'commission', ref) row.
+   *
+   * No reseller commission step: ADR-0018 decision #2 (reseller OFF day-1) /
+   * ABUSE-2 fix — redeem used to post a commission to whichever reseller the
+   * *caller* named in the request body (self-dealing) or, absent that, to
+   * the voucher's own minted-batch reseller. Both are removed. See
+   * `postVoucherCommission`'s doc comment for the re-enable path.
    *
    * This method is the one deliberate exception to "one repository per
-   * table": it reaches into `payments` / `customers` / `invoices` /
-   * `resellers` / `reseller_ledger` directly so all these writes share a
-   * single transaction handle. Splitting it across repositories (as
-   * invoices.pay() -> postResellerCommission does today) would mean a crash
-   * between calls leaves a payment recorded but no commission posted, or
-   * vice versa — unacceptable for a cash-settlement path.
+   * table": it reaches into `payments` / `customers` / `invoices` directly
+   * so all these writes share a single transaction handle. Splitting it
+   * across repositories would mean a crash between calls leaves a payment
+   * recorded but no AR allocation, or vice versa — unacceptable for a
+   * cash-settlement path.
    */
   async settle(id: string, opts: SettleVoucherInput = {}): Promise<Voucher> {
     return this.db.transaction(async (tx) => {
@@ -269,15 +268,8 @@ export class VouchersRepository {
         changeAmount: 0,
       });
 
-      const resellerId = opts.resellerId ?? redeemed.resellerId ?? null;
-      if (resellerId) {
-        await this.postVoucherCommission(tx, {
-          resellerId,
-          voucherId: id,
-          voucherCode: redeemed.code,
-          amount: redeemed.priceIdr,
-        });
-      }
+      // No reseller commission step here — ADR-0018 decision #2 / ABUSE-2,
+      // see the method doc above and `postVoucherCommission` below.
 
       return redeemed;
     });
@@ -365,6 +357,15 @@ export class VouchersRepository {
    * `ref = 'voucher:'+voucherId` instead of an invoice id. No-op when the
    * reseller is unknown, inactive-rate (commissionPct <= 0), the rounded
    * commission is zero, or a commission for this voucher already exists.
+   *
+   * DORMANT — intentionally unused as of ADR-0018 decision #2 (reseller OFF
+   * day-1) / ABUSE-2. Kept here, untouched and still correct, rather than
+   * deleted: it is idempotent, reads its target `resellerId` as a plain
+   * parameter (never from the redeem request), and its only caller was the
+   * `settle()` step removed above. Re-enabling reseller commission on
+   * redeem later is a one-line change — call this from `settle()` again with
+   * a `resellerId` sourced from the voucher's own minted-batch attribution
+   * (`redeemed.resellerId`), never from caller input.
    */
   private async postVoucherCommission(
     tx: DbTx,

@@ -349,7 +349,12 @@ describe('VouchersRepository (integration)', () => {
       expect(refreshedCustomer?.outstanding).toBe(999);
     });
 
-    it('a reseller-attributed redeem posts exactly one commission entry', async () => {
+    // ABUSE-2 / ADR-0018 decision #2 (reseller OFF day-1): redeem must NEVER
+    // post a reseller commission — not even for a voucher whose own minted
+    // batch is attributed to a reseller with a live commission rate. This
+    // replaces the old "posts exactly one commission entry" test, which
+    // asserted the pre-fix (vulnerable) behavior.
+    it('a redeem of a reseller-attributed voucher posts NO commission entry and leaves the reseller balance untouched (reseller OFF day-1)', async () => {
       const reseller = await seedReseller({ commissionPct: 0.1 });
       await repo.createBatch(batchRows(1, 'B9', { priceIdr: 5_000, resellerId: reseller.id }));
       const [item] = (await repo.list({ limit: 1, offset: 0 })).items;
@@ -361,19 +366,16 @@ describe('VouchersRepository (integration)', () => {
         .select()
         .from(resellerLedger)
         .where(eq(resellerLedger.resellerId, reseller.id));
-      expect(ledgerRows).toHaveLength(1);
-      expect(ledgerRows[0]?.type).toBe('commission');
-      expect(ledgerRows[0]?.amount).toBe(500); // 10% of 5_000
-      expect(ledgerRows[0]?.ref).toBe(`voucher:${item.id}`);
+      expect(ledgerRows).toHaveLength(0);
 
       const [refreshedReseller] = await db
         .select()
         .from(resellers)
         .where(eq(resellers.id, reseller.id));
-      expect(refreshedReseller?.balance).toBe(500);
+      expect(refreshedReseller?.balance).toBe(0); // seedReseller default — never bumped
     });
 
-    it('does not post a commission when the reseller has a zero commission rate', async () => {
+    it('does not post a commission when the reseller has a zero commission rate (belt-and-suspenders: commission is off entirely, not just rate-gated)', async () => {
       const reseller = await seedReseller({ commissionPct: 0 });
       await repo.createBatch(batchRows(1, 'B10', { priceIdr: 5_000, resellerId: reseller.id }));
       const [item] = (await repo.list({ limit: 1, offset: 0 })).items;
@@ -388,34 +390,11 @@ describe('VouchersRepository (integration)', () => {
       expect(ledgerRows).toHaveLength(0);
     });
 
-    it('a redeem input resellerId overrides the voucher batch reseller', async () => {
-      const batchReseller = await seedReseller({ name: 'Batch mitra', commissionPct: 0.1 });
-      const overrideReseller = await seedReseller({ name: 'Override mitra', commissionPct: 0.2 });
-      await repo.createBatch(
-        batchRows(1, 'B11', { priceIdr: 5_000, resellerId: batchReseller.id }),
-      );
-      const [item] = (await repo.list({ limit: 1, offset: 0 })).items;
-      if (!item) throw new Error('seed failed');
-
-      await repo.settle(item.id, { resellerId: overrideReseller.id });
-
-      const batchLedger = await db
-        .select()
-        .from(resellerLedger)
-        .where(eq(resellerLedger.resellerId, batchReseller.id));
-      expect(batchLedger).toHaveLength(0);
-
-      const overrideLedger = await db
-        .select()
-        .from(resellerLedger)
-        .where(eq(resellerLedger.resellerId, overrideReseller.id));
-      expect(overrideLedger).toHaveLength(1);
-      expect(overrideLedger[0]?.amount).toBe(1_000); // 20% of 5_000
-    });
-
     // Money-code invariant: a retried/duplicated settle call must never
-    // double-write. Second call is an idempotent no-op.
-    it('a second settle on an already-used voucher does not double-post payment, invoice allocation or commission', async () => {
+    // double-write. Second call is an idempotent no-op. The seeded reseller
+    // + reseller-attributed batch here also doubles as an ABUSE-2 regression
+    // check: even across a retry, commission stays at zero.
+    it('a second settle on an already-used voucher does not double-post payment or invoice allocation, and still posts no commission', async () => {
       const customer = await seedCustomer();
       const invoice = await seedInvoice(customer.id, { amount: 20_000 });
       const reseller = await seedReseller({ commissionPct: 0.1 });
@@ -449,7 +428,7 @@ describe('VouchersRepository (integration)', () => {
         .select()
         .from(resellerLedger)
         .where(eq(resellerLedger.resellerId, reseller.id));
-      expect(ledgerRows).toHaveLength(1);
+      expect(ledgerRows).toHaveLength(0);
     });
 
     // TEST-H2: the sequential double-settle test above would stay green even
@@ -458,9 +437,11 @@ describe('VouchersRepository (integration)', () => {
     // Firing both calls via Promise.all races two real transactions against
     // the SAME voucher row: without the FOR UPDATE lock, both could read
     // status = 'unused' under READ COMMITTED before either commits, and both
-    // would proceed to write — a double payment + double commission. This
-    // proves the lock actually holds, not just that settle() is idempotent.
-    it('concurrency: two concurrent settle calls on the SAME voucher write exactly ONE payment row and ONE commission entry', async () => {
+    // would proceed to write — a double payment. This proves the lock
+    // actually holds, not just that settle() is idempotent. The seeded
+    // reseller-attributed batch also proves the ABUSE-2 fix holds under a
+    // race, not just on the single-call path.
+    it('concurrency: two concurrent settle calls on the SAME voucher write exactly ONE payment row and NO commission entry', async () => {
       const reseller = await seedReseller({ commissionPct: 0.1 });
       await repo.createBatch(batchRows(1, 'B13', { priceIdr: 5_000, resellerId: reseller.id }));
       const [item] = (await repo.list({ limit: 1, offset: 0 })).items;
@@ -479,7 +460,7 @@ describe('VouchersRepository (integration)', () => {
         .select()
         .from(resellerLedger)
         .where(eq(resellerLedger.resellerId, reseller.id));
-      expect(ledgerRows).toHaveLength(1); // exactly one commission entry, never two
+      expect(ledgerRows).toHaveLength(0); // reseller OFF day-1 — never posted, not even once
     });
   });
 });

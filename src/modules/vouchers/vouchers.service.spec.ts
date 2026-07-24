@@ -133,7 +133,6 @@ describe('VouchersService', () => {
       expect(repo.settle).toHaveBeenCalledWith(voucher.id, {
         redeemedCustomerId: null,
         usedBy: null,
-        resellerId: null,
       });
       expect(customers.setBilling).not.toHaveBeenCalled();
       expect(result.status).toBe('used');
@@ -141,9 +140,9 @@ describe('VouchersService', () => {
       expect(result.usedBy).toBe('Admin (manual)');
     });
 
-    // ADR-0010/0007: the whole loket settlement (payment + billing credit +
-    // commission) now happens inside VouchersRepository.settle — the service
-    // only resolves customerName -> customerId and delegates.
+    // ADR-0010/0007: the whole loket settlement (payment + billing credit)
+    // now happens inside VouchersRepository.settle — the service only
+    // resolves customerName -> customerId and delegates.
     it('resolves customerName into a customerId and delegates the full settlement', async () => {
       customers.findIdByFullName.mockResolvedValue('cust-1');
       repo.settle.mockResolvedValue({
@@ -161,32 +160,30 @@ describe('VouchersService', () => {
       expect(repo.settle).toHaveBeenCalledWith(voucher.id, {
         redeemedCustomerId: 'cust-1',
         usedBy: 'Budi Santoso',
-        resellerId: null,
       });
     });
 
-    it('forwards an explicit resellerId override to settle after validating it exists', async () => {
-      resellers.findById.mockResolvedValue({ id: 'res-1', commissionPct: 0.05 });
+    // ABUSE-2 / ADR-0018 decision #2: redeem must never accept or forward a
+    // caller-chosen resellerId. `RedeemVoucherInput` has no `resellerId`
+    // field at all (compile-time enforced), so this asserts the runtime
+    // behavior stays reseller-blind: no lookup, no commission target passed
+    // to `settle`, regardless of what a caller might try to smuggle in.
+    it('never looks up a reseller or forwards a resellerId to settle, even if one sneaks into the input object', async () => {
       repo.settle.mockResolvedValue({ ...voucher, status: 'used' });
-      repo.findById.mockResolvedValue(makeVoucherRow({ status: 'used', resellerId: 'res-1' }));
+      repo.findById.mockResolvedValue(makeVoucherRow({ status: 'used' }));
 
-      await service.redeem(voucher.id, { resellerId: 'res-1' });
+      // Cast bypasses the type system the same way a raw, unvalidated JSON
+      // body would — proving the runtime path ignores it, not just the type.
+      await service.redeem(voucher.id, {
+        customerName: 'Budi Santoso',
+        resellerId: 'attacker-chosen-reseller',
+      } as unknown as Parameters<typeof service.redeem>[1]);
 
-      expect(resellers.findById).toHaveBeenCalledWith('res-1');
-      expect(repo.settle).toHaveBeenCalledWith(voucher.id, {
-        redeemedCustomerId: null,
-        usedBy: null,
-        resellerId: 'res-1',
-      });
-    });
-
-    it('rejects an unknown resellerId override with 400', async () => {
-      resellers.findById.mockResolvedValue(null);
-
-      await expect(service.redeem(voucher.id, { resellerId: 'bogus' })).rejects.toThrow(
-        'reseller not found',
+      expect(resellers.findById).not.toHaveBeenCalled();
+      expect(repo.settle).toHaveBeenCalledWith(
+        voucher.id,
+        expect.not.objectContaining({ resellerId: expect.anything() }),
       );
-      expect(repo.settle).not.toHaveBeenCalled();
     });
   });
 
