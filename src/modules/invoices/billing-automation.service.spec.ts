@@ -141,6 +141,34 @@ describe('BillingAutomationService', () => {
       expect(secrets.applyDisabledForCustomer).toHaveBeenCalledTimes(2);
     });
 
+    // TIME-1 regression: the billing/isolir/dunning cron now fires with
+    // `tz: Asia/Jakarta` (scheduler.constants.ts), so 2026-08-01 02:00 WIB —
+    // the isolir cron's actual firing instant — is 2026-07-31T19:00:00Z.
+    // `currentPeriodStart()` must read that as August, not July, or the
+    // isolir notice's dedup jobId (and existingRegularForPeriod's lookup)
+    // silently lands on the wrong billing period at every month boundary.
+    it('currentPeriodStart uses the WIB calendar day, so the isolir jobId period is August at 2026-08-01 02:00 WIB (= 2026-07-31T19:00Z)', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-07-31T19:00:00.000Z'));
+      try {
+        repo.markOverduePastDue.mockResolvedValue(1);
+        repo.customerIdsIsolirEligible.mockResolvedValue(['c1']);
+        customers.findByIds.mockResolvedValue(
+          rowsFor({ c1: { status: 'aktif', phone: '0812', fullName: 'Budi' } }),
+        );
+        repo.sumUnpaidByCustomers.mockResolvedValue(new Map([['c1', 300_000]]));
+
+        await service.isolirOverdue();
+
+        expect(notifications.enqueue).toHaveBeenCalledWith(
+          { event: 'isolir', to: '0812', vars: { nama: 'Budi', jumlah: 'Rp300.000' } },
+          'isolir:c1:2026-08-01',
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('does not fail the isolir run when the notification enqueue rejects (best-effort)', async () => {
       repo.markOverduePastDue.mockResolvedValue(1);
       repo.customerIdsIsolirEligible.mockResolvedValue(['c1']);

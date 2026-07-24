@@ -1,7 +1,7 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { Queue } from 'bullmq';
-import { SCHEDULER_JOBS, SCHEDULER_QUEUE } from './scheduler.constants';
+import { SCHEDULER_JOBS, SCHEDULER_QUEUE, SCHEDULER_TZ } from './scheduler.constants';
 
 /**
  * Producer side of the automation backbone (P2.1). On boot it registers the
@@ -28,7 +28,14 @@ export class SchedulerService implements OnModuleInit {
   private async registerSchedulers(): Promise<void> {
     try {
       for (const job of Object.values(SCHEDULER_JOBS)) {
-        await this.queue.upsertJobScheduler(job.key, { pattern: job.pattern }, { name: job.name });
+        // TIME-1: `tz` makes BullMQ (via cron-parser) evaluate `pattern`
+        // against Asia/Jakarta explicitly, instead of implicitly trusting
+        // the container's own clock — see SCHEDULER_TZ's doc comment.
+        await this.queue.upsertJobScheduler(
+          job.key,
+          { pattern: job.pattern, tz: SCHEDULER_TZ },
+          { name: job.name },
+        );
       }
       this.logger.log(
         { jobs: Object.values(SCHEDULER_JOBS).map((j) => j.key) },
