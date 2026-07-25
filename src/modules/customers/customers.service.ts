@@ -245,6 +245,39 @@ export class CustomersService {
     return this.transition(id, 'berhenti', {}, 'stopped');
   }
 
+  /**
+   * Reclassify why an `isolir` customer is held — overdue <-> voluntary
+   * (P3.A.3) — go-live follow-up to D6/NL-2: `transition()`'s same-state
+   * guard correctly rejects isolir -> isolir (it is not a lifecycle edge
+   * in the ADR-0004 graph), but that also blocked the legitimate operator
+   * workflow of reclassifying an already-`isolir` customer's hold reason
+   * (e.g. an overdue debtor requests a cuti, or vice-versa). `holdReason`
+   * is not part of the lifecycle graph — `status` never changes here — so
+   * this deliberately does NOT go through `transition()`; it is a plain
+   * field write, gated by `assertCustomerIsHeld` instead of
+   * `assertLegalCustomerTransition`.
+   *
+   * Confirmed safe as a naive field swap (no hidden side effect): neither
+   * the auto-isolir sweep (`isolateActiveDebtors`, only acts on
+   * `status === 'aktif'`) nor payment reactivation (`refreshOutstandingTx`,
+   * gates on `status === 'isolir' && outstanding === 0`) branch on
+   * `holdReason` — both already treat every `isolir` customer identically
+   * regardless of why they are held. No router/secret call either: the
+   * PPPoE secret is already disabled for `isolir` either way
+   * (`applyDisabledForCustomer` keys off `status`, not `holdReason`), so
+   * reclassifying never touches network enforcement.
+   */
+  async reclassifyHold(
+    id: string,
+    holdReason: NonNullable<CustomerRow['holdReason']>,
+  ): Promise<CustomerResponse> {
+    const current = await this.requireById(id);
+    assertCustomerIsHeld(current.status);
+    const row = await this.repo.reclassifyHold(id, holdReason);
+    this.logger.log({ customerId: row.id, holdReason }, 'customer hold reclassified');
+    return toCustomerResponse(row);
+  }
+
   // --- Compliance ------------------------------------------------------
 
   async recordConsent(id: string): Promise<CustomerResponse> {
@@ -446,10 +479,12 @@ function normalizeEmail(email: string): string | null {
  * same-state call is a UI double-submit / stale client, not a real intent
  * change — reject it explicitly (400) rather than a silent no-op, so the
  * mistake is visible at the call site instead of looking like it worked.
- * (One legitimate same-state case ADR-0004 does not cover — reclassifying
- * an `isolir` customer's `holdReason`, e.g. overdue -> voluntary, without
- * leaving `isolir` — is out of scope for this guard; flag as a follow-up
- * if that workflow is needed.)
+ * (The one legitimate same-state case ADR-0004 does not cover —
+ * reclassifying an `isolir` customer's `holdReason`, e.g. overdue ->
+ * voluntary, without leaving `isolir` — is intentionally NOT routed
+ * through this guard/`transition()`; it has its own verb,
+ * `CustomersService.reclassifyHold`, gated by `assertCustomerIsHeld`
+ * below instead.)
  */
 export const CUSTOMER_LEGAL_TRANSITIONS: Readonly<
   Record<CustomerRow['status'], readonly CustomerRow['status'][]>
@@ -492,6 +527,22 @@ export function assertCustomerReadyForInstallActivation(status: CustomerRow['sta
   if (status !== from) {
     throw new BadRequestException(
       `cannot complete install work order: customer is ${status}, expected ${from}`,
+    );
+  }
+}
+
+/**
+ * Precondition guard for `reclassifyHold` (go-live follow-up to D6/NL-2):
+ * a customer's `holdReason` (overdue vs voluntary/cuti, P3.A.3) is only
+ * meaningful while they are `isolir` — reclassifying the hold reason of a
+ * customer who is not currently held is not a real action (there is no
+ * hold to reclassify), so it is rejected explicit (400) rather than
+ * silently accepted or silently no-op'd.
+ */
+export function assertCustomerIsHeld(status: CustomerRow['status']): void {
+  if (status !== 'isolir') {
+    throw new BadRequestException(
+      `cannot reclassify hold reason: customer is ${status}, expected isolir`,
     );
   }
 }

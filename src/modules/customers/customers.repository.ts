@@ -606,6 +606,19 @@ export class CustomersRepository {
     });
   }
 
+  /**
+   * Reclassify why an `isolir` customer is held — overdue <-> voluntary
+   * (P3.A.3) — without touching `status` (go-live follow-up to D6/NL-2:
+   * `setStatus`'s same-state guard in the service intentionally rejects
+   * isolir -> isolir, so this reason-only swap needs its own write path).
+   * The precondition (customer must currently be `isolir`) is enforced by
+   * `CustomersService.reclassifyHold` before this is called — this is a
+   * plain field write, same contract as `updateKyc`/`relocate` below.
+   */
+  async reclassifyHold(id: string, holdReason: Customer['holdReason']): Promise<CustomerRow> {
+    return this.applyUpdate(id, { holdReason });
+  }
+
   // consent_at is set to the DB clock (sql `now()`), which the typed
   // ProfilePatch set of applyUpdate cannot express — do it directly.
   async recordConsent(id: string): Promise<CustomerRow> {
