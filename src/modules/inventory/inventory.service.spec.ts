@@ -31,6 +31,7 @@ describe('InventoryService', () => {
       update: vi.fn(),
       remove: vi.fn(),
       addMovement: vi.fn(),
+      findAssignedSerialForWorkOrder: vi.fn(),
     };
     customers = { findIdByFullName: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
@@ -155,6 +156,24 @@ describe('InventoryService', () => {
       await expect(service.move('missing', { type: 'broken' })).rejects.toBeInstanceOf(
         NotFoundException,
       );
+    });
+  });
+
+  // Idempotency lookup for the work-order install cascade (security review
+  // follow-up on the go-live guard, NL-2): a thin pass-through, same as
+  // `findAvailableOnu`/`findBySerial` above.
+  describe('findAssignedSerialForWorkOrder', () => {
+    it('forwards the work order id and returns the recorded serial', async () => {
+      repo.findAssignedSerialForWorkOrder.mockResolvedValue('ZTEGREAL001');
+      const result = await service.findAssignedSerialForWorkOrder('wo-1');
+      expect(repo.findAssignedSerialForWorkOrder).toHaveBeenCalledWith('wo-1');
+      expect(result).toBe('ZTEGREAL001');
+    });
+
+    it('returns null when no assign movement has been recorded for the work order yet', async () => {
+      repo.findAssignedSerialForWorkOrder.mockResolvedValue(null);
+      const result = await service.findAssignedSerialForWorkOrder('wo-1');
+      expect(result).toBeNull();
     });
   });
 

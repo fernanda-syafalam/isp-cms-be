@@ -165,6 +165,70 @@ describe('InventoryRepository (integration)', () => {
     expect(ledger.items.map((m) => m.type)).toEqual(['assign', 'in']);
   });
 
+  // Idempotency lookup for the work-order install cascade (security review
+  // follow-up on the go-live guard, NL-2): reads the movement ledger's
+  // denormalized `serial` directly, so a retry can reuse the exact unit
+  // already consumed for a work order instead of FIFO-picking a second one.
+  describe('findAssignedSerialForWorkOrder', () => {
+    it('returns null when no assign movement is recorded for the work order', async () => {
+      const result = await repo.findAssignedSerialForWorkOrder(
+        '00000000-0000-0000-0000-0000000000a1',
+      );
+      expect(result).toBeNull();
+    });
+
+    it('returns the serial of the recorded assign movement for the work order', async () => {
+      const made = await repo.create({ kind: 'onu', serial: 'ONU-WO-1' });
+      await repo.addMovement({
+        itemId: made.id,
+        serial: made.serial,
+        kind: made.kind,
+        type: 'assign',
+        note: 'Budi',
+        workOrderId: '00000000-0000-0000-0000-0000000000a1',
+      });
+
+      const result = await repo.findAssignedSerialForWorkOrder(
+        '00000000-0000-0000-0000-0000000000a1',
+      );
+      expect(result).toBe('ONU-WO-1');
+    });
+
+    it('does not match a movement recorded for a different work order', async () => {
+      const made = await repo.create({ kind: 'onu', serial: 'ONU-WO-OTHER' });
+      await repo.addMovement({
+        itemId: made.id,
+        serial: made.serial,
+        kind: made.kind,
+        type: 'assign',
+        note: 'Budi',
+        workOrderId: '00000000-0000-0000-0000-0000000000a2',
+      });
+
+      const result = await repo.findAssignedSerialForWorkOrder(
+        '00000000-0000-0000-0000-0000000000a1',
+      );
+      expect(result).toBeNull();
+    });
+
+    it('ignores a non-assign movement recorded for the work order', async () => {
+      const made = await repo.create({ kind: 'onu', serial: 'ONU-WO-RETURNED' });
+      await repo.addMovement({
+        itemId: made.id,
+        serial: made.serial,
+        kind: made.kind,
+        type: 'return',
+        note: 'Dikembalikan ke gudang',
+        workOrderId: '00000000-0000-0000-0000-0000000000a1',
+      });
+
+      const result = await repo.findAssignedSerialForWorkOrder(
+        '00000000-0000-0000-0000-0000000000a1',
+      );
+      expect(result).toBeNull();
+    });
+  });
+
   describe('listMovements search (q)', () => {
     it('matches by serial substring case-insensitively', async () => {
       const a = await repo.create({ kind: 'onu', serial: 'ZTEG-MOV-001' });

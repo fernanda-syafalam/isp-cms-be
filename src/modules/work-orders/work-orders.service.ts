@@ -10,6 +10,11 @@ import { notifyBestEffort } from '../../common/notifications/notify-best-effort'
 import type { CustomerConnection } from '../../infrastructure/database/schema/customers.schema';
 import type { WorkOrder } from '../../infrastructure/database/schema/work-orders.schema';
 import { type CustomerRow, CustomersRepository } from '../customers/customers.repository';
+// The legal-transition table (ADR-0004) lives in CustomersService as a pure,
+// already-exported function — reused here rather than duplicating an ad-hoc
+// status check (go-live follow-up, NL-2 note in
+// CustomersService.transition()'s doc block).
+import { assertCustomerReadyForInstallActivation } from '../customers/customers.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { InvoicesService } from '../invoices/invoices.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -61,14 +66,32 @@ export class WorkOrdersService {
    * Complete a work order. For an install with a linked subscriber this
    * runs the full activation cascade:
    *   1. consume an ONU from warehouse stock (assign it to the subscriber),
-   *   2. activate the customer + attach the provisioned GPON connection,
-   *   3. provision a PPPoE secret on the default router,
-   *   4. issue the first invoice.
+   *   2. provision a PPPoE secret on the default router,
+   *   3. issue the first invoice,
+   *   4. activate the customer + attach the provisioned GPON connection
+   *      (`markInstalled` — the `status: 'aktif'` write) — LAST, on purpose
+   *      (security review follow-up on the go-live guard, NL-2): see the
+   *      inline comment at the call site for why the status flip must
+   *      commit only after every other step has already succeeded.
    * Idempotent — a done order returns unchanged with no re-provisioning.
    * The cascade itself is not wrapped in a transaction, so a retry after a
    * mid-cascade failure (e.g. `generateFirstInvoice` throwing) re-enters
-   * every step; `provisionSecret` and `generateFirstInvoice` each guard on
-   * existing state so a retry never double-provisions.
+   * every step; ONU consumption, `provisionSecret`, and
+   * `generateFirstInvoice` each guard on existing state so a retry never
+   * double-provisions.
+   *
+   * The activation step only fires when the linked customer is still
+   * `instalasi` (ADR-0004's `instalasi -> aktif` edge, the sole legal
+   * from-state for THIS seam — see `assertCustomerReadyForInstallActivation`
+   * for why it is narrower than the general `isolir`-inclusive `aktif`
+   * fan-in `transition()` allows). A customer no longer in that state
+   * (already `aktif`, `isolir`, or `berhenti`) rejects the whole completion
+   * with a 400 rather than silently re-activating / re-billing them
+   * (go-live follow-up, NL-2 note). Because the status flip only commits
+   * last, a retry after a failure earlier in the cascade still finds the
+   * customer `instalasi` and passes this guard again — the guard and the
+   * ordering are two halves of the same fix; do not move `markInstalled`
+   * back to the front without re-checking this.
    *
    * Each external step degrades gracefully: with no ONU in stock the
    * connection falls back to a synthetic serial; with no router/profile the
@@ -99,13 +122,69 @@ export class WorkOrdersService {
       }
       const customer = await this.customers.findById(wo.customerId);
       if (customer) {
-        const onuSerial = await this.assignOnu(customer.fullName, wo.id, data?.onuSerial);
+        // Read the movement ledger BEFORE the guard decision (security
+        // review follow-up on the go-live guard, NL-2): its presence is how
+        // this exact work order's cascade recognizes its own prior attempt,
+        // both for the guard bypass below and for `assignOnu`'s idempotency
+        // (passed through so there is only one read, not two).
+        const alreadyAssignedSerial = await this.inventory.findAssignedSerialForWorkOrder(wo.id);
+
+        // go-live follow-up (NL-2 note in CustomersService.transition()'s
+        // doc block): this cascade is the ADR-0004 `instalasi -> aktif` edge
+        // ("WO complete() -> markInstalled"), but before this guard it was
+        // reachable for a customer in ANY status — WO idempotency
+        // (the `wo.status === 'done'` no-op above) does not protect a
+        // customer who left `instalasi` some other way (already aktif,
+        // isolir, or churned) before this install WO completes.
+        //
+        // Bypass (security review follow-up): `markInstalled` is now the
+        // LAST mutation in this cascade (see below), so on a genuine retry
+        // the customer is normally still `instalasi`. The one residual
+        // window is a failure strictly AFTER `markInstalled` committed
+        // status='aktif' but BEFORE `repo.markDone` below commits (e.g. a
+        // transient DB blip on that final update) — a retry then finds the
+        // customer already `aktif`. Recognize that narrow, safe case
+        // (rather than permanently blocking it) using a signal that is
+        // specific to THIS work order, not just to `aktif` in general: an
+        // `assign` movement already recorded for `wo.id` proves THIS
+        // cascade reached `assignOnu` (which always runs BEFORE
+        // `markInstalled`) on a prior attempt. A customer that is `aktif`
+        // for any other reason (no movement recorded for this WO) still
+        // hits the strict check and is rejected.
+        if (customer.status !== 'aktif' || !alreadyAssignedSerial) {
+          assertCustomerReadyForInstallActivation(customer.status);
+        }
+
+        const onuSerial = await this.assignOnu(
+          customer.fullName,
+          wo.id,
+          data?.onuSerial,
+          alreadyAssignedSerial,
+        );
+        // markInstalled (the actual `status: 'aktif'` write) is the LAST
+        // mutation in the cascade, not the first (security review follow-up
+        // on the go-live guard, NL-2): neither `provisionSecret` nor
+        // `generateFirstInvoice` reads the customer's `connection` or
+        // requires `status === 'aktif'` — they only need the plan/customer
+        // fields already on `customer` (fetched above) and `wo.customerId`.
+        // So committing status='aktif' only after both of those succeed
+        // means a failure at either step leaves the customer at
+        // `instalasi`: the WO is still not `done`, a retry re-enters this
+        // branch, `assertCustomerReadyForInstallActivation` passes again
+        // (status is still `instalasi`), and `provisionSecret` /
+        // `generateFirstInvoice` re-run under their own idempotency guards.
+        // Ordering status='aktif' first (the old order) made a post-flip
+        // failure permanently uncompletable: the retry's guard would see
+        // status='aktif' and reject, leaving the customer active but never
+        // provisioned/billed. `markInstalled` itself is a plain idempotent
+        // UPDATE (same deterministic values on a re-run), so re-issuing it
+        // in the residual retry window above is harmless.
+        await this.provisionSecret(customer);
+        await this.invoices.generateFirstInvoice(wo.customerId);
         await this.customers.markInstalled(
           wo.customerId,
           buildConnection(customer, onuSerial, data?.rxPower),
         );
-        await this.provisionSecret(customer);
-        await this.invoices.generateFirstInvoice(wo.customerId);
       }
     }
 
@@ -186,11 +265,29 @@ export class WorkOrdersService {
   // stock, it's assigned like any other pick; if it's not (unknown asset, or
   // already consumed elsewhere), the scanned serial is still used as-is —
   // real field evidence beats a fabricated fallback.
+  //
+  // Idempotency guard (security review follow-up on the go-live guard,
+  // NL-2): unlike `provisionSecret`/`generateFirstInvoice`, ONU consumption
+  // (`inventory.move`) is not naturally idempotent — a plain re-run would
+  // FIFO-pick and consume a SECOND unit on a retry after a mid-cascade
+  // failure. `alreadyAssignedSerial` is the movement ledger's answer for
+  // this exact work order, read once by the caller (`complete()`, which
+  // also uses it for the activation guard bypass) — if set, reuse that
+  // exact serial instead of picking again.
   private async assignOnu(
     customerName: string,
     workOrderId: string,
-    scannedSerial?: string,
+    scannedSerial: string | undefined,
+    alreadyAssignedSerial: string | null,
   ): Promise<string | null> {
+    if (alreadyAssignedSerial) {
+      this.logger.log(
+        { workOrderId, serial: alreadyAssignedSerial },
+        'ONU already consumed for this work order — skipping (cascade retry)',
+      );
+      return alreadyAssignedSerial;
+    }
+
     if (scannedSerial) {
       const scanned = await this.inventory.findBySerial(scannedSerial);
       if (scanned && scanned.status === 'warehouse') {

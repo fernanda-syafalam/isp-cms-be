@@ -126,6 +126,28 @@ export class InventoryRepository {
     return row ?? null;
   }
 
+  /**
+   * The serial already consumed for a given work order's `assign` movement,
+   * or null when none has been recorded yet. Used by the install cascade
+   * (`WorkOrdersService.assignOnu`) to make ONU consumption idempotent
+   * across a retry of `complete()`: without this, a retry after a
+   * mid-cascade failure (e.g. `provisionSecret`/`generateFirstInvoice`
+   * throwing) would re-run the FIFO pick and consume a SECOND ONU for the
+   * same order. Reads the movement ledger's denormalized `serial` directly
+   * (no join needed — see `stockMovements`' comment) and takes the most
+   * recent `assign` movement for the order, matching how the ledger is
+   * otherwise read.
+   */
+  async findAssignedSerialForWorkOrder(workOrderId: string): Promise<string | null> {
+    const [row] = await this.db
+      .select({ serial: stockMovements.serial })
+      .from(stockMovements)
+      .where(and(eq(stockMovements.workOrderId, workOrderId), eq(stockMovements.type, 'assign')))
+      .orderBy(desc(stockMovements.at))
+      .limit(1);
+    return row?.serial ?? null;
+  }
+
   async create(input: NewInventoryItem): Promise<InventoryItem> {
     const [row] = await this.db.insert(inventoryItems).values(input).returning();
     if (!row) {
