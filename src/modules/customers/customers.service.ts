@@ -213,10 +213,15 @@ export class CustomersService {
   // writing, so they only ever emit the two ADR-legal auto edges
   // (`aktif->isolir`, `isolir->aktif`) — but that correctness lives in those
   // call sites, not in this table.
-  // Follow-up (not covered here): `WorkOrdersService.complete() ->
-  // customers.markInstalled()` flips a customer to `aktif` + provisions a
-  // secret with no current-status check (guarded only by WO idempotency) —
-  // the same status-flip+provision class as D6, reached via WO completion.
+  // Third such seam, fixed (was the go-live follow-up noted here):
+  // `WorkOrdersService.complete()` used to flip a customer to `aktif` +
+  // provision a secret via `customers.markInstalled()` with no current-status
+  // check (guarded only by WO idempotency) — the same status-flip+provision
+  // class as D6, reached via WO completion instead of `transition()`.
+  // `WorkOrdersService.complete()` now calls
+  // `assertCustomerReadyForInstallActivation` (below, backed by this same
+  // table's shape) before entering the install cascade, so the
+  // `instalasi -> aktif` edge is enforced there too — see that method's doc.
 
   async suspend(id: string): Promise<CustomerResponse> {
     // Voluntary hold (cuti) — a customer request, not a debt (P3.A.3).
@@ -464,6 +469,30 @@ export function assertLegalCustomerTransition(
   const allowed = CUSTOMER_LEGAL_TRANSITIONS[from];
   if (!allowed.includes(to)) {
     throw new BadRequestException(`cannot transition from ${from} to ${to}`);
+  }
+}
+
+/**
+ * Precondition guard for the OTHER (non-`transition()`) seam that reaches
+ * the ADR-0004 `instalasi -> aktif` edge: `WorkOrdersService.complete()` ->
+ * `CustomersRepository.markInstalled` (go-live follow-up, NL-2 note in
+ * `transition()`'s doc block above).
+ *
+ * This is deliberately narrower than
+ * `assertLegalCustomerTransition(status, 'aktif')`: that check is legal for
+ * BOTH `instalasi -> aktif` AND `isolir -> aktif` (the table's `isolir` row
+ * also allows `aktif`, for the manual `resume()`/`activate()` verbs) — but an
+ * install work order completing for an already-`isolir` customer must still
+ * be rejected, not silently treated as a resume. The install-cascade seam
+ * has exactly ONE legal from-state, so it is checked directly rather than
+ * against the shared to-`aktif` fan-in.
+ */
+export function assertCustomerReadyForInstallActivation(status: CustomerRow['status']): void {
+  const from: CustomerRow['status'] = 'instalasi';
+  if (status !== from) {
+    throw new BadRequestException(
+      `cannot complete install work order: customer is ${status}, expected ${from}`,
+    );
   }
 }
 

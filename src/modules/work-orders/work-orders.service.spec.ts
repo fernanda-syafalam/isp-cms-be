@@ -49,12 +49,16 @@ const repairWo: WorkOrder = {
   ticketId: '00000000-0000-0000-0000-0000000000t1',
 };
 
+// status: 'instalasi' — the ADR-0004 legal from-state for the install-WO
+// activation cascade (go-live follow-up, NL-2 note). Tests for the illegal
+// from-states override this field.
 const customerRow = {
   id: CUSTOMER_ID,
   customerNo: 'CUST-9001',
   fullName: 'Budi Santoso',
   planName: 'Home 20',
   phone: '0812000001',
+  status: 'instalasi' as const,
 };
 
 // Completion evidence columns when no field-completion body was submitted
@@ -103,6 +107,10 @@ describe('WorkOrdersService', () => {
       }),
       findBySerial: vi.fn(),
       move: vi.fn(),
+      // No ONU consumed yet for this WO by default — the happy-path cascade
+      // performs the FIFO pick. Retry-idempotency tests override this to an
+      // already-recorded serial.
+      findAssignedSerialForWorkOrder: vi.fn().mockResolvedValue(null),
     };
     routers = {
       findFirst: vi.fn().mockResolvedValue({ id: 'rtr-1' }),
@@ -297,37 +305,119 @@ describe('WorkOrdersService', () => {
     });
   });
 
+  describe('complete — activation precondition guard (go-live follow-up)', () => {
+    // The install cascade's activation step is the ADR-0004 `instalasi ->
+    // aktif` edge (see CustomersService's CUSTOMER_LEGAL_TRANSITIONS) — it
+    // must only fire when the customer is still `instalasi`. WO idempotency
+    // alone (the `wo.status === 'done'` no-op) does not protect a customer
+    // who left `instalasi` some other way before this install WO completes.
+    it('activates + provisions when the customer is instalasi (legal precondition)', async () => {
+      repo.findById.mockResolvedValue(installWo);
+      customers.findById.mockResolvedValue({ ...customerRow, status: 'instalasi' });
+      repo.markDone.mockResolvedValue({ ...installWo, status: 'done' });
+
+      const result = await service.complete(installWo.id, AUTHOR);
+
+      expect(customers.markInstalled).toHaveBeenCalledTimes(1);
+      expect(secrets.create).toHaveBeenCalledTimes(1);
+      expect(invoices.generateFirstInvoice).toHaveBeenCalledWith(CUSTOMER_ID);
+      expect(result.status).toBe('done');
+    });
+
+    it.each(['prospek', 'aktif', 'isolir', 'berhenti'] as const)(
+      'rejects and does not re-provision/re-activate an install WO for a customer already %s',
+      async (status) => {
+        repo.findById.mockResolvedValue(installWo);
+        customers.findById.mockResolvedValue({ ...customerRow, status });
+
+        await expect(service.complete(installWo.id, AUTHOR)).rejects.toBeInstanceOf(
+          BadRequestException,
+        );
+
+        // No side effect fires — not even ONU consumption, which happens
+        // before markInstalled/provisionSecret in the cascade.
+        expect(inventory.move).not.toHaveBeenCalled();
+        expect(customers.markInstalled).not.toHaveBeenCalled();
+        expect(secrets.create).not.toHaveBeenCalled();
+        expect(invoices.generateFirstInvoice).not.toHaveBeenCalled();
+        expect(repo.markDone).not.toHaveBeenCalled();
+      },
+    );
+
+    // Repair WOs never enter the `wo.type === 'install'` branch that carries
+    // this guard, so a repair completion must be entirely unaffected by the
+    // linked customer's current status.
+    it('a repair WO still completes normally regardless of the linked customer status', async () => {
+      repo.findById.mockResolvedValue(repairWo);
+      customers.findById.mockResolvedValue({ ...customerRow, status: 'aktif' });
+      repo.markDone.mockResolvedValue({ ...repairWo, status: 'done' });
+
+      const result = await service.complete(repairWo.id, AUTHOR);
+
+      expect(customers.markInstalled).not.toHaveBeenCalled();
+      expect(secrets.create).not.toHaveBeenCalled();
+      expect(invoices.generateFirstInvoice).not.toHaveBeenCalled();
+      expect(repo.markDone).toHaveBeenCalled();
+      expect(result.status).toBe('done');
+    });
+  });
+
   describe('complete — install cascade retry idempotency', () => {
     // Simulates a retry of complete() after a mid-cascade failure (e.g.
     // generateFirstInvoice throwing on the first attempt, after the PPPoE
     // secret already committed). The WO only reaches `done` once the whole
     // cascade succeeds, so the top-level early-return on wo.status==='done'
     // does not protect this case — provisionSecret must guard itself.
-    it('does not duplicate the PPPoE secret or double-count the router when provisionSecret runs twice for the same customer', async () => {
+    //
+    // State-faithful (security review follow-up on the go-live guard,
+    // NL-2): `customers.findById` returns `instalasi` on the FIRST call and
+    // `aktif` on the retry — NOT `instalasi` on both, which would hide the
+    // exact regression this guards against. A real retry happens because
+    // the WO never reached `done`; by then `markInstalled` (the LAST
+    // cascade mutation) has already committed `status: 'aktif'` for real.
+    // A naive status-only guard would see `aktif` on the retry and reject
+    // forever — leaving the customer active but never billed/provisioned.
+    // This test asserts the retry instead RECOVERS.
+    it('recovers on retry: does not duplicate the PPPoE secret, ONU, or router count when the customer is already aktif from a prior attempt', async () => {
       repo.findById.mockResolvedValue(installWo);
-      customers.findById.mockResolvedValue(customerRow);
       repo.markDone.mockResolvedValue({ ...installWo, status: 'done' });
 
-      // First attempt: no secret exists yet — cascade provisions one.
+      // First attempt: customer is still `instalasi` (passes the strict
+      // guard) and this WO has not consumed an ONU or a secret yet.
+      customers.findById.mockResolvedValueOnce({ ...customerRow, status: 'instalasi' });
+      inventory.findAssignedSerialForWorkOrder.mockResolvedValueOnce(null);
       secrets.findByCustomerId.mockResolvedValueOnce(null);
+
       await service.complete(installWo.id, AUTHOR);
+      expect(customers.markInstalled).toHaveBeenCalledTimes(1);
+      expect(inventory.move).toHaveBeenCalledTimes(1);
       expect(secrets.create).toHaveBeenCalledTimes(1);
       expect(routers.adjustSecretCount).toHaveBeenCalledTimes(1);
 
-      // Retry (e.g. invoice generation threw after the secret committed, and
-      // the WO is still not 'done' so complete() re-enters the cascade):
-      // findByCustomerId now reports the secret created on the first attempt.
-      secrets.findByCustomerId.mockResolvedValueOnce({
-        id: 'sec-1',
-        customerId: CUSTOMER_ID,
-      });
-      await service.complete(installWo.id, AUTHOR);
+      // Retry (e.g. a later step failed after `markInstalled` committed,
+      // and the WO is still not 'done' so complete() re-enters the
+      // cascade): the customer is now genuinely `aktif`, and this exact WO
+      // already has an `assign` movement recorded — the activation guard's
+      // bypass recognizes its own prior attempt (a customer `aktif` for any
+      // OTHER reason, with no movement for this WO, is still rejected — see
+      // the precondition-guard describe block above) and the rest of the
+      // cascade re-runs under its own idempotency guards.
+      customers.findById.mockResolvedValueOnce({ ...customerRow, status: 'aktif' });
+      inventory.findAssignedSerialForWorkOrder.mockResolvedValueOnce('ZTEGREAL001');
+      secrets.findByCustomerId.mockResolvedValueOnce({ id: 'sec-1', customerId: CUSTOMER_ID });
 
-      // No second insert, no second increment — exactly once each.
+      const result = await service.complete(installWo.id, AUTHOR);
+
+      expect(result.status).toBe('done');
+      // No second ONU consumption, no second secret insert, no second
+      // router-count increment — exactly once each, across both calls.
+      expect(inventory.move).toHaveBeenCalledTimes(1);
       expect(secrets.create).toHaveBeenCalledTimes(1);
       expect(routers.adjustSecretCount).toHaveBeenCalledTimes(1);
-      // The rest of the cascade still re-runs on retry (activation + billing
-      // are independently idempotent — see invoices.service.spec.ts).
+      // markInstalled and generateFirstInvoice DO re-run on retry (both are
+      // independently idempotent — see invoices.service.spec.ts for the
+      // latter; the former is a plain deterministic UPDATE).
+      expect(customers.markInstalled).toHaveBeenCalledTimes(2);
       expect(invoices.generateFirstInvoice).toHaveBeenCalledTimes(2);
     });
 

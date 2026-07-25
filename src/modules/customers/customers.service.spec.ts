@@ -7,7 +7,11 @@ import { ResellersRepository } from '../resellers/resellers.repository';
 import { SecretEnforcementService } from '../router-resources/secret-enforcement.service';
 import { SettingsService } from '../settings/settings.service';
 import { type CustomerRow, CustomersRepository } from './customers.repository';
-import { CustomersService, assertLegalCustomerTransition } from './customers.service';
+import {
+  CustomersService,
+  assertCustomerReadyForInstallActivation,
+  assertLegalCustomerTransition,
+} from './customers.service';
 
 const PLAN_ID = '00000000-0000-0000-0000-0000000000b1';
 
@@ -603,6 +607,33 @@ describe('CustomersService', () => {
       repo.findById.mockResolvedValue({ ...sampleRow, status: 'berhenti' });
       await expect(service.activate(sampleRow.id)).rejects.toThrow(
         'cannot transition from berhenti to aktif',
+      );
+    });
+
+    // `assertCustomerReadyForInstallActivation` is the OTHER seam that
+    // reaches `instalasi -> aktif` (`WorkOrdersService.complete()` ->
+    // `markInstalled`, go-live follow-up / security review NL-2) —
+    // exercised directly against the exported guard, same as
+    // `assertLegalCustomerTransition` above. It is deliberately narrower
+    // than `assertLegalCustomerTransition(status, 'aktif')`: `isolir` is a
+    // legal source for `aktif` in the general table (the manual
+    // resume()/activate() verbs), but NOT for this install-cascade seam —
+    // an install WO completing for an already-isolir customer must still
+    // be rejected, not treated as a resume.
+    it('allows instalasi as the sole legal from-state for install-WO activation', () => {
+      expect(() => assertCustomerReadyForInstallActivation('instalasi')).not.toThrow();
+    });
+
+    it.each(['prospek', 'aktif', 'isolir', 'berhenti'] as const)(
+      'rejects %s as a from-state for install-WO activation',
+      (status) => {
+        expect(() => assertCustomerReadyForInstallActivation(status)).toThrow(BadRequestException);
+      },
+    );
+
+    it('error message names the unexpected status and the expected instalasi', () => {
+      expect(() => assertCustomerReadyForInstallActivation('aktif')).toThrow(
+        'cannot complete install work order: customer is aktif, expected instalasi',
       );
     });
   });

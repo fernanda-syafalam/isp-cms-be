@@ -48,6 +48,16 @@ export class InventoryService {
   }
 
   /**
+   * The serial already consumed for a work order's `assign` movement, or
+   * null when none exists yet — the idempotency check for the install
+   * cascade's ONU consumption step (a retry must reuse the same physical
+   * unit, not FIFO-pick a second one).
+   */
+  async findAssignedSerialForWorkOrder(workOrderId: string): Promise<string | null> {
+    return this.repo.findAssignedSerialForWorkOrder(workOrderId);
+  }
+
+  /**
    * Look up a specific ONU by its physical serial — used by the work-order
    * install cascade to consume the exact unit a technician scanned in the
    * field (P3.B.3), instead of the FIFO pick from `findAvailableOnu`.
