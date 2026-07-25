@@ -355,6 +355,11 @@ export class InvoicesRepository {
       method: Payment['method'];
       tenderedAmount: number | null;
       changeAmount: number | null;
+      // Cashier's manual-entry justification (FIN-D) — null for a
+      // gateway-settled payment (`PaymentIntentsService.settleIntent` never
+      // passes one). Purely additive metadata: never read by the
+      // idempotency/amount checks above.
+      note: string | null;
     },
   ): Promise<{ invoice: Invoice; reactivated: boolean }> {
     return this.db.transaction(async (tx) => {
@@ -388,6 +393,7 @@ export class InvoicesRepository {
         method: input.method,
         tenderedAmount: input.tenderedAmount,
         changeAmount: input.changeAmount,
+        note: input.note,
       });
 
       const paidAmount = invoice.paidAmount + input.amount;

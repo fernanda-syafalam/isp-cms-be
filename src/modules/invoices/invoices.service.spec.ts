@@ -275,6 +275,7 @@ describe('InvoicesService', () => {
         method: 'transfer',
         tenderedAmount: null,
         changeAmount: null,
+        note: null, // no `note` in the request -> null, never ''
       });
       // ADR-0008: reactivation re-enables the PPPoE secret on the router.
       expect(secrets.setDisabledByCustomerId).toHaveBeenCalledWith(CUSTOMER_ID, false);
@@ -283,6 +284,66 @@ describe('InvoicesService', () => {
       expect(result.balanceDue).toBe(0);
       // No reseller on this customer → no commission (P3.D.1).
       expect(resellersFake.postCommissionForInvoice).not.toHaveBeenCalled();
+    });
+
+    // FIN-D go-live finding: a cashier's manual-entry justification threads
+    // through to `repo.recordPayment` unchanged — money/idempotency inputs
+    // (amount/method/tenderedAmount/changeAmount) are untouched by this.
+    // `input.note` here is already trimmed, matching what the controller
+    // actually hands the service after `RecordPaymentSchema`'s `.trim()`
+    // runs on the raw request body (no separate DTO-level spec in this repo
+    // — zod's own `.trim()`/`.max()` behavior is a library guarantee, not
+    // custom logic worth re-testing here).
+    it('passes the cashier note through to repo.recordPayment (FIN-D)', async () => {
+      repo.findById.mockResolvedValue(pendingInvoice);
+      repo.recordPayment.mockResolvedValue({
+        invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
+        reactivated: false,
+      });
+      customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
+
+      await service.pay(pendingInvoice.id, {
+        method: 'transfer',
+        note: 'Webhook was slow; customer showed the transfer receipt',
+      });
+
+      expect(repo.recordPayment).toHaveBeenCalledWith(
+        pendingInvoice.id,
+        expect.objectContaining({ note: 'Webhook was slow; customer showed the transfer receipt' }),
+      );
+    });
+
+    it('normalizes an omitted note to null, never an empty string (backward compat)', async () => {
+      repo.findById.mockResolvedValue(pendingInvoice);
+      repo.recordPayment.mockResolvedValue({
+        invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
+        reactivated: false,
+      });
+      customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
+
+      await service.pay(pendingInvoice.id, { method: 'transfer' });
+
+      expect(repo.recordPayment).toHaveBeenCalledWith(
+        pendingInvoice.id,
+        expect.objectContaining({ note: null }),
+      );
+    });
+
+    it('normalizes a whitespace-only note to null (never stores an empty note)', async () => {
+      repo.findById.mockResolvedValue(pendingInvoice);
+      repo.recordPayment.mockResolvedValue({
+        invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
+        reactivated: false,
+      });
+      customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
+
+      // zod's `.trim()` already reduces '   ' to '' before the service sees it.
+      await service.pay(pendingInvoice.id, { method: 'transfer', note: '' });
+
+      expect(repo.recordPayment).toHaveBeenCalledWith(
+        pendingInvoice.id,
+        expect.objectContaining({ note: null }),
+      );
     });
 
     it('records a partial payment: status becomes partial, balance stays > 0, and the customer is not reactivated', async () => {
@@ -887,7 +948,7 @@ describe('InvoicesService', () => {
     });
   });
 
-  it('maps the payment ledger', async () => {
+  it('maps the payment ledger, including the FIN-D cashier note when present', async () => {
     repo.listPayments.mockResolvedValue({
       items: [
         {
@@ -898,14 +959,29 @@ describe('InvoicesService', () => {
           customerName: 'Budi Santoso',
           amount: 222_000,
           method: 'transfer',
+          note: 'Webhook was slow; verified via bank receipt',
           paidAt: new Date('2026-06-15T10:00:00.000Z'),
           createdAt: new Date('2026-06-15T10:00:00.000Z'),
         },
+        {
+          id: '00000000-0000-0000-0000-0000000000f2',
+          invoiceId: pendingInvoice.id,
+          invoiceNo: 'INV-2026-100',
+          customerId: CUSTOMER_ID,
+          customerName: 'Budi Santoso',
+          amount: 222_000,
+          method: 'qris',
+          note: null, // gateway-settled — no manual entry, no reason
+          paidAt: new Date('2026-06-16T10:00:00.000Z'),
+          createdAt: new Date('2026-06-16T10:00:00.000Z'),
+        },
       ],
-      total: 1,
+      total: 2,
     });
     const result = await service.listPayments({ limit: 50, offset: 0 });
     expect(result.items[0]?.paidAt).toBe('2026-06-15T10:00:00.000Z');
     expect(result.items[0]?.amount).toBe(222_000);
+    expect(result.items[0]?.note).toBe('Webhook was slow; verified via bank receipt');
+    expect(result.items[1]?.note).toBeNull();
   });
 });

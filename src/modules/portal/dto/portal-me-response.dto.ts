@@ -3,18 +3,25 @@ import { z } from 'zod';
 import { CustomerResponseSchema } from '../../customers/dto/customer-response.dto';
 import { InvoiceResponseSchema } from '../../invoices/dto/invoice-response.dto';
 import { PaymentIntentResponseSchema } from '../../invoices/dto/payment-intent-response.dto';
-import { PaymentResponseSchema } from '../../invoices/dto/payment-response.dto';
+import { PortalPaymentResponseSchema } from '../../invoices/dto/payment-response.dto';
 import { TicketResponseSchema } from '../../tickets/dto/ticket-response.dto';
 
 /**
  * The authenticated customer's self-service snapshot — mirrors the FE
  * `PortalMeSchema`. Composed from the existing per-module response schemas
  * so the portal never re-declares those shapes.
+ *
+ * `payments` uses `PortalPaymentResponseSchema`, NOT the staff
+ * `PaymentResponseSchema` — it omits `note` (FIN-D) so an internal cashier
+ * annotation about this customer's payment is never exposed back to them.
+ * `PortalService`/`InvoicesService.paymentsByCustomer` still return the full
+ * row; `@ZodSerializerDto(PortalMeResponseDto)` on the controller is what
+ * strips the field.
  */
 export const PortalMeResponseSchema = z.object({
   customer: CustomerResponseSchema,
   invoices: z.array(InvoiceResponseSchema),
-  payments: z.array(PaymentResponseSchema),
+  payments: z.array(PortalPaymentResponseSchema),
   tickets: z.array(TicketResponseSchema),
   // Still-resumable pay-intents (P3.C.3): unpaid QRIS/VA the FE can offer to
   // resume instead of discarding on dialog close. Ownership is enforced in

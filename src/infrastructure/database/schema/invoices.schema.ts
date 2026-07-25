@@ -147,6 +147,13 @@ export const payments = pgTable(
     // given back. Null for non-cash rails. changeAmount = tendered - amount.
     tenderedAmount: integer('tendered_amount'),
     changeAmount: integer('change_amount'),
+    // Operator-entered justification for a MANUAL/offline payment entry
+    // (FIN-D go-live finding): why a cashier recorded this by hand instead of
+    // it settling through the automated gateway webhook (e.g. "webhook was
+    // slow, customer showed a transfer receipt at the counter"). Null for a
+    // gateway-settled payment — `PaymentIntentsService.settleIntent` never
+    // sets it, only `InvoicesService.pay`'s manual/loket callers can.
+    note: varchar('note', { length: 200 }),
     paidAt: timestamp('paid_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
     createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
   },

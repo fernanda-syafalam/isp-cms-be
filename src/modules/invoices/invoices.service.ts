@@ -131,11 +131,17 @@ export class InvoicesService {
     // customer's outstanding refresh all land in ONE DB transaction inside
     // the repository — a failure partway through rolls everything back, so
     // a 'paid' invoice can never exist without its payments row (P3.A.4).
+    // FIN-D: an empty/whitespace-only note (zod already trims) is normalized
+    // to null here — never stored as ''  — so "no reason given" always reads
+    // the same way regardless of what the FE happened to submit.
+    const note = input.note && input.note.length > 0 ? input.note : null;
+
     const { invoice: updated, reactivated } = await this.repo.recordPayment(id, {
       amount,
       method: input.method,
       tenderedAmount,
       changeAmount,
+      note,
     });
     // Reactivation re-enables the PPPoE secret on the router (ADR-0008) —
     // a different module's repository, so it stays outside the invoice/
@@ -521,6 +527,7 @@ function toPaymentResponse(row: Payment): PaymentResponse {
     voucherId: row.voucherId,
     tenderedAmount: row.tenderedAmount,
     changeAmount: row.changeAmount,
+    note: row.note,
     paidAt: row.paidAt.toISOString(),
   };
 }
