@@ -9,6 +9,7 @@ import { SettingsService } from '../settings/settings.service';
 import { type CustomerRow, CustomersRepository } from './customers.repository';
 import {
   CustomersService,
+  assertCustomerIsHeld,
   assertCustomerReadyForInstallActivation,
   assertLegalCustomerTransition,
 } from './customers.service';
@@ -63,6 +64,7 @@ describe('CustomersService', () => {
       create: vi.fn(),
       updateProfile: vi.fn(),
       setStatus: vi.fn(),
+      reclassifyHold: vi.fn(),
       recordConsent: vi.fn(),
       updateKyc: vi.fn(),
       requestDataDeletion: vi.fn(),
@@ -635,6 +637,76 @@ describe('CustomersService', () => {
       expect(() => assertCustomerReadyForInstallActivation('aktif')).toThrow(
         'cannot complete install work order: customer is aktif, expected instalasi',
       );
+    });
+  });
+
+  // Go-live follow-up to D6/NL-2: reclassifyHold's own guard/verb — the
+  // legitimate isolir -> isolir case the same-state ban above deliberately
+  // excludes.
+  describe('reclassifyHold (go-live follow-up, P3.A.3)', () => {
+    it('reclassifies an isolir customer overdue -> voluntary, leaving status untouched', async () => {
+      repo.findById.mockResolvedValue({
+        ...sampleRow,
+        status: 'isolir',
+        holdReason: 'overdue',
+      });
+      repo.reclassifyHold.mockResolvedValue({
+        ...sampleRow,
+        status: 'isolir',
+        holdReason: 'voluntary',
+      });
+
+      const result = await service.reclassifyHold(sampleRow.id, 'voluntary');
+
+      expect(repo.reclassifyHold).toHaveBeenCalledWith(sampleRow.id, 'voluntary');
+      expect(repo.setStatus).not.toHaveBeenCalled();
+      expect(secrets.applyDisabledForCustomer).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ status: 'isolir', holdReason: 'voluntary' });
+    });
+
+    it('reclassifies an isolir customer voluntary -> overdue', async () => {
+      repo.findById.mockResolvedValue({
+        ...sampleRow,
+        status: 'isolir',
+        holdReason: 'voluntary',
+      });
+      repo.reclassifyHold.mockResolvedValue({
+        ...sampleRow,
+        status: 'isolir',
+        holdReason: 'overdue',
+      });
+
+      const result = await service.reclassifyHold(sampleRow.id, 'overdue');
+
+      expect(repo.reclassifyHold).toHaveBeenCalledWith(sampleRow.id, 'overdue');
+      expect(result).toMatchObject({ status: 'isolir', holdReason: 'overdue' });
+    });
+
+    it.each(['prospek', 'instalasi', 'aktif', 'berhenti'] as const)(
+      'rejects reclassify when the customer is %s (not held) with 400, no write',
+      async (status) => {
+        repo.findById.mockResolvedValue({ ...sampleRow, status, holdReason: null });
+
+        await expect(service.reclassifyHold(sampleRow.id, 'voluntary')).rejects.toBeInstanceOf(
+          BadRequestException,
+        );
+        expect(repo.reclassifyHold).not.toHaveBeenCalled();
+      },
+    );
+
+    it('error message names the unexpected status and the expected isolir', async () => {
+      repo.findById.mockResolvedValue({ ...sampleRow, status: 'aktif' });
+
+      await expect(service.reclassifyHold(sampleRow.id, 'voluntary')).rejects.toThrow(
+        'cannot reclassify hold reason: customer is aktif, expected isolir',
+      );
+    });
+
+    it('exposes assertCustomerIsHeld directly: allows isolir, rejects everything else', () => {
+      expect(() => assertCustomerIsHeld('isolir')).not.toThrow();
+      for (const status of ['prospek', 'instalasi', 'aktif', 'berhenti'] as const) {
+        expect(() => assertCustomerIsHeld(status)).toThrow(BadRequestException);
+      }
     });
   });
 

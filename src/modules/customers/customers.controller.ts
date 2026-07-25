@@ -16,7 +16,12 @@ import { type AuthUser, CurrentUser } from '../../common/decorators/current-user
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CustomersService } from './customers.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
-import { ChangePlanDto, RelocateDto, SetOnuWifiDto } from './dto/customer-actions.dto';
+import {
+  ChangePlanDto,
+  ReclassifyHoldDto,
+  RelocateDto,
+  SetOnuWifiDto,
+} from './dto/customer-actions.dto';
 import { CustomerListResponseDto, CustomerResponseDto } from './dto/customer-response.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { UpdateKycDto } from './dto/update-kyc.dto';
@@ -145,6 +150,19 @@ export class CustomersController {
   @ZodSerializerDto(CustomerResponseDto)
   stop(@Param('id') id: string) {
     return this.customers.stop(id);
+  }
+
+  // Reclassify why an isolir customer is held — overdue <-> voluntary
+  // (P3.A.3) — without touching status. NOT a lifecycle transition (the
+  // same-state guard on the verbs above deliberately rejects isolir ->
+  // isolir), so this is its own PATCH verb, not a POST transition
+  // (go-live follow-up to D6/NL-2).
+  @Roles('admin', 'staff')
+  @Audit('customer.reclassify_hold')
+  @Patch(':id/hold-reason')
+  @ZodSerializerDto(CustomerResponseDto)
+  reclassifyHold(@Param('id') id: string, @Body() body: ReclassifyHoldDto) {
+    return this.customers.reclassifyHold(id, body.holdReason);
   }
 
   // --- Compliance (UU PDP) --------------------------------------------

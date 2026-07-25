@@ -337,6 +337,17 @@ describe('CustomersRepository (integration)', () => {
     expect(overdue.holdReason).toBe('overdue');
   });
 
+  // Go-live follow-up to D6/NL-2: reclassifyHold swaps the reason without
+  // touching status.
+  it('reclassifyHold changes holdReason without touching status', async () => {
+    const created = await repo.create({ fullName: 'Cinta', phone: '08', address: 'Jl', planId });
+    await repo.setStatus(created.id, 'isolir', { holdReason: 'overdue' });
+
+    const reclassified = await repo.reclassifyHold(created.id, 'voluntary');
+    expect(reclassified.status).toBe('isolir');
+    expect(reclassified.holdReason).toBe('voluntary');
+  });
+
   // ---------------------------------------------------------------------------
   // KYC-safe projection (ADR-0010 amendment / ADR-0015, SEC-4): the mitra
   // read path replaces npwp/ktp with a real SQL NULL rather than reading the

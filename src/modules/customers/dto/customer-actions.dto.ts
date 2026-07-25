@@ -29,3 +29,17 @@ export const ChangePlanSchema = z
   .strict();
 export type ChangePlanInput = z.infer<typeof ChangePlanSchema>;
 export class ChangePlanDto extends createZodDto(ChangePlanSchema) {}
+
+/**
+ * Input for PATCH /v1/customers/:id/hold-reason. Reclassifies why an
+ * `isolir` customer is held (overdue <-> voluntary, P3.A.3) — this is NOT
+ * a lifecycle transition, `status` never changes (go-live follow-up to
+ * D6/NL-2, see `CustomersService.reclassifyHold`).
+ */
+export const ReclassifyHoldSchema = z
+  .object({
+    holdReason: z.enum(['overdue', 'voluntary']),
+  })
+  .strict();
+export type ReclassifyHoldInput = z.infer<typeof ReclassifyHoldSchema>;
+export class ReclassifyHoldDto extends createZodDto(ReclassifyHoldSchema) {}
