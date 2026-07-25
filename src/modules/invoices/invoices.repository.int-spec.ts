@@ -571,6 +571,7 @@ describe('InvoicesRepository (integration)', () => {
         method: 'transfer',
         tenderedAmount: null,
         changeAmount: null,
+        note: null,
       });
 
       expect(invoice.status).toBe('paid');
@@ -582,6 +583,25 @@ describe('InvoicesRepository (integration)', () => {
       expect(ledger.total).toBe(1);
       expect(ledger.items[0]?.amount).toBe(222_000);
       expect(ledger.items[0]?.invoiceId).toBe(created.id);
+      expect(ledger.items[0]?.note).toBeNull(); // no reason given -> null, not ''
+    });
+
+    it('persists the cashier-entered note (FIN-D) alongside the ledger row', async () => {
+      const created = await repo.create(newInvoice()); // total = 222_000
+
+      const { invoice } = await repo.recordPayment(created.id, {
+        amount: 222_000,
+        method: 'transfer',
+        tenderedAmount: null,
+        changeAmount: null,
+        note: 'Gateway webhook was slow; customer showed transfer receipt at the counter',
+      });
+
+      expect(invoice.status).toBe('paid');
+      const ledger = await repo.listPayments({ limit: 50, offset: 0 });
+      expect(ledger.items[0]?.note).toBe(
+        'Gateway webhook was slow; customer showed transfer receipt at the counter',
+      );
     });
 
     it('a double-pay (invoice already paid) is a no-op: no second ledger row, no over-credit', async () => {
@@ -591,6 +611,7 @@ describe('InvoicesRepository (integration)', () => {
         method: 'transfer',
         tenderedAmount: null,
         changeAmount: null,
+        note: null,
       });
 
       const retry = await repo.recordPayment(created.id, {
@@ -598,6 +619,7 @@ describe('InvoicesRepository (integration)', () => {
         method: 'transfer',
         tenderedAmount: null,
         changeAmount: null,
+        note: null,
       });
 
       expect(retry.invoice.status).toBe('paid');
@@ -614,6 +636,7 @@ describe('InvoicesRepository (integration)', () => {
         method: 'cash',
         tenderedAmount: 100_000,
         changeAmount: 0,
+        note: null,
       });
 
       expect(invoice.status).toBe('partial');
@@ -638,6 +661,7 @@ describe('InvoicesRepository (integration)', () => {
           method: 'transfer',
           tenderedAmount: null,
           changeAmount: null,
+          note: null,
         }),
       ).rejects.toThrow();
 
@@ -656,6 +680,7 @@ describe('InvoicesRepository (integration)', () => {
           method: 'transfer',
           tenderedAmount: null,
           changeAmount: null,
+          note: null,
         }),
       ).rejects.toThrow();
       const ledger = await repo.listPayments({ limit: 50, offset: 0 });
@@ -674,6 +699,7 @@ describe('InvoicesRepository (integration)', () => {
         method: 'transfer',
         tenderedAmount: null,
         changeAmount: null,
+        note: null,
       });
 
       expect(invoice.status).toBe('paid');
@@ -699,6 +725,7 @@ describe('InvoicesRepository (integration)', () => {
         method: 'transfer',
         tenderedAmount: null,
         changeAmount: null,
+        note: null,
       });
 
       expect(invoice.status).toBe('partial');
@@ -729,12 +756,14 @@ describe('InvoicesRepository (integration)', () => {
           method: 'transfer',
           tenderedAmount: null,
           changeAmount: null,
+          note: null,
         }),
         repo.recordPayment(created.id, {
           amount: 222_000,
           method: 'transfer',
           tenderedAmount: null,
           changeAmount: null,
+          note: null,
         }),
       ]);
       // Both calls resolve (recordPayment is idempotent, never throws on a
