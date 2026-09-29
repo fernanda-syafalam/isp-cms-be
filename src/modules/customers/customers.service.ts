@@ -24,21 +24,15 @@ export class CustomersService {
 
   constructor(
     private readonly repo: CustomersRepository,
-    // Plans is the source of truth for a customer's plan. We only read it
-    // to validate the FK (400 on a bad id) before handing off to the
-    // repository's atomic changePlan — the repo does the actual price
-    // lookups + delta math itself, under its own lock (MUST-FIX #1/#5,
-    // PR #121 review).
+    // Read-only: validates the plan FK (400); repo.changePlan does price lookups + delta math
+    // under its own lock (MUST-FIX #1/#5, PR #121).
     private readonly plans: PlansRepository,
     // WhatsApp dunning reminders go through the notifications module.
     private readonly notifications: NotificationsService,
-    // Network enforcement: lifecycle transitions toggle the customer's PPPoE
-    // secret in the DB and push it to the router (ADR-0008 / P2.5).
-    // RouterResourcesModule <-> CustomersModule is wired with forwardRef to
-    // break the module-import cycle.
+    // Toggles the customer's PPPoE secret in DB and router (ADR-0008 / P2.5). forwardRef with
+    // RouterResourcesModule breaks the import cycle.
     private readonly secrets: SecretEnforcementService,
-    // Validates the resellerId FK on onboard (P3.D.2) — a bad id fails
-    // explicit (400) instead of surfacing as a DB-level 500.
+    // Validates the resellerId FK on onboard (P3.D.2): 400 instead of a DB-level 500.
     private readonly resellers: ResellersRepository,
     // Billing policy (dueDays) for a proration adjustment invoice's grace
     // period — same grace a regular invoice gets (MED #4, PR #121 review).
@@ -60,30 +54,19 @@ export class CustomersService {
       };
     }
     const { items, total, summary } = await this.repo.list(scoped);
-    // KYC-safe projection (ADR-0010 amendment / ADR-0015, SEC-4): a mitra
-    // never sees npwp/ktp — the repository already never read the real
-    // column value (scoped.excludeKyc, set by scopeForUser), and the
-    // response mapper below omits the keys entirely (not merely null).
+    // KYC-safe projection (ADR-0010 amendment / ADR-0015, SEC-4): a mitra never sees npwp/ktp;
+    // see toCustomerResponse.
     const includeKyc = user?.role !== 'mitra';
     return { items: items.map((row) => toCustomerResponse(row, { includeKyc })), total, summary };
   }
 
   /**
-   * `user` is optional: the many internal cross-module callers of this
-   * method (tickets, work-orders, invoices, contracts, sla-credits,
-   * portal, vouchers, onboarding — none of them HTTP-facing on behalf of
-   * a mitra) never pass one and always get the full row, exactly as
-   * before this change. Only the HTTP `GET /v1/customers/:id` handler
-   * passes the caller's `AuthUser`.
-   *
-   * For a mitra principal (ADR-0010 amendment / ADR-0015, SEC-4):
-   * - the reseller-ownership check below is the detail-route counterpart
-   *   of the list() scoping (ADR-0010) — a mitra may only read their own
-   *   reseller's customers by id too. Fails closed with 404 (not 403) so
-   *   another reseller's customer id is not probeable (mirrors
-   *   ResellersService.assertResellerAccess).
-   * - the KYC fields (npwp/ktp) are excluded at the query layer and
-   *   omitted from the response entirely.
+   * `user` is optional: internal cross-module callers never pass one and get the full row; only
+   * the HTTP `GET /v1/customers/:id` handler passes the caller.
+   * For a mitra (ADR-0010 amendment / ADR-0015, SEC-4): reseller ownership is checked as the
+   * detail-route counterpart of list() scoping, failing 404 (not 403) so ids are not probeable
+   * (as ResellersService.assertResellerAccess); KYC fields are excluded at the query layer and
+   * omitted from the response.
    */
   async findById(id: string, user?: AuthUser): Promise<CustomerResponse> {
     const isMitra = user?.role === 'mitra';
@@ -96,10 +79,8 @@ export class CustomersService {
   }
 
   /**
-   * Resolve the subscriber behind a portal session. Authoritative mapping
-   * is the customers.user_id FK (P1.3); email is the transition fallback
-   * for subscribers created before the linkage existed. Fails closed: no
-   * match on either → 404 — never someone else's account (P0.3).
+   * Portal session -> subscriber: `customers.user_id` FK (P1.3) first, email fallback for
+   * subscribers created before the linkage. Fails closed (404), never someone else's account (P0.3).
    */
   async resolveForPortal(session: { id: string; email: string | null }): Promise<CustomerResponse> {
     const row =
@@ -125,10 +106,8 @@ export class CustomersService {
   }
 
   /**
-   * Create a subscriber through the onboarding wizard. Unlike create() —
-   * which always starts `prospek` — onboarding records the chosen service
-   * area and opens the customer in `instalasi` (a linked install work order
-   * is scheduled by the onboarding flow).
+   * Onboarding-wizard create: unlike create() (`prospek`), records the service area and opens
+   * in `instalasi`.
    */
   async onboard(
     input: CreateCustomerInput & {
@@ -140,8 +119,6 @@ export class CustomersService {
       ktp?: string | null;
       npwp?: string | null;
       consentAt?: Date | null;
-      // resellerId is already on CreateCustomerInput (P1.5) — validated by
-      // requireResellerIfProvided below (P3.D.2).
     },
   ): Promise<CustomerResponse> {
     await this.requirePlan(input.planId);
@@ -154,9 +131,8 @@ export class CustomersService {
       areaName: input.areaName,
       planId: input.planId,
       status: 'instalasi',
-      // Geo pin + ODP assignment + KYC captured at onboarding (P3.A.1). All
-      // nullable. The ODP port itself is reserved by the caller (Onboarding
-      // Service) BEFORE this runs — this only stamps the FK on the row.
+      // Geo pin, ODP and KYC captured at onboarding (P3.A.1). The ODP port is reserved by
+      // OnboardingService BEFORE this runs; this only stamps the FK.
       lat: input.lat ?? null,
       lng: input.lng ?? null,
       odpId: input.odpId ?? null,
@@ -187,41 +163,19 @@ export class CustomersService {
   }
 
   // --- Lifecycle transitions ------------------------------------------
-  // suspend (voluntary) and isolate (non-payment) both land on `isolir`;
-  // they differ only in intent + audit action. activate clears the
-  // balance (payment received); resume keeps it.
+  // suspend (voluntary) and isolate (non-payment) both land on `isolir`; they differ only in
+  // intent + audit action. activate clears the balance (payment received); resume keeps it.
   //
-  // Every verb below funnels through `transition()`, the single seam
-  // ADR-0004 (Locked rule 3) names as the manual-write gate. `transition()`
-  // enforces `CUSTOMER_LEGAL_TRANSITIONS` (D6/NL-2) — see that table for the
-  // full from -> to graph and the same-state policy.
+  // Every verb funnels through `transition()`, the manual-write gate (ADR-0004 rule 3), which
+  // enforces `CUSTOMER_LEGAL_TRANSITIONS` (D6/NL-2).
   //
-  // System-driven (automated) status writes do NOT go through `transition()`
-  // and are therefore NOT covered by this table guard — by design. There are
-  // two such seams (ADR-0004 rule 3 predates them describing a single
-  // `setBilling` seam; the reactivation path has since moved — reconcile in a
-  // follow-up so the ADR is not stale):
-  //   1. Auto overdue -> isolir: `BillingAutomationService.isolateActiveDebtors()`
-  //      via `CustomersRepository.setBilling(...)`.
-  //   2. Post-payment reactivation isolir -> aktif: a guarded write to
-  //      `customers.status` INSIDE `InvoicesRepository.recordPayment`'s
-  //      transaction (`refreshOutstandingTx`, reactivate when
-  //      `status === 'isolir' && outstanding === 0`) — NOT `setBilling`. It
-  //      lives in the payment transaction on purpose (the status flip is
-  //      atomic with the settle); do not re-route it just to unify the seam.
-  // Both automated seams gate on the customer's current status inline before
-  // writing, so they only ever emit the two ADR-legal auto edges
-  // (`aktif->isolir`, `isolir->aktif`) — but that correctness lives in those
-  // call sites, not in this table.
-  // Third such seam, fixed (was the go-live follow-up noted here):
-  // `WorkOrdersService.complete()` used to flip a customer to `aktif` +
-  // provision a secret via `customers.markInstalled()` with no current-status
-  // check (guarded only by WO idempotency) — the same status-flip+provision
-  // class as D6, reached via WO completion instead of `transition()`.
-  // `WorkOrdersService.complete()` now calls
-  // `assertCustomerReadyForInstallActivation` (below, backed by this same
-  // table's shape) before entering the install cascade, so the
-  // `instalasi -> aktif` edge is enforced there too — see that method's doc.
+  // System-driven writes bypass `transition()` by design and gate on current status inline,
+  // so they only emit the two auto edges:
+  //   1. overdue aktif -> isolir: `BillingAutomationService.isolateActiveDebtors()` via setBilling.
+  //   2. payment isolir -> aktif: guarded write inside `InvoicesRepository.recordPayment`'s
+  //      transaction (`refreshOutstandingTx`), atomic with the settle; do not re-route it via
+  //      `setBilling`.
+  // WO completion (instalasi -> aktif) is guarded by `assertCustomerReadyForInstallActivation`.
 
   async suspend(id: string): Promise<CustomerResponse> {
     // Voluntary hold (cuti) — a customer request, not a debt (P3.A.3).
@@ -246,26 +200,12 @@ export class CustomersService {
   }
 
   /**
-   * Reclassify why an `isolir` customer is held — overdue <-> voluntary
-   * (P3.A.3) — go-live follow-up to D6/NL-2: `transition()`'s same-state
-   * guard correctly rejects isolir -> isolir (it is not a lifecycle edge
-   * in the ADR-0004 graph), but that also blocked the legitimate operator
-   * workflow of reclassifying an already-`isolir` customer's hold reason
-   * (e.g. an overdue debtor requests a cuti, or vice-versa). `holdReason`
-   * is not part of the lifecycle graph — `status` never changes here — so
-   * this deliberately does NOT go through `transition()`; it is a plain
-   * field write, gated by `assertCustomerIsHeld` instead of
-   * `assertLegalCustomerTransition`.
-   *
-   * Confirmed safe as a naive field swap (no hidden side effect): neither
-   * the auto-isolir sweep (`isolateActiveDebtors`, only acts on
-   * `status === 'aktif'`) nor payment reactivation (`refreshOutstandingTx`,
-   * gates on `status === 'isolir' && outstanding === 0`) branch on
-   * `holdReason` — both already treat every `isolir` customer identically
-   * regardless of why they are held. No router/secret call either: the
-   * PPPoE secret is already disabled for `isolir` either way
-   * (`applyDisabledForCustomer` keys off `status`, not `holdReason`), so
-   * reclassifying never touches network enforcement.
+   * Reclassify why an `isolir` customer is held (overdue <-> voluntary, P3.A.3). Bypasses
+   * `transition()` on purpose: status never changes and its same-state guard would reject
+   * isolir -> isolir. Plain field write gated by `assertCustomerIsHeld`.
+   * Safe as a naive swap: the auto-isolir sweep, payment reactivation and
+   * `applyDisabledForCustomer` all key off `status`, not `holdReason`, so network enforcement
+   * is untouched.
    */
   async reclassifyHold(
     id: string,
@@ -328,12 +268,8 @@ export class CustomersService {
   }
 
   /**
-   * Fire a manual WhatsApp billing reminder to the customer, through the
-   * SAME retried delivery queue as automated dunning (ADR-0012/ADR-0017) —
-   * previously this bypassed the queue and called send() directly with no
-   * vars, so the template rendered literal `{nama}`/`{jumlah}` and a
-   * transient failure had no retry. Best-effort (notifyBestEffort): a
-   * queue outage must never fail this admin action.
+   * Manual WhatsApp billing reminder through the same retried queue as automated dunning
+   * (ADR-0012/ADR-0017). Best-effort: a queue outage must not fail this admin action.
    */
   async notifyWhatsapp(id: string): Promise<CustomerResponse> {
     const row = await this.requireById(id);
@@ -346,9 +282,7 @@ export class CustomersService {
             to: row.phone,
             vars: { nama: row.fullName, jumlah: formatIdr(row.outstanding) },
           },
-          // Unique per click (not per-cycle like the automated dunning
-          // jobId), so an admin re-sending the same reminder is never
-          // deduped by BullMQ's idempotent jobId.
+          // Unique per click so BullMQ's idempotent jobId never dedupes an admin re-send.
           `manual-due_soon:${id}:${Date.now()}`,
         ),
       { event: 'due_soon', customerId: id },
@@ -358,17 +292,11 @@ export class CustomersService {
   }
 
   /**
-   * Change the plan. planName re-derives from the join. An upgrade (delta
-   * > 0) or downgrade (delta < 0) prorates the monthly price difference —
-   * backed by a REAL invoice line, atomically, via
-   * `CustomersRepository.changePlan` (MUST-FIX #1/#5, PR #121 review): the
-   * plan write, the delta computation, and the charge/credit all happen
-   * inside ONE transaction there, under a customer-row lock that also
-   * makes two concurrent/retried calls to the SAME target plan idempotent
-   * (only the first one actually applies a delta — see that method's doc).
-   * This service method does no money math itself: it only validates the
-   * target plan exists (400 on a bad id) and reads the billing policy's
-   * `dueDays` for the adjustment invoice's grace period (MED #4).
+   * Change the plan, prorating the monthly price delta as a real invoice line. Plan write, delta
+   * and charge/credit run in ONE transaction under a customer-row lock in
+   * `CustomersRepository.changePlan`, which also makes concurrent/retried calls to the same
+   * target idempotent (MUST-FIX #1/#5, PR #121). No money math here: this validates the plan
+   * (400) and reads billing `dueDays` for the adjustment invoice's grace (MED #4).
    */
   async changePlan(id: string, input: ChangePlanInput): Promise<CustomerResponse> {
     await this.requireById(id); // 404 first — the atomic repo call re-validates for real under its own lock.
@@ -397,11 +325,8 @@ export class CustomersService {
     opts: { clearOutstanding?: boolean; holdReason?: CustomerRow['holdReason'] },
     verb: string,
   ): Promise<CustomerResponse> {
-    // D6/NL-2: read the current status and validate BEFORE any write — the
-    // DB update (repo.setStatus) and the network enforcement side effect
-    // (secrets.applyDisabledForCustomer) must never fire for an illegal
-    // pair. requireById() also gives the existing 404-on-missing-customer
-    // behaviour for free.
+    // D6/NL-2: validate BEFORE any write so neither repo.setStatus nor the network side effect
+    // fires for an illegal pair. requireById() also gives 404 on a missing customer.
     const current = await this.requireById(id);
     assertLegalCustomerTransition(current.status, status);
     const row = await this.repo.setStatus(id, status, opts);
@@ -416,18 +341,12 @@ export class CustomersService {
   private async requirePlan(planId: string): Promise<void> {
     const plan = await this.plans.findById(planId);
     if (!plan) {
-      // The referenced plan does not exist — a bad reference in the
-      // request body, not a missing customer. 400, not 404.
+      // Bad reference in the request body, not a missing customer: 400, not 404.
       throw new BadRequestException('plan not found');
     }
   }
 
-  /**
-   * Guard for the optional resellerId FK (P3.D.2): when a caller supplies
-   * one (direct onboarding or a converted lead), it must reference a real
-   * reseller — otherwise this fails explicit (400) here instead of at the
-   * DB as an FK-violation 500.
-   */
+  /** Optional resellerId FK (P3.D.2): 400 here instead of a DB FK-violation 500. */
   private async requireResellerIfProvided(resellerId?: string | null): Promise<void> {
     if (!resellerId) return;
     const reseller = await this.resellers.findById(resellerId);
@@ -443,48 +362,18 @@ function normalizeEmail(email: string): string | null {
 }
 
 /**
- * D6/NL-2 (go-live defect): the canonical lifecycle graph locked in
- * ADR-0004's "Transition table (locked)" — every edge below cites the ADR
- * row that authorizes it. This is the from -> to allow-list `transition()`
- * enforces; anything not listed for a given `from` is illegal.
+ * Allow-list from ADR-0004 "Transition table (locked)" (D6/NL-2); `transition()` rejects any
+ * edge not listed for the `from` status.
  *
- * - `prospek -> instalasi`: ADR-0004 row "prospek | instalasi | onboard()".
- *   Not reachable through `transition()` today (onboard() writes the status
- *   via repo.create(), a separate entry point per ADR-0004's "Entry points"
- *   section) — listed anyway so the table stays a complete, ADR-faithful
- *   graph for any future caller of `transition()`, and so it is directly
- *   unit-testable.
- * - `instalasi -> aktif`: ADR-0004 row "instalasi | aktif | WO complete() ->
- *   markInstalled". Reached via `CustomersRepository.markInstalled` (work
- *   orders), not `transition()` — same rationale as above.
- * - `aktif -> isolir`: ADR-0004 rows "aktif|isolir|suspend()" and
- *   "aktif|isolir|isolate()" (manual verbs; the third row, auto overdue,
- *   goes through `setBilling`, not this seam — see the class-level note).
- * - `isolir -> aktif`: ADR-0004 rows "isolir|aktif|resume()" and
- *   "isolir|aktif|activate()" (manual verbs; the third row, auto payment
- *   reactivation, also goes through `setBilling`).
- * - `aktif -> berhenti` and `isolir -> berhenti`: ADR-0004 rows
- *   "aktif|berhenti|stop()" and "isolir|berhenti|stop()".
- * - `berhenti`: terminal — ADR-0004's canonical graph ends `berhenti -->
- *   [*]` with no outgoing edge. `berhenti -> aktif` and `berhenti -> isolir`
- *   are therefore illegal by omission (this is the D6 bug: today
- *   `activate()` on a churned customer silently re-enables their PPPoE
- *   secret for free).
- * - `prospek -> aktif`: illegal by omission — ADR-0004 has no such edge; a
- *   prospect must pass through `instalasi` (provisioning) first. This is
- *   the other half of the D6 bug (skipping install/provisioning).
- *
- * Same-state (X -> X) policy: deliberately NOT included for any status.
- * None of ADR-0004's locked edges are self-loops, and in practice a
- * same-state call is a UI double-submit / stale client, not a real intent
- * change — reject it explicitly (400) rather than a silent no-op, so the
- * mistake is visible at the call site instead of looking like it worked.
- * (The one legitimate same-state case ADR-0004 does not cover —
- * reclassifying an `isolir` customer's `holdReason`, e.g. overdue ->
- * voluntary, without leaving `isolir` — is intentionally NOT routed
- * through this guard/`transition()`; it has its own verb,
- * `CustomersService.reclassifyHold`, gated by `assertCustomerIsHeld`
- * below instead.)
+ * - `prospek -> instalasi` (onboard() via repo.create), `instalasi -> aktif` (WO complete() ->
+ *   markInstalled) and the auto edges (setBilling isolir/aktif) are reached outside
+ *   `transition()`; the first two are listed for graph completeness and unit-testability.
+ * - `berhenti` is terminal: `berhenti -> aktif/isolir` are illegal by omission (guards D6:
+ *   activating a churned customer would re-enable their PPPoE secret for free).
+ * - `prospek -> aktif` is illegal: a prospect must pass through `instalasi` (provisioning).
+ * - Same-state (X -> X) is deliberately absent: it is a UI double-submit / stale client, so it
+ *   is rejected with 400 to stay visible rather than a silent no-op.
+ * - Changing `holdReason` while staying `isolir` goes through `reclassifyHold`, not here.
  */
 export const CUSTOMER_LEGAL_TRANSITIONS: Readonly<
   Record<CustomerRow['status'], readonly CustomerRow['status'][]>
@@ -508,19 +397,11 @@ export function assertLegalCustomerTransition(
 }
 
 /**
- * Precondition guard for the OTHER (non-`transition()`) seam that reaches
- * the ADR-0004 `instalasi -> aktif` edge: `WorkOrdersService.complete()` ->
- * `CustomersRepository.markInstalled` (go-live follow-up, NL-2 note in
- * `transition()`'s doc block above).
- *
- * This is deliberately narrower than
- * `assertLegalCustomerTransition(status, 'aktif')`: that check is legal for
- * BOTH `instalasi -> aktif` AND `isolir -> aktif` (the table's `isolir` row
- * also allows `aktif`, for the manual `resume()`/`activate()` verbs) — but an
- * install work order completing for an already-`isolir` customer must still
- * be rejected, not silently treated as a resume. The install-cascade seam
- * has exactly ONE legal from-state, so it is checked directly rather than
- * against the shared to-`aktif` fan-in.
+ * Guard for the non-`transition()` seam to `instalasi -> aktif`
+ * (`WorkOrdersService.complete()` -> `markInstalled`).
+ * Narrower than `assertLegalCustomerTransition(status, 'aktif')`, which also allows
+ * `isolir -> aktif`: an install WO completing for an `isolir` customer must be rejected, not
+ * treated as a resume.
  */
 export function assertCustomerReadyForInstallActivation(status: CustomerRow['status']): void {
   const from: CustomerRow['status'] = 'instalasi';
@@ -531,14 +412,7 @@ export function assertCustomerReadyForInstallActivation(status: CustomerRow['sta
   }
 }
 
-/**
- * Precondition guard for `reclassifyHold` (go-live follow-up to D6/NL-2):
- * a customer's `holdReason` (overdue vs voluntary/cuti, P3.A.3) is only
- * meaningful while they are `isolir` — reclassifying the hold reason of a
- * customer who is not currently held is not a real action (there is no
- * hold to reclassify), so it is rejected explicit (400) rather than
- * silently accepted or silently no-op'd.
- */
+/** Guard for `reclassifyHold`: holdReason is only meaningful while `isolir`; otherwise 400. */
 export function assertCustomerIsHeld(status: CustomerRow['status']): void {
   if (status !== 'isolir') {
     throw new BadRequestException(
@@ -548,31 +422,12 @@ export function assertCustomerIsHeld(status: CustomerRow['status']): void {
 }
 
 /**
- * Project a stored row onto the public customer shape: join-derived
- * planName, ISO date strings, and the provisioning snapshot. Internal
- * columns (updatedAt, dataDeletionRequestedAt) are dropped.
- */
-/**
- * Server-side read scoping (P1.5, ADR-0010): a mitra principal only ever
- * sees their own reseller's acquisitions. The client-supplied filter can
- * never widen this — the reseller constraint is overwritten, and a mitra
- * with no linked reseller gets null (callers return an empty result).
- * Staff/admin (and absent user, e.g. internal calls) pass through.
- *
- * `excludeKyc: true` (ADR-0010 amendment / ADR-0015, SEC-4) rides along
- * with the same mitra branch: a mitra is both scoped to their own
- * reseller AND denied the KYC columns at the query layer — the two are
- * separate concerns (authorization boundary vs. data minimization) but
- * both are set here, in the one place a mitra filter is built, so a
- * future caller cannot apply one without the other.
- *
- * `unassignedReseller` (#25, ops diagnostic for admin/staff) is force-set
- * to `false` here too: without this, a mitra passing `?unassignedReseller
- * =true` would have `resellerId` overwritten below but the repository's
- * `buildScopeWhere` prefers `unassignedReseller` over `resellerId` — so
- * the override alone would let a mitra see every reseller-less customer
- * (a real scope escape). Clearing the flag closes that gap; only
- * staff/admin (who bypass this function entirely) can use it.
+ * Read scoping (P1.5, ADR-0010): a mitra only sees their own reseller's customers; the client
+ * filter can never widen it, and a mitra with no linked reseller gets null (callers return empty).
+ * `excludeKyc` (SEC-4) is set in the same branch so the KYC denial cannot be forgotten.
+ * `unassignedReseller` is forced false: the repository's `buildScopeWhere` prefers it over
+ * `resellerId`, so `?unassignedReseller=true` would otherwise expose every reseller-less
+ * customer (scope escape).
  */
 function scopeForUser(filter: CustomerListFilter, user?: AuthUser): CustomerListFilter | null {
   if (!user || user.role !== 'mitra') return filter;
@@ -581,11 +436,8 @@ function scopeForUser(filter: CustomerListFilter, user?: AuthUser): CustomerList
 }
 
 /**
- * Action acknowledgment shape for field (teknisi) callers: same contract
- * as CustomerResponse, but the identity/billing fields a field tech has
- * no business reading (KTP/NPWP/outstanding) are nulled — otherwise the
- * ONU endpoints double as a bulk PII harvest by id iteration (P1 security
- * review M1). Staff/admin get the full row.
+ * Action ack for field (teknisi) callers: KTP/NPWP/outstanding are nulled so the ONU endpoints
+ * cannot double as a bulk PII harvest by id iteration (P1 security review M1).
  */
 function toActionResponse(row: CustomerRow, user?: AuthUser): CustomerResponse {
   const full = toCustomerResponse(row);
@@ -594,15 +446,13 @@ function toActionResponse(row: CustomerRow, user?: AuthUser): CustomerResponse {
 }
 
 /**
- * KYC-safe projection (ADR-0010 amendment / ADR-0015, SEC-4): when
- * `includeKyc` is false (a mitra caller), `npwp`/`ktp` are omitted from
- * the returned object entirely — not merely set to null — so the
- * serialized JSON never carries those keys. Defaults to `true`: every
- * other caller (admin/staff endpoints, and every internal cross-module
- * call to `CustomersService.findById()` that never passes a user) is
- * unaffected. The repository has already replaced the real column value
- * with a SQL NULL for the mitra case (`CustomersRepository.
- * baseSelectKycSafe`), so this is defense in depth, not the only guard.
+ * Project a stored row onto the public customer shape (join-derived planName, ISO dates,
+ * provisioning snapshot; internal columns dropped).
+ *
+ * KYC-safe projection (ADR-0010 amendment / ADR-0015, SEC-4): with `includeKyc` false (mitra)
+ * `npwp`/`ktp` are omitted entirely, not nulled, so the JSON never carries the keys. Defaults to
+ * true. The repository already NULLs the column for mitra (`baseSelectKycSafe`); this is defense
+ * in depth.
  */
 function toCustomerResponse(
   row: CustomerRow,
