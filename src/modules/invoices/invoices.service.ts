@@ -26,10 +26,6 @@ import {
   type PaymentListFilter,
 } from './invoices.repository';
 
-// Billing policy now comes from SettingsService (P2.3) — an admin edit in
-// Settings changes the next run. The constants below survive only as the
-// documented defaults, seeded into app_settings on first read.
-
 @Injectable()
 export class InvoicesService {
   private readonly logger = new Logger(InvoicesService.name);
@@ -45,11 +41,9 @@ export class InvoicesService {
     private readonly settings: SettingsService,
     // Reseller commission on payment (P3.D.1, ADR-0010).
     private readonly resellers: ResellersRepository,
-    // A billing run absorbs a customer's pending SLA credits into the new
-    // invoice's discount line (P3.A.4).
+    // Absorbs pending SLA credits into the invoice discount (P3.A.4).
     private readonly slaCredits: SlaCreditsRepository,
-    // Fires invoice_created/paid via the retried queue (ADR-0012). Best-effort:
-    // see notifyBestEffort — a notification failure must never break billing.
+    // invoice_created/paid via the retried queue (ADR-0012); best-effort, see notifyBestEffort.
     private readonly notifications: NotificationsService,
   ) {}
 
@@ -89,15 +83,11 @@ export class InvoicesService {
   }
 
   /**
-   * Record a payment against an invoice — full settlement or a partial /
-   * instalment slice (P3.A.4). `amount` defaults to the full balance due;
-   * it can never exceed it. For `method: 'cash'`, `tenderedAmount` must
-   * cover `amount` and the change is computed and stored. Writes the ledger
-   * entry, applies it to the invoice (flips to 'partial' or 'paid'), then
-   * refreshes the customer's outstanding balance. Reactivation from isolir
-   * and the reseller commission only fire once the invoice is fully paid —
-   * a partial payment leaves the customer in debt and the secret disabled.
-   * Paying an already-paid invoice is a no-op (no duplicate ledger entry).
+   * Record a payment against an invoice: full settlement or a partial slice
+   * (P3.A.4). `amount` defaults to the balance due and can't exceed it; for
+   * `cash`, `tenderedAmount` must cover `amount` and change is stored.
+   * Reactivation from isolir and the reseller commission fire only once the
+   * invoice is fully paid. Paying an already-paid invoice is a no-op.
    */
   async pay(id: string, input: RecordPaymentInput): Promise<InvoiceResponse> {
     const invoice = await this.repo.findById(id);
@@ -127,13 +117,9 @@ export class InvoicesService {
       changeAmount = tenderedAmount - amount;
     }
 
-    // C2: the ledger row, the invoice's paid_amount/status flip, and the
-    // customer's outstanding refresh all land in ONE DB transaction inside
-    // the repository — a failure partway through rolls everything back, so
-    // a 'paid' invoice can never exist without its payments row (P3.A.4).
-    // FIN-D: an empty/whitespace-only note (zod already trims) is normalized
-    // to null here — never stored as ''  — so "no reason given" always reads
-    // the same way regardless of what the FE happened to submit.
+    // C2: ledger row, invoice paid_amount/status and customer outstanding commit
+    // in ONE repo transaction (P3.A.4). FIN-D: a blank note is stored as null,
+    // never ''.
     const note = input.note && input.note.length > 0 ? input.note : null;
 
     const { invoice: updated, reactivated } = await this.repo.recordPayment(id, {
@@ -143,17 +129,14 @@ export class InvoicesService {
       changeAmount,
       note,
     });
-    // Reactivation re-enables the PPPoE secret on the router (ADR-0008) —
-    // a different module's repository, so it stays outside the invoice/
-    // customer transaction above.
+    // Router secret belongs to another module: runs outside the invoice/customer
+    // transaction (ADR-0008).
     if (reactivated) {
       await this.secrets.setDisabledByCustomerId(invoice.customerId, false);
     }
-    // Reactivation + commission + the 'paid' notice are all keyed off the
-    // invoice actually reaching 'paid' — a partial payment must never
-    // trigger any of them. The notice fires AFTER recordPayment's
-    // transaction has already committed (ADR-0012) — never inside it, so a
-    // rolled-back payment can never send a false "paid" message.
+    // Reactivation, commission and the 'paid' notice key off the invoice
+    // reaching 'paid', never a partial payment. The notice fires after
+    // recordPayment commits (ADR-0012) so a rollback can't send a false one.
     if (updated.status === 'paid') {
       await this.postResellerCommission(invoice.customerId, invoice.id, total);
       await this.notifyPaid(updated, total);
@@ -167,9 +150,8 @@ export class InvoicesService {
 
   /**
    * Credit the acquiring reseller's commission on a paid invoice (P3.D.1,
-   * ADR-0010). Idempotent by invoice id, so a re-paid/retried settlement
-   * never double-credits. No-op when the customer has no reseller or the
-   * reseller's commission rate is zero.
+   * ADR-0010). Idempotent by invoice id; no-op without a reseller or with a
+   * zero commission rate.
    */
   private async postResellerCommission(
     customerId: string,
@@ -199,11 +181,9 @@ export class InvoicesService {
   }
 
   /**
-   * Generate this month's invoices for every active customer that does
-   * not already have one. Idempotent: a re-run creates nothing. Due date
-   * honors the customer's `billingAnchorDay` (P3.A.4) when set, else falls
-   * back to the settings `dueDays` policy. Any of the customer's pending
-   * SLA credits are absorbed as a discount line on the new invoice.
+   * Generate this month's invoices for every active customer without one.
+   * Idempotent. Due date follows the customer's `billingAnchorDay` (P3.A.4),
+   * else the settings `dueDays`. Pending SLA credits become a discount line.
    */
   async run(): Promise<BillingRunResult> {
     const now = new Date();
@@ -222,12 +202,9 @@ export class InvoicesService {
           customer.id,
           amount + taxAmount,
         );
-        // M2: create + SLA-credit absorption + the outstanding refresh all
-        // land in ONE DB transaction inside the repository (mirrors `pay()`'s
-        // C2 comment above) — a failure partway through rolls the invoice
-        // back entirely, so this customer is retried on the next run instead
-        // of being permanently skipped by `existsForPeriod` with an
-        // un-absorbed credit or a stale `outstanding`.
+        // M2: create + SLA-credit absorption + outstanding refresh are one repo
+        // transaction, so a failure retries next run instead of being skipped by
+        // existsForPeriod with an un-absorbed credit or stale `outstanding`.
         const invoice = await this.repo.createBilled(
           {
             customerId: customer.id,
@@ -245,9 +222,7 @@ export class InvoicesService {
         await this.notifyInvoiceCreated(invoice);
         created += 1;
       } catch (err) {
-        // D7: one bad billable record (e.g. a stale plan reference) must
-        // never abort the rest of the nightly billing run — log, record the
-        // failure, and continue with the next customer.
+        // D7: one bad billable record must not abort the nightly run; record and continue.
         this.logger.error(
           { customerId: customer.id, err },
           'invoice generation failed for customer',
@@ -264,10 +239,9 @@ export class InvoicesService {
   }
 
   /**
-   * Issue a customer's first invoice at installation time. Idempotent:
-   * skips if one already exists for the current period (the work-order
-   * `complete` flow may be retried). No-op if the customer is unknown. Same
-   * due-date and SLA-credit-absorption rules as `run()` (P3.A.4).
+   * Issue a customer's first invoice at installation time. Idempotent (the
+   * work-order `complete` flow may retry); no-op for an unknown customer. Same
+   * due-date and SLA-credit rules as `run()` (P3.A.4).
    */
   async generateFirstInvoice(customerId: string): Promise<void> {
     const info = await this.customers.findBillingInfo(customerId);
@@ -284,10 +258,8 @@ export class InvoicesService {
       customerId,
       amount + taxAmount,
     );
-    // M2: same single-transaction create as run() above — see createBilled's
-    // doc. An onboarded/first-billed customer must show their new debt
-    // immediately (C3), and a mid-way failure must never leave a committed
-    // invoice with an un-absorbed credit or a stale `outstanding`.
+    // M2: single-transaction create, as in run() (see createBilled); the new
+    // debt shows in `outstanding` immediately (C3).
     const invoice = await this.repo.createBilled(
       {
         customerId,
@@ -307,12 +279,10 @@ export class InvoicesService {
   }
 
   /**
-   * How much of a customer's pending SLA credits (P3.A.4) to absorb as this
-   * invoice's discount line, capped at the invoice's gross total (amount +
-   * taxAmount) so a discount can never make the invoice negative. Returns
-   * every matched credit id — ALL of them get marked 'applied' once the
-   * invoice exists, even if their combined amount exceeds what was actually
-   * deducted (a documented simplification: no carry-over to the next bill).
+   * Pending SLA credits (P3.A.4) to absorb as the invoice discount, capped at
+   * the gross total (amount + taxAmount) so the invoice never goes negative.
+   * Returns ALL matched credit ids: every one is marked 'applied' even if the
+   * sum exceeds the deduction (no carry-over to the next bill).
    */
   private async resolveSlaDiscount(
     customerId: string,
@@ -328,11 +298,9 @@ export class InvoicesService {
   }
 
   /**
-   * Notify the customer their invoice was just issued (ADR-0012). jobId is
-   * per invoice id — `run()`/`generateFirstInvoice()` only ever create an
-   * invoice once per period (guarded by `existsForPeriod`), so this can
-   * never double-fire for the same bill. Best-effort: a queue outage must
-   * never fail a billing run (see `notifyBestEffort`).
+   * Notify the customer their invoice was issued (ADR-0012). jobId is per
+   * invoice id; existsForPeriod guarantees one invoice per period. Best-effort:
+   * see `notifyBestEffort`.
    */
   private async notifyInvoiceCreated(invoice: Invoice): Promise<void> {
     await notifyBestEffort(
@@ -359,13 +327,10 @@ export class InvoicesService {
   }
 
   /**
-   * Notify the customer their payment cleared the invoice in full
-   * (ADR-0012). Only called once `updated.status === 'paid'` — never for a
-   * partial payment. jobId is per invoice id: an invoice can only reach
-   * 'paid' once (repeat calls short-circuit at the top of `pay()`, and a
-   * concurrent race resolves to a single winner inside `recordPayment`'s
-   * `for update` lock), so no period/payment-id component is needed for
-   * idempotency. Best-effort: see `notifyBestEffort`.
+   * Notify the customer their payment cleared the invoice in full (ADR-0012).
+   * jobId is per invoice id: an invoice reaches 'paid' once (repeat calls
+   * short-circuit in `pay()`, races resolve under recordPayment's `for update`
+   * lock). Best-effort: see `notifyBestEffort`.
    */
   private async notifyPaid(invoice: Invoice, total: number): Promise<void> {
     await notifyBestEffort(
@@ -397,35 +362,16 @@ function ppnOf(amount: number, rate: number): number {
 
 // --- date helpers (whole-day, WIB calendar) ----------------------------
 //
-// TIME-1 (corrected — see the CONFIRMED bug this replaced): this basis is
-// deliberately the WIB (Asia/Jakarta) calendar day, NOT UTC. It used to be
-// UTC and that was itself deliberate — until the billing/isolir/dunning
-// cron (scheduler.constants.ts) started firing with `tz: Asia/Jakarta`.
-// The billing run fires 02:00 WIB on the 1st, which is 19:00 UTC on the
-// LAST day of the previous month — a UTC-based `currentPeriod()` read at
-// that exact instant would return the PREVIOUS month: `existsForPeriod`
-// would already be true (idempotency check for a period that never
-// actually got billed), 0 invoices would be created, and `dueDateFor`
-// would derive a due date in the past, making the (non-existent) invoice
-// immediately overdue/isolir-eligible. Every function below goes through
-// `wibDateString`/a WIB calendar-day anchor instead of raw `getUTC*` on
-// `now` for exactly this reason.
-//
-// billing-automation.service.ts's currentPeriodStart() MUST stay on this
-// same WIB basis — see that function's doc comment. Both sides must agree
-// with each other AND with the WIB cron trigger, the WIB Postgres session
-// `current_date` (drizzle.service.ts), and the WIB grace/aging math
-// (wib-date.ts) — moving only one of them out of sync reintroduces this
-// bug in a different shape.
-//
-// Pre-go-live note: no production invoices exist yet, so this is not a
-// data migration — it only changes how *future* dueDate/periodStart
-// values are computed, which is TIME-1's whole intent.
+// TIME-1: the basis is the WIB (Asia/Jakarta) day, not UTC. The billing cron
+// fires 02:00 WIB on the 1st = 19:00 UTC on the last day of the previous month,
+// so a UTC currentPeriod() would return the previous month: existsForPeriod
+// would already be true, nothing would be billed, and dueDateFor would land in
+// the past. billing-automation.service.ts currentPeriodStart(), the cron tz,
+// the WIB Postgres session `current_date` (drizzle.service.ts) and wib-date.ts
+// must all stay on this same basis.
 
-// Midnight UTC representing `now`'s WIB calendar day — a pure calendar-date
-// value (no time-of-day), safe input for the getUTC*-based arithmetic below
-// (`addDays`/`isoDate`/`Date.UTC`), which only ever needs to reason about
-// calendar days, never instants.
+// Midnight UTC of `now`'s WIB calendar day: a pure date value, safe input for
+// the getUTC* arithmetic below.
 function wibDateAnchor(now: Date): Date {
   return new Date(`${wibDateString(now)}T00:00:00.000Z`);
 }
@@ -460,11 +406,9 @@ function isoDate(date: Date): string {
 }
 
 /**
- * Invoice due date (P3.A.4): when the customer has a `billingAnchorDay`,
- * the due date is that day-of-month (clamped 1..28, since not every month
- * has a 29th-31st) within the billing period being invoiced. Otherwise it
- * falls back to the settings `dueDays` policy, `dueDays` after `now`'s WIB
- * calendar day (TIME-1 — see this section's doc comment).
+ * Invoice due date (P3.A.4): the customer's `billingAnchorDay` (clamped 1..28,
+ * as not every month has a 29th-31st) within the invoiced period; otherwise
+ * `dueDays` after `now`'s WIB calendar day.
  */
 function dueDateFor(
   billingAnchorDay: number | null,
@@ -473,10 +417,7 @@ function dueDateFor(
   fallbackDueDays: number,
 ): string {
   if (billingAnchorDay == null) {
-    // TIME-1: anchor on `now`'s WIB calendar day first, not the raw instant
-    // — see this section's doc comment for why (`addDays`/`isoDate` are
-    // pure getUTC* calendar arithmetic and only correct given a calendar
-    // anchor, not an arbitrary instant).
+    // Anchor on the WIB calendar day: addDays/isoDate are getUTC* calendar math (TIME-1).
     return isoDate(addDays(wibDateAnchor(now), fallbackDueDays));
   }
   const day = Math.min(28, Math.max(1, billingAnchorDay));
