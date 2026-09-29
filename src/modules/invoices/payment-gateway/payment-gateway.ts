@@ -50,6 +50,14 @@ export type WebhookVerifyResult = {
   amount: number;
 };
 
+/** Signed by the gateway but body unusable — permanent, so the controller acks it (M1: a non-2xx only triggers retries that can never succeed). */
+export class MalformedWebhookError extends Error {
+  constructor(message = 'malformed webhook body') {
+    super(message);
+    this.name = 'MalformedWebhookError';
+  }
+}
+
 /**
  * Payment-gateway seam (ADR-0016), mirroring the `RouterAdapter` pattern in
  * `router-resources/adapters/`: an abstract class (not a bare interface) so
@@ -71,9 +79,10 @@ export abstract class PaymentGateway {
    * Verify + parse an inbound settlement callback. MUST authenticate the
    * caller by signature before returning anything derived from the body —
    * this is the ONLY authentication a webhook route has (it is `@Public()`,
-   * no JWT). Throws `UnauthorizedException` (not a generic `Error`) on a
+   * no JWT). Throws `UnauthorizedException` (not a generic `Error`) ONLY on a
    * missing/invalid signature so the controller's failure mode is an
    * explicit 401, never a 500 that could look like a transient retry-me.
+   * A validly signed but unparseable/invalid body throws `MalformedWebhookError`.
    */
   abstract verifyAndParseWebhook(
     headers: Record<string, string | string[] | undefined>,

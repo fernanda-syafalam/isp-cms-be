@@ -3,6 +3,7 @@ import {
   Headers,
   HttpCode,
   HttpStatus,
+  Logger,
   Post,
   type RawBodyRequest,
   Req,
@@ -11,7 +12,7 @@ import {
 import type { FastifyRequest } from 'fastify';
 import { Public } from '../../../common/decorators/public.decorator';
 import { PaymentIntentsService } from '../payment-intents.service';
-import { PaymentGateway } from './payment-gateway';
+import { MalformedWebhookError, PaymentGateway, type WebhookVerifyResult } from './payment-gateway';
 
 /**
  * `POST /v1/webhooks/tripay` — Tripay's settlement callback. `@Public()`
@@ -36,10 +37,14 @@ import { PaymentGateway } from './payment-gateway';
  * authenticated as Tripay at all) returns non-2xx (401, via the gateway); a
  * genuinely transient failure (e.g. the DB call itself throwing) is not
  * caught here and propagates as a 5xx, which IS a case Tripay should retry.
+ * Signed-but-malformed bodies (`MalformedWebhookError`) are acked too, for the
+ * same reason: the body can never become valid on retry.
  */
 @Public()
 @Controller({ path: 'webhooks', version: '1' })
 export class TripayWebhookController {
+  private readonly logger = new Logger(TripayWebhookController.name);
+
   constructor(
     private readonly gateway: PaymentGateway,
     private readonly intents: PaymentIntentsService,
@@ -60,7 +65,19 @@ export class TripayWebhookController {
     if (!req.rawBody) {
       throw new UnauthorizedException('raw body unavailable — cannot verify webhook signature');
     }
-    const parsed = this.gateway.verifyAndParseWebhook(headers, req.rawBody);
+    let parsed: WebhookVerifyResult;
+    try {
+      parsed = this.gateway.verifyAndParseWebhook(headers, req.rawBody);
+    } catch (err) {
+      if (err instanceof MalformedWebhookError) {
+        this.logger.warn(
+          { audit: true },
+          'tripay webhook: signed body is malformed — acknowledging without settling; reconcile manually if this represents a real payment',
+        );
+        return { received: true };
+      }
+      throw err;
+    }
 
     if (parsed.status === 'paid') {
       // `settleFromGateway` never throws for a deterministic non-settle

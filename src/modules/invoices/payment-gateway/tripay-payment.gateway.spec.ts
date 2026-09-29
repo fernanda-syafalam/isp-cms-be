@@ -3,6 +3,7 @@ import { UnauthorizedException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppConfig } from '../../../config/configuration';
+import { MalformedWebhookError } from './payment-gateway';
 import { TripayPaymentGateway } from './tripay-payment.gateway';
 
 const PRIVATE_KEY = 'test-tripay-private-key';
@@ -112,6 +113,25 @@ describe('TripayPaymentGateway (ADR-0016, live mode)', () => {
       ).rejects.toThrow('Tripay create-transaction failed');
     });
 
+    it('keeps the Tripay message when the error body does not match the schema (data: [])', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({ success: false, message: 'Invalid amount X', data: [] }), {
+          status: 422,
+        }),
+      );
+
+      await expect(
+        gateway.createCharge({
+          invoiceId: 'inv-1',
+          invoiceNo: 'INV-2026-100',
+          merchantRef: 'intent-1',
+          amount: 1,
+          channel: 'qris',
+          customer: { name: 'Budi Santoso' },
+        }),
+      ).rejects.toThrow('Invalid amount X');
+    });
+
     it('treats a success response missing data.reference as a create-transaction failure', async () => {
       vi.spyOn(globalThis, 'fetch').mockResolvedValue(
         new Response(JSON.stringify({ success: true, data: { expired_time: 1_783_641_600 } }), {
@@ -218,7 +238,7 @@ describe('TripayPaymentGateway (ADR-0016, live mode)', () => {
       const malformed = Buffer.from('not json');
       expect(() =>
         gateway.verifyAndParseWebhook({ 'x-callback-signature': sign(malformed) }, malformed),
-      ).toThrow(UnauthorizedException);
+      ).toThrow(MalformedWebhookError);
     });
 
     it.each([
@@ -231,7 +251,7 @@ describe('TripayPaymentGateway (ADR-0016, live mode)', () => {
       const raw = Buffer.from(JSON.stringify(bad));
       expect(() =>
         gateway.verifyAndParseWebhook({ 'x-callback-signature': sign(raw) }, raw),
-      ).toThrow(UnauthorizedException);
+      ).toThrow(MalformedWebhookError);
     });
 
     it('checks the signature before the schema for an unsigned malformed body', () => {

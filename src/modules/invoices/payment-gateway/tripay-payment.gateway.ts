@@ -6,6 +6,7 @@ import type { AppConfig } from '../../../config/configuration';
 import {
   type CreateChargeInput,
   type CreateChargeResult,
+  MalformedWebhookError,
   type PaymentChannel,
   PaymentGateway,
   type WebhookSettlementStatus,
@@ -171,7 +172,9 @@ export class TripayPaymentGateway extends PaymentGateway {
     if (parsed.success && res.ok && parsed.data.success && parsed.data.data) {
       return { ...parsed.data, data: parsed.data.data };
     }
-    const message = parsed.success ? parsed.data.message : undefined;
+    const message = parsed.success
+      ? parsed.data.message
+      : z.object({ message: z.string() }).partial().safeParse(raw).data?.message;
     this.logger.error(
       {
         status: res.status,
@@ -205,7 +208,8 @@ export class TripayPaymentGateway extends PaymentGateway {
     try {
       raw = JSON.parse(rawBody.toString('utf8'));
     } catch {
-      throw new UnauthorizedException('malformed webhook body');
+      this.logger.warn('Tripay webhook: signed body is not valid JSON');
+      throw new MalformedWebhookError();
     }
     const parsed = tripayCallbackSchema.safeParse(raw);
     if (!parsed.success) {
@@ -213,7 +217,7 @@ export class TripayPaymentGateway extends PaymentGateway {
         { issuePaths: parsed.error.issues.map((i) => i.path.join('.')) },
         'Tripay webhook: signed body failed schema validation',
       );
-      throw new UnauthorizedException('malformed webhook body');
+      throw new MalformedWebhookError();
     }
     const payload = parsed.data;
 
