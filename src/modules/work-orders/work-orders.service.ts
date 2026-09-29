@@ -10,10 +10,7 @@ import { notifyBestEffort } from '../../common/notifications/notify-best-effort'
 import type { CustomerConnection } from '../../infrastructure/database/schema/customers.schema';
 import type { WorkOrder } from '../../infrastructure/database/schema/work-orders.schema';
 import { type CustomerRow, CustomersRepository } from '../customers/customers.repository';
-// The legal-transition table (ADR-0004) lives in CustomersService as a pure,
-// already-exported function — reused here rather than duplicating an ad-hoc
-// status check (go-live follow-up, NL-2 note in
-// CustomersService.transition()'s doc block).
+// Reuses the ADR-0004 legal-transition check rather than duplicating a status check.
 import { assertCustomerReadyForInstallActivation } from '../customers/customers.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { InvoicesService } from '../invoices/invoices.service';
@@ -21,9 +18,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { ProfilesRepository } from '../router-resources/profiles.repository';
 import { SecretsRepository } from '../router-resources/secrets.repository';
 import { RoutersRepository } from '../routers/routers.repository';
-// Only used to close the repair loop on complete() (P3.B.4). TicketsModule
-// imports WorkOrdersModule (to dispatch a repair WO), so this edge needs
-// forwardRef() on both sides — see work-orders.module.ts.
+// Closes the repair loop on complete() (P3.B.4). TicketsModule imports WorkOrdersModule, so both
+// sides need forwardRef() — see work-orders.module.ts.
 import { TicketsService } from '../tickets/tickets.service';
 import type { CompleteWorkOrderInput } from './dto/complete-work-order.dto';
 import type { WorkOrderListResponse, WorkOrderResponse } from './dto/work-order-response.dto';
@@ -52,8 +48,7 @@ export class WorkOrdersService {
     private readonly secrets: SecretsRepository,
     @Inject(forwardRef(() => TicketsService))
     private readonly tickets: TicketsService,
-    // Customer-facing lifecycle notices (wo_scheduled/wo_done) — best-effort,
-    // mirrors the resilience of the invoice/ticket emits (ADR-0012).
+    // Customer-facing wo_scheduled/wo_done notices; best-effort (ADR-0012).
     private readonly notifications: NotificationsService,
   ) {}
 
@@ -63,44 +58,24 @@ export class WorkOrdersService {
   }
 
   /**
-   * Complete a work order. For an install with a linked subscriber this
-   * runs the full activation cascade:
-   *   1. consume an ONU from warehouse stock (assign it to the subscriber),
+   * Complete a work order. For an install with a linked subscriber this runs the activation cascade:
+   *   1. consume an ONU from warehouse stock,
    *   2. provision a PPPoE secret on the default router,
    *   3. issue the first invoice,
-   *   4. activate the customer + attach the provisioned GPON connection
-   *      (`markInstalled` — the `status: 'aktif'` write) — LAST, on purpose
-   *      (security review follow-up on the go-live guard, NL-2): see the
-   *      inline comment at the call site for why the status flip must
-   *      commit only after every other step has already succeeded.
-   * Idempotent — a done order returns unchanged with no re-provisioning.
-   * The cascade itself is not wrapped in a transaction, so a retry after a
-   * mid-cascade failure (e.g. `generateFirstInvoice` throwing) re-enters
-   * every step; ONU consumption, `provisionSecret`, and
-   * `generateFirstInvoice` each guard on existing state so a retry never
-   * double-provisions.
+   *   4. `markInstalled` (activate + attach the GPON connection) — LAST, on purpose; see the call site.
+   * Idempotent: a done order returns unchanged. The cascade is not transactional, so a retry
+   * re-enters every step; each step guards on existing state and never double-provisions.
    *
-   * The activation step only fires when the linked customer is still
-   * `instalasi` (ADR-0004's `instalasi -> aktif` edge, the sole legal
-   * from-state for THIS seam — see `assertCustomerReadyForInstallActivation`
-   * for why it is narrower than the general `isolir`-inclusive `aktif`
-   * fan-in `transition()` allows). A customer no longer in that state
-   * (already `aktif`, `isolir`, or `berhenti`) rejects the whole completion
-   * with a 400 rather than silently re-activating / re-billing them
-   * (go-live follow-up, NL-2 note). Because the status flip only commits
-   * last, a retry after a failure earlier in the cascade still finds the
-   * customer `instalasi` and passes this guard again — the guard and the
-   * ordering are two halves of the same fix; do not move `markInstalled`
-   * back to the front without re-checking this.
+   * Activation only fires while the customer is still `instalasi` (see
+   * `assertCustomerReadyForInstallActivation`); any other status rejects with a 400 rather than
+   * re-activating / re-billing. Because the status flip commits last, a retry after an earlier
+   * failure still passes the guard — do not move `markInstalled` earlier without re-checking this.
    *
-   * Each external step degrades gracefully: with no ONU in stock the
-   * connection falls back to a synthetic serial; with no router/profile the
-   * secret is skipped (logged). The customer is always activated and billed.
+   * External steps degrade gracefully: no ONU in stock -> synthetic serial; no router/profile ->
+   * secret skipped (logged). The customer is always activated and billed.
    *
-   * For a repair WO linked to a ticket (P3.B.4), completion also closes the
-   * repair loop: the linked ticket is auto-resolved (or marked breached if
-   * past its SLA deadline). Because this whole method no-ops on an
-   * already-done order, that ticket close fires exactly once.
+   * A repair WO linked to a ticket also auto-resolves it (or marks it breached past SLA); the
+   * done-order no-op makes that fire exactly once (P3.B.4).
    */
   async complete(
     id: string,
@@ -114,43 +89,25 @@ export class WorkOrdersService {
     }
 
     if (wo.type === 'install') {
-      // An install order must carry its subscriber. Completing one without it
-      // used to silently skip activation + provisioning + first invoice, which
-      // is exactly the lead-convert break this guards against (ADR-0009).
+      // An install order must carry its subscriber; skipping activation, provisioning and the first
+      // invoice silently is the lead-convert break this guards against (ADR-0009).
       if (!wo.customerId) {
         throw new BadRequestException('install work order is not linked to a customer');
       }
       const customer = await this.customers.findById(wo.customerId);
       if (customer) {
-        // Read the movement ledger BEFORE the guard decision (security
-        // review follow-up on the go-live guard, NL-2): its presence is how
-        // this exact work order's cascade recognizes its own prior attempt,
-        // both for the guard bypass below and for `assignOnu`'s idempotency
-        // (passed through so there is only one read, not two).
+        // Read the movement ledger BEFORE the guard: a movement for this WO marks a prior attempt of
+        // this cascade, used by the guard bypass below and by `assignOnu` (one read, passed through).
         const alreadyAssignedSerial = await this.inventory.findAssignedSerialForWorkOrder(wo.id);
 
-        // go-live follow-up (NL-2 note in CustomersService.transition()'s
-        // doc block): this cascade is the ADR-0004 `instalasi -> aktif` edge
-        // ("WO complete() -> markInstalled"), but before this guard it was
-        // reachable for a customer in ANY status — WO idempotency
-        // (the `wo.status === 'done'` no-op above) does not protect a
-        // customer who left `instalasi` some other way (already aktif,
-        // isolir, or churned) before this install WO completes.
+        // This cascade is the ADR-0004 `instalasi -> aktif` edge but is otherwise reachable in any
+        // status; the `done` no-op above doesn't cover a customer who left `instalasi` another way.
         //
-        // Bypass (security review follow-up): `markInstalled` is now the
-        // LAST mutation in this cascade (see below), so on a genuine retry
-        // the customer is normally still `instalasi`. The one residual
-        // window is a failure strictly AFTER `markInstalled` committed
-        // status='aktif' but BEFORE `repo.markDone` below commits (e.g. a
-        // transient DB blip on that final update) — a retry then finds the
-        // customer already `aktif`. Recognize that narrow, safe case
-        // (rather than permanently blocking it) using a signal that is
-        // specific to THIS work order, not just to `aktif` in general: an
-        // `assign` movement already recorded for `wo.id` proves THIS
-        // cascade reached `assignOnu` (which always runs BEFORE
-        // `markInstalled`) on a prior attempt. A customer that is `aktif`
-        // for any other reason (no movement recorded for this WO) still
-        // hits the strict check and is rejected.
+        // Bypass: markInstalled is the last mutation, so a retry normally still sees `instalasi`. The
+        // one residual window is a failure after markInstalled committed but before repo.markDone,
+        // leaving the customer `aktif`. An `assign` movement recorded for THIS wo.id proves this
+        // cascade reached assignOnu (always before markInstalled), so that case is allowed; an `aktif`
+        // customer with no movement for this WO is still rejected.
         if (customer.status !== 'aktif' || !alreadyAssignedSerial) {
           assertCustomerReadyForInstallActivation(customer.status);
         }
@@ -161,24 +118,11 @@ export class WorkOrdersService {
           data?.onuSerial,
           alreadyAssignedSerial,
         );
-        // markInstalled (the actual `status: 'aktif'` write) is the LAST
-        // mutation in the cascade, not the first (security review follow-up
-        // on the go-live guard, NL-2): neither `provisionSecret` nor
-        // `generateFirstInvoice` reads the customer's `connection` or
-        // requires `status === 'aktif'` — they only need the plan/customer
-        // fields already on `customer` (fetched above) and `wo.customerId`.
-        // So committing status='aktif' only after both of those succeed
-        // means a failure at either step leaves the customer at
-        // `instalasi`: the WO is still not `done`, a retry re-enters this
-        // branch, `assertCustomerReadyForInstallActivation` passes again
-        // (status is still `instalasi`), and `provisionSecret` /
-        // `generateFirstInvoice` re-run under their own idempotency guards.
-        // Ordering status='aktif' first (the old order) made a post-flip
-        // failure permanently uncompletable: the retry's guard would see
-        // status='aktif' and reject, leaving the customer active but never
-        // provisioned/billed. `markInstalled` itself is a plain idempotent
-        // UPDATE (same deterministic values on a re-run), so re-issuing it
-        // in the residual retry window above is harmless.
+        // markInstalled (the `status: 'aktif'` write) runs LAST: provisionSecret and
+        // generateFirstInvoice don't need status 'aktif', so a failure at either leaves the customer
+        // `instalasi` and a retry passes the guard again, re-running both under their own
+        // idempotency. Flipping first made a post-flip failure permanently uncompletable (the guard
+        // rejects the retry). markInstalled is an idempotent UPDATE, so re-issuing it is harmless.
         await this.provisionSecret(customer);
         await this.invoices.generateFirstInvoice(wo.customerId);
         await this.customers.markInstalled(
@@ -200,10 +144,7 @@ export class WorkOrdersService {
     return toWorkOrderResponse(done);
   }
 
-  /**
-   * Start a scheduled order (→ in_progress). P3.B.2 — this transition was
-   * unreachable via the API before. Idempotent if already in progress.
-   */
+  /** Start a scheduled order (→ in_progress). Idempotent if already in progress. */
   async start(id: string): Promise<WorkOrderResponse> {
     const wo = await this.requireOpen(id);
     if (wo.status === 'in_progress') return toWorkOrderResponse(wo);
@@ -255,25 +196,14 @@ export class WorkOrdersService {
     return wo;
   }
 
-  // Hand an ONU to the subscriber and return its serial, or null when stock
-  // is dry (the connection then uses a synthetic serial). The work order id
-  // is recorded on the movement so stock consumption reconciles with the
-  // order (ADR-0003/0009).
+  // Hand an ONU to the subscriber and return its serial, or null when stock is dry (the connection
+  // then uses a synthetic serial). The WO id is recorded on the movement (ADR-0003/0009).
   //
-  // When the technician scanned a real serial in the field (P3.B.3), that
-  // exact unit is consumed instead of the FIFO pick: if it's in warehouse
-  // stock, it's assigned like any other pick; if it's not (unknown asset, or
-  // already consumed elsewhere), the scanned serial is still used as-is —
-  // real field evidence beats a fabricated fallback.
+  // A serial scanned in the field (P3.B.3) is consumed instead of the FIFO pick; if it isn't in
+  // warehouse stock it is used as-is — field evidence beats a fabricated fallback.
   //
-  // Idempotency guard (security review follow-up on the go-live guard,
-  // NL-2): unlike `provisionSecret`/`generateFirstInvoice`, ONU consumption
-  // (`inventory.move`) is not naturally idempotent — a plain re-run would
-  // FIFO-pick and consume a SECOND unit on a retry after a mid-cascade
-  // failure. `alreadyAssignedSerial` is the movement ledger's answer for
-  // this exact work order, read once by the caller (`complete()`, which
-  // also uses it for the activation guard bypass) — if set, reuse that
-  // exact serial instead of picking again.
+  // Idempotent: `inventory.move` is not, so a retry would consume a second unit.
+  // `alreadyAssignedSerial` (read once by `complete()`) short-circuits to the serial already assigned.
   private async assignOnu(
     customerName: string,
     workOrderId: string,
@@ -310,16 +240,11 @@ export class WorkOrdersService {
     return onu.serial;
   }
 
-  // Create the subscriber's PPPoE secret on the default router, matching the
-  // plan profile when present. Skipped (logged) when no router/profile exists.
+  // Create the PPPoE secret on the default router, matching the plan profile. Skipped (logged)
+  // when no router/profile exists.
   //
-  // Idempotency guard: `complete()`'s install cascade is not wrapped in a
-  // transaction, so a retry (e.g. `generateFirstInvoice` throwing after this
-  // step already committed) re-enters this method for the same customer. A WO
-  // only reaches `done` — the one status `complete()` checks up front — after
-  // the whole cascade succeeds, so without this guard a retry would INSERT a
-  // second secret and double-increment the router's `secretCount`. Checking
-  // for an existing secret first makes the step safe to re-run.
+  // Idempotent: the install cascade is not transactional, so a retry re-enters here; without the
+  // existing-secret check it would insert a second secret and double-increment `secretCount`.
   private async provisionSecret(customer: CustomerRow): Promise<void> {
     const existing = await this.secrets.findByCustomerId(customer.id);
     if (existing) {
@@ -352,10 +277,7 @@ export class WorkOrdersService {
     await this.routers.adjustSecretCount(router.id, 1);
   }
 
-  /**
-   * Dispatch a repair work order from a support ticket, linked back to it
-   * (P3.B.4) so completing the order can auto-resolve the ticket.
-   */
+  /** Dispatch a repair WO from a ticket, linked back so completing it auto-resolves the ticket (P3.B.4). */
   async createFromTicket(input: {
     ticketId: string;
     customerId: string | null;
@@ -377,10 +299,7 @@ export class WorkOrdersService {
     return toWorkOrderResponse(wo);
   }
 
-  /**
-   * Schedule an install work order from onboarding — linked to the new
-   * subscriber, with the technician and install date chosen in the wizard.
-   */
+  /** Schedule an install WO from onboarding, with the technician and date chosen in the wizard. */
   async scheduleInstallForCustomer(input: {
     customerId: string;
     customerName: string;
@@ -403,10 +322,8 @@ export class WorkOrdersService {
   }
 
   /**
-   * Schedule an install work order for a freshly-converted lead, LINKED to the
-   * new subscriber. customerId is required so completing the order runs the
-   * activation cascade (ADR-0009); the technician + exact date are filled in
-   * by the field team later, so they default to null / a two-day lead time.
+   * Schedule an install WO for a freshly-converted lead. customerId is required so completion runs
+   * the activation cascade (ADR-0009); technician is null and the date defaults to a two-day lead.
    */
   async scheduleInstall(input: {
     customerId: string;
@@ -428,14 +345,9 @@ export class WorkOrdersService {
   }
 
   /**
-   * Notify the customer their install/repair was just scheduled (or
-   * rescheduled) — wo_scheduled (ADR-0012 follow-up). jobId is per work
-   * order + the exact scheduledAt instant, so a reschedule (a new
-   * scheduledAt) fires a fresh notice while re-running the same schedule
-   * never double-sends. No-op for a WO with no linked customer (a repair
-   * dispatched before the subscriber exists) or one with no phone.
-   * Best-effort: a queue outage must never fail the WO write that already
-   * committed.
+   * Notify the customer of a (re)scheduled WO (wo_scheduled, ADR-0012). jobId includes the exact
+   * scheduledAt, so a reschedule sends a fresh notice but a re-run never double-sends. No-op without
+   * a linked customer or phone. Best-effort: a queue outage must not fail the committed WO write.
    */
   private async notifyWoScheduled(wo: WorkOrder): Promise<void> {
     await notifyBestEffort(
@@ -463,10 +375,8 @@ export class WorkOrdersService {
   }
 
   /**
-   * Notify the customer their install/repair is done — wo_done (ADR-0012
-   * follow-up). jobId is per work order id: a WO can only reach `done` once
-   * (guarded by the idempotent early-return at the top of `complete()`), so
-   * no extra component is needed. Best-effort: see `notifyWoScheduled`.
+   * Notify the customer their WO is done (wo_done, ADR-0012). jobId is per WO id: a WO reaches
+   * `done` once (early return in `complete()`). Best-effort: see `notifyWoScheduled`.
    */
   private async notifyWoDone(wo: WorkOrder): Promise<void> {
     await notifyBestEffort(
@@ -512,12 +422,8 @@ function pppoeUsername(customerNo: string): string {
   return customerNo.toLowerCase().replace('-', '');
 }
 
-// Provisioned GPON connection derived deterministically from the
-// subscriber's account number, so a retry yields the same values. The ONU
-// serial comes from the assigned inventory item; it falls back to a
-// synthetic serial when warehouse stock is empty. rxPower uses the RX
-// measured in the field (P3.B.3) when the technician supplied one; otherwise
-// it falls back to the same deterministic placeholder as before.
+// Deterministic from the account number so a retry yields the same values. The ONU serial falls
+// back to a synthetic one when stock is empty; rxPower prefers the field-measured value (P3.B.3).
 function buildConnection(
   customer: { customerNo: string; planName: string },
   onuSerial: string | null,
@@ -536,14 +442,8 @@ function buildConnection(
   };
 }
 
-// Field-completion evidence written on the same UPDATE as the done
-// transition (P3.B.3). completedAt/completedBy are always set (every
-// completion has an author and a timestamp); the rest stay null when the
-// technician submitted no field kit. `technician` on the input is accepted
-// for forward-compat with the field-completion form but is not persisted
-// yet — no column exists for it. `notes` (the "Catatan" free-text field the
-// technician fills in on the completion form) IS persisted, into
-// completionNotes.
+// Field-completion evidence, written on the same UPDATE as the done transition (P3.B.3).
+// `technician` on the input is not persisted (no column); `notes` goes to completionNotes.
 function buildCompletion(author: string, data?: CompleteWorkOrderInput): WorkOrderCompletion {
   return {
     scannedOnuSerial: data?.onuSerial ?? null,
