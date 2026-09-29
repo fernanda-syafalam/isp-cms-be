@@ -73,6 +73,7 @@ describe('PaymentIntentsService', () => {
       create: vi.fn((values) => Promise.resolve(intentRow({ ...values }))),
       findById: vi.fn(),
       markPaid: vi.fn(),
+      markPaidTx: vi.fn(),
       markExpired: vi.fn(),
       expireStalePending: vi.fn(),
     };
@@ -203,7 +204,11 @@ describe('PaymentIntentsService', () => {
 
       const result = await service.confirm(INTENT_ID);
 
-      expect(invoices.pay).toHaveBeenCalledWith(INVOICE_ID, { method: 'va' });
+      expect(invoices.pay).toHaveBeenCalledWith(
+        INVOICE_ID,
+        { method: 'va' },
+        { withinTx: expect.any(Function) },
+      );
       expect(repo.markPaid).toHaveBeenCalledWith(INTENT_ID);
       expect(result.status).toBe('paid');
       expect(result.paidAt).toBe('2026-06-16T01:00:00.000Z');
@@ -215,7 +220,11 @@ describe('PaymentIntentsService', () => {
 
       await service.confirm(INTENT_ID);
 
-      expect(invoices.pay).toHaveBeenCalledWith(INVOICE_ID, { method: 'ewallet' });
+      expect(invoices.pay).toHaveBeenCalledWith(
+        INVOICE_ID,
+        { method: 'ewallet' },
+        { withinTx: expect.any(Function) },
+      );
     });
 
     it('is idempotent when the intent is already paid', async () => {
@@ -253,6 +262,48 @@ describe('PaymentIntentsService', () => {
   // The Tripay webhook's settlement path (ADR-0016) — reuses confirm()
   // internally, so these focus on the extra checks the webhook needs:
   // resolve-by-reference, reference/amount validation, and dedupe.
+  describe('settleIntent atomicity', () => {
+    const fakeTx = { marker: 'tx' };
+
+    it('marks the intent paid inside the payment transaction via markPaidTx', async () => {
+      repo.findById.mockResolvedValue(intentRow());
+      repo.markPaidTx.mockResolvedValue(intentRow({ status: 'paid' }));
+      invoices.pay.mockImplementation(async (_id, _input, opts) => {
+        await opts.withinTx(fakeTx);
+        return invoice({ status: 'paid' });
+      });
+
+      const result = await service.confirm(INTENT_ID);
+
+      expect(repo.markPaidTx).toHaveBeenCalledWith(fakeTx, INTENT_ID);
+      expect(repo.markPaid).not.toHaveBeenCalled();
+      expect(result.status).toBe('paid');
+    });
+
+    it('falls back to a plain markPaid when pay short-circuits (hook never ran)', async () => {
+      repo.findById.mockResolvedValue(intentRow());
+      invoices.pay.mockResolvedValue(invoice({ status: 'paid' }));
+      repo.markPaid.mockResolvedValue(intentRow({ status: 'paid' }));
+
+      await service.confirm(INTENT_ID);
+
+      expect(repo.markPaidTx).not.toHaveBeenCalled();
+      expect(repo.markPaid).toHaveBeenCalledWith(INTENT_ID);
+    });
+
+    it('propagates a hook failure without the markPaid fallback', async () => {
+      repo.findById.mockResolvedValue(intentRow());
+      repo.markPaidTx.mockRejectedValue(new Error('boom'));
+      invoices.pay.mockImplementation(async (_id, _input, opts) => {
+        await opts.withinTx(fakeTx);
+        return invoice({ status: 'paid' });
+      });
+
+      await expect(service.confirm(INTENT_ID)).rejects.toThrow('boom');
+      expect(repo.markPaid).not.toHaveBeenCalled();
+    });
+  });
+
   describe('settleFromGateway (webhook settlement, ADR-0016)', () => {
     const GATEWAY_REFERENCE = 'T1234567890';
 
@@ -270,7 +321,11 @@ describe('PaymentIntentsService', () => {
       });
 
       expect(result).toEqual({ settled: true });
-      expect(invoices.pay).toHaveBeenCalledWith(INVOICE_ID, { method: 'qris' });
+      expect(invoices.pay).toHaveBeenCalledWith(
+        INVOICE_ID,
+        { method: 'qris' },
+        { withinTx: expect.any(Function) },
+      );
       expect(repo.markPaid).toHaveBeenCalledWith(INTENT_ID);
       // R8-OBS-3: a successful gateway settlement lands a queryable
       // `audit_log` row — this is the trail the interceptor-based
@@ -303,7 +358,11 @@ describe('PaymentIntentsService', () => {
 
       // Settlement itself (the money path) must still have gone through.
       expect(result).toEqual({ settled: true });
-      expect(invoices.pay).toHaveBeenCalledWith(INVOICE_ID, { method: 'qris' });
+      expect(invoices.pay).toHaveBeenCalledWith(
+        INVOICE_ID,
+        { method: 'qris' },
+        { withinTx: expect.any(Function) },
+      );
       expect(repo.markPaid).toHaveBeenCalledWith(INTENT_ID);
     });
 
@@ -395,7 +454,11 @@ describe('PaymentIntentsService', () => {
       });
 
       expect(result).toEqual({ settled: true });
-      expect(invoices.pay).toHaveBeenCalledWith(INVOICE_ID, { method: 'qris' });
+      expect(invoices.pay).toHaveBeenCalledWith(
+        INVOICE_ID,
+        { method: 'qris' },
+        { withinTx: expect.any(Function) },
+      );
       expect(repo.markPaid).toHaveBeenCalledWith(INTENT_ID);
     });
 
@@ -420,7 +483,11 @@ describe('PaymentIntentsService', () => {
       });
 
       expect(result).toEqual({ settled: true });
-      expect(invoices.pay).toHaveBeenCalledWith(INVOICE_ID, { method: 'qris' });
+      expect(invoices.pay).toHaveBeenCalledWith(
+        INVOICE_ID,
+        { method: 'qris' },
+        { withinTx: expect.any(Function) },
+      );
       expect(repo.markPaid).toHaveBeenCalledWith(INTENT_ID);
     });
   });

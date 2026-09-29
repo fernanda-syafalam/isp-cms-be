@@ -672,6 +672,32 @@ describe('InvoicesRepository (integration)', () => {
       expect(row?.paidAmount).toBe(0);
     });
 
+    it('rolls back the payment row and invoice update when withinTx throws', async () => {
+      const created = await repo.create(newInvoice()); // total = 222_000
+
+      await expect(
+        repo.recordPayment(
+          created.id,
+          {
+            amount: 222_000,
+            method: 'transfer',
+            tenderedAmount: null,
+            changeAmount: null,
+            note: null,
+          },
+          async () => {
+            throw new Error('hook failed');
+          },
+        ),
+      ).rejects.toThrow('hook failed');
+
+      const ledger = await repo.listPayments({ limit: 50, offset: 0 });
+      expect(ledger.total).toBe(0);
+      const row = await repo.findById(created.id);
+      expect(row?.status).toBe('pending');
+      expect(row?.paidAmount).toBe(0);
+    });
+
     it('throws for an unknown invoice without writing anything', async () => {
       const missing = '00000000-0000-0000-0000-0000000000ff';
       await expect(

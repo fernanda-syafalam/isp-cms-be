@@ -20,6 +20,7 @@ import type { InvoiceListResponse, InvoiceResponse } from './dto/invoice-respons
 import type { PaymentReconciliation } from './dto/payment-reconciliation.dto';
 import type { PaymentResponse } from './dto/payment-response.dto';
 import type { RecordPaymentInput } from './dto/record-payment.dto';
+import type { DbTx } from './invoices.repository';
 import {
   type InvoiceListFilter,
   InvoicesRepository,
@@ -89,7 +90,12 @@ export class InvoicesService {
    * Reactivation from isolir and the reseller commission fire only once the
    * invoice is fully paid. Paying an already-paid invoice is a no-op.
    */
-  async pay(id: string, input: RecordPaymentInput): Promise<InvoiceResponse> {
+  async pay(
+    id: string,
+    input: RecordPaymentInput,
+    // Internal only (never from the HTTP layer): see `recordPayment`'s withinTx.
+    opts?: { withinTx?: (tx: DbTx) => Promise<void> },
+  ): Promise<InvoiceResponse> {
     const invoice = await this.repo.findById(id);
     if (!invoice) throw new NotFoundException('invoice not found');
     if (invoice.status === 'paid') {
@@ -122,13 +128,11 @@ export class InvoicesService {
     // never ''.
     const note = input.note && input.note.length > 0 ? input.note : null;
 
-    const { invoice: updated, reactivated } = await this.repo.recordPayment(id, {
-      amount,
-      method: input.method,
-      tenderedAmount,
-      changeAmount,
-      note,
-    });
+    const { invoice: updated, reactivated } = await this.repo.recordPayment(
+      id,
+      { amount, method: input.method, tenderedAmount, changeAmount, note },
+      opts?.withinTx,
+    );
     // Router secret belongs to another module: runs outside the invoice/customer
     // transaction (ADR-0008).
     if (reactivated) {

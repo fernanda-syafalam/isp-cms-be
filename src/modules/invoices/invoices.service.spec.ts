@@ -270,13 +270,17 @@ describe('InvoicesService', () => {
       });
 
       // amount defaults to the full balance due = amount + lateFee + taxAmount
-      expect(repo.recordPayment).toHaveBeenCalledWith(pendingInvoice.id, {
-        amount: 222_000,
-        method: 'transfer',
-        tenderedAmount: null,
-        changeAmount: null,
-        note: null, // no `note` in the request -> null, never ''
-      });
+      expect(repo.recordPayment).toHaveBeenCalledWith(
+        pendingInvoice.id,
+        {
+          amount: 222_000,
+          method: 'transfer',
+          tenderedAmount: null,
+          changeAmount: null,
+          note: null, // no `note` in the request -> null, never ''
+        },
+        undefined,
+      );
       // ADR-0008: reactivation re-enables the PPPoE secret on the router.
       expect(secrets.setDisabledByCustomerId).toHaveBeenCalledWith(CUSTOMER_ID, false);
       expect(result.status).toBe('paid');
@@ -310,6 +314,7 @@ describe('InvoicesService', () => {
       expect(repo.recordPayment).toHaveBeenCalledWith(
         pendingInvoice.id,
         expect.objectContaining({ note: 'Webhook was slow; customer showed the transfer receipt' }),
+        undefined,
       );
     });
 
@@ -326,6 +331,7 @@ describe('InvoicesService', () => {
       expect(repo.recordPayment).toHaveBeenCalledWith(
         pendingInvoice.id,
         expect.objectContaining({ note: null }),
+        undefined,
       );
     });
 
@@ -343,6 +349,7 @@ describe('InvoicesService', () => {
       expect(repo.recordPayment).toHaveBeenCalledWith(
         pendingInvoice.id,
         expect.objectContaining({ note: null }),
+        undefined,
       );
     });
 
@@ -359,6 +366,7 @@ describe('InvoicesService', () => {
       expect(repo.recordPayment).toHaveBeenCalledWith(
         pendingInvoice.id,
         expect.objectContaining({ amount: 100_000, method: 'transfer' }),
+        undefined,
       );
       expect(result.status).toBe('partial');
       expect(result.balanceDue).toBe(122_000);
@@ -387,6 +395,7 @@ describe('InvoicesService', () => {
       expect(repo.recordPayment).toHaveBeenCalledWith(
         partiallyPaid.id,
         expect.objectContaining({ amount: 122_000 }),
+        undefined,
       );
       expect(result.status).toBe('paid');
       expect(result.paidAt).toBe('2026-06-20T09:00:00.000Z');
@@ -423,6 +432,7 @@ describe('InvoicesService', () => {
           tenderedAmount: 250_000,
           changeAmount: 28_000,
         }),
+        undefined,
       );
     });
 
@@ -506,10 +516,30 @@ describe('InvoicesService', () => {
       expect(secrets.setDisabledByCustomerId).not.toHaveBeenCalled();
     });
 
+    it('forwards the internal withinTx hook to repo.recordPayment', async () => {
+      repo.findById.mockResolvedValue(pendingInvoice);
+      repo.recordPayment.mockResolvedValue({
+        invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
+        reactivated: false,
+      });
+      customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
+      const withinTx = vi.fn().mockResolvedValue(undefined);
+
+      await service.pay(pendingInvoice.id, { method: 'qris' }, { withinTx });
+
+      expect(repo.recordPayment).toHaveBeenCalledWith(
+        pendingInvoice.id,
+        expect.objectContaining({ amount: 222_000 }),
+        withinTx,
+      );
+    });
+
     it('is a no-op for an already-paid invoice (no duplicate ledger entry)', async () => {
       repo.findById.mockResolvedValue({ ...pendingInvoice, status: 'paid' });
-      const result = await service.pay(pendingInvoice.id, { method: 'qris' });
+      const withinTx = vi.fn();
+      const result = await service.pay(pendingInvoice.id, { method: 'qris' }, { withinTx });
       expect(repo.recordPayment).not.toHaveBeenCalled();
+      expect(withinTx).not.toHaveBeenCalled();
       expect(result.status).toBe('paid');
     });
 

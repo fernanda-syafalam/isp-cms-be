@@ -106,13 +106,24 @@ export class PaymentIntentsService {
   }
 
   /**
-   * Transactional settle body shared by `confirm()` and `settleFromGateway` (which must settle
-   * regardless of local expiry). Private so settlement is only reachable via those two (SEC-H1).
+   * Settle body shared by `confirm()` and `settleFromGateway` (which must settle regardless of
+   * local expiry). Private so settlement is only reachable via those two (SEC-H1). The invoice
+   * payment and the intent's `paid` flip commit in one transaction via recordPayment's
+   * `withinTx`; an already-paid invoice skips the hook, so it falls back to a plain markPaid.
    * Locking and idempotency: see InvoicesRepository.recordPayment.
    */
   private async settleIntent(intent: PaymentIntentRow): Promise<PaymentIntentResponse> {
-    await this.invoices.pay(intent.invoiceId, { method: channelToMethod(intent.channel) });
-    const paid = await this.repo.markPaid(intent.id);
+    let settled: PaymentIntentRow | undefined;
+    await this.invoices.pay(
+      intent.invoiceId,
+      { method: channelToMethod(intent.channel) },
+      {
+        withinTx: async (tx) => {
+          settled = await this.repo.markPaidTx(tx, intent.id);
+        },
+      },
+    );
+    const paid = settled ?? (await this.repo.markPaid(intent.id));
     this.logger.log({ intentId: intent.id, invoiceId: intent.invoiceId }, 'payment intent settled');
     return toIntentResponse(paid);
   }

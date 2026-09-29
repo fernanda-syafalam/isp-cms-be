@@ -1,12 +1,13 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { and, desc, eq, getTableColumns, gt, lt, sql } from 'drizzle-orm';
-import { DrizzleService } from '../../infrastructure/database/drizzle.service';
+import { type Db, DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type NewPaymentIntent,
   type PaymentIntent,
   invoices,
   paymentIntents,
 } from '../../infrastructure/database/schema/invoices.schema';
+import type { DbTx } from './invoices.repository';
 
 /**
  * The only place that talks to the `payment_intents` table. Returns domain
@@ -59,7 +60,12 @@ export class PaymentIntentsRepository {
   }
 
   async markPaid(id: string): Promise<PaymentIntent> {
-    const [row] = await this.db
+    return this.markPaidTx(this.db, id);
+  }
+
+  /** Same update on a caller-owned transaction (or the plain db handle). */
+  async markPaidTx(tx: Db | DbTx, id: string): Promise<PaymentIntent> {
+    const [row] = await tx
       .update(paymentIntents)
       .set({ status: 'paid', paidAt: sql`now()` })
       .where(eq(paymentIntents.id, id))

@@ -16,7 +16,7 @@ import type { InvoiceListResponse, InvoiceSummary } from './dto/invoice-response
 import type { PaymentReconciliation } from './dto/payment-reconciliation.dto';
 
 // Drizzle transaction handle, typed without `any` (mirrors VouchersRepository).
-type DbTx = Parameters<Parameters<Db['transaction']>[0]>[0];
+export type DbTx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 export interface InvoiceListFilter {
   status?: Invoice['status'];
@@ -295,6 +295,9 @@ export class InvoicesRepository {
       // Cashier's manual-entry justification (FIN-D); null for gateway-settled payments. Metadata only.
       note: string | null;
     },
+    // Runs last inside the transaction so a caller's own write commits or
+    // rolls back together with the payment (e.g. flipping a payment intent).
+    withinTx?: (tx: DbTx) => Promise<void>,
   ): Promise<{ invoice: Invoice; reactivated: boolean }> {
     return this.db.transaction(async (tx) => {
       const [invoice] = await tx
@@ -346,6 +349,7 @@ export class InvoicesRepository {
       }
 
       const reactivated = await this.refreshOutstandingTx(tx, invoice.customerId);
+      await withinTx?.(tx);
       return { invoice: updated, reactivated };
     });
   }
