@@ -39,6 +39,15 @@ export function wibDateString(instant: Date): string {
 }
 
 /**
+ * First day (YYYY-MM-01) of the WIB calendar month containing `instant`.
+ * Billing periods are WIB months (TIME-1); a UTC month read is wrong around
+ * the 1st, when WIB is already in the next month.
+ */
+export function wibMonthStart(instant: Date): string {
+  return `${wibDateString(instant).slice(0, 7)}-01`;
+}
+
+/**
  * Whole days between two YYYY-MM-DD calendar dates (positive when `to` is
  * after `from`, negative when `to` is before `from`). Both sides are
  * parsed as UTC midnight so the subtraction is pure calendar-day

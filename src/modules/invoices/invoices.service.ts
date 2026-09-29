@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { notifyBestEffort } from '../../common/notifications/notify-best-effort';
 import { formatIdr } from '../../common/utils/format-idr';
-import { wibDateString } from '../../common/utils/wib-date';
+import { wibDateString, wibMonthStart } from '../../common/utils/wib-date';
 import type { Invoice, Payment } from '../../infrastructure/database/schema/invoices.schema';
 import { CustomersRepository } from '../customers/customers.repository';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -366,9 +366,7 @@ function ppnOf(amount: number, rate: number): number {
 // fires 02:00 WIB on the 1st = 19:00 UTC on the last day of the previous month,
 // so a UTC currentPeriod() would return the previous month: existsForPeriod
 // would already be true, nothing would be billed, and dueDateFor would land in
-// the past. billing-automation.service.ts currentPeriodStart(), the cron tz,
-// the WIB Postgres session `current_date` (drizzle.service.ts) and wib-date.ts
-// must all stay on this same basis.
+// the past.
 
 // Midnight UTC of `now`'s WIB calendar day: a pure date value, safe input for
 // the getUTC* arithmetic below.
@@ -387,7 +385,7 @@ function currentPeriod(now: Date): {
   const mm = String(month + 1).padStart(2, '0');
   const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
   return {
-    periodStart: `${year}-${mm}-01`,
+    periodStart: wibMonthStart(now),
     periodEnd: `${year}-${mm}-${String(lastDay).padStart(2, '0')}`,
     periodLabel: `${year}-${mm}`,
   };
