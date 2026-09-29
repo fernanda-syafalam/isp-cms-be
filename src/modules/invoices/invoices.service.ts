@@ -20,6 +20,7 @@ import type { InvoiceListResponse, InvoiceResponse } from './dto/invoice-respons
 import type { PaymentReconciliation } from './dto/payment-reconciliation.dto';
 import type { PaymentResponse } from './dto/payment-response.dto';
 import type { RecordPaymentInput } from './dto/record-payment.dto';
+import { invoiceTotal } from './invoice-total';
 import type { DbTx } from './invoices.repository';
 import {
   type InvoiceListFilter,
@@ -425,11 +426,6 @@ function dueDateFor(
   const day = Math.min(28, Math.max(1, billingAnchorDay));
   const [year, month] = periodStart.split('-'); // 'YYYY-MM-01' -> ['YYYY', 'MM', '01']
   return `${year}-${month}-${String(day).padStart(2, '0')}`;
-}
-
-/** Invoice total: amount + lateFee + taxAmount - discountAmount (P3.A.4). */
-function invoiceTotal(invoice: Invoice): number {
-  return invoice.amount + invoice.lateFee + invoice.taxAmount - invoice.discountAmount;
 }
 
 function toInvoiceResponse(row: Invoice): InvoiceResponse {

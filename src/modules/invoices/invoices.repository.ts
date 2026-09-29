@@ -14,6 +14,7 @@ import {
 import { SlaCreditsRepository } from '../sla-credits/sla-credits.repository';
 import type { InvoiceListResponse, InvoiceSummary } from './dto/invoice-response.dto';
 import type { PaymentReconciliation } from './dto/payment-reconciliation.dto';
+import { invoiceTotal } from './invoice-total';
 
 // Drizzle transaction handle, typed without `any` (mirrors VouchersRepository).
 export type DbTx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -57,8 +58,25 @@ const PAYMENT_SORT_WHITELIST = {
 // Statuses that still owe money (outstanding/aging); 'partial' stays unpaid until 'paid'.
 const UNPAID_STATUSES = ['pending', 'partial', 'overdue'] as const;
 
+/** Single SQL definition of the invoice total; keep in sync with `invoiceTotal` (TS). */
+const invoiceTotalSql = sql`(${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount})`;
+
+/** Single SQL definition of the balance still owed on an invoice (total minus paid). */
+const invoiceBalanceDueSql = sql`(${invoiceTotalSql} - ${invoices.paidAmount})`;
+
 // Eligible to flip to 'overdue' and for the due-soon dunning cohort; excludes 'overdue' itself.
 const NOT_YET_OVERDUE_STATUSES = ['pending', 'partial'] as const;
+
+/** Balance due across a customer's unpaid invoices; shared by the plain and in-transaction callers. */
+async function sumUnpaid(executor: Db | DbTx, customerId: string): Promise<number> {
+  const [row] = await executor
+    .select({ total: sql<string>`coalesce(sum(${invoiceBalanceDueSql}), 0)` })
+    .from(invoices)
+    .where(
+      and(eq(invoices.customerId, customerId), inArray(invoices.status, [...UNPAID_STATUSES])),
+    );
+  return Number(row?.total ?? 0);
+}
 
 /**
  * Sole gate to `invoices`/`payments`; returns domain rows, never Drizzle tuples (Pilar 3).
@@ -106,15 +124,13 @@ export class InvoicesRepository {
 
     const [filteredCount] = await this.db.select({ value: count() }).from(invoices).where(where);
 
-    // Full-set summary over ALL invoices (ignores status/q/paging). Balance due per
-    // invoice = amount + late_fee + tax_amount - discount_amount - paid_amount, so a
-    // 'partial' invoice adds only its remainder.
+    // Full-set summary over ALL invoices (ignores status/q/paging).
     const [summaryRow] = await this.db
       .select({
         total: count(),
-        unpaidCount: sql<number>`count(*) filter (where ${invoices.status} in ('pending', 'partial', 'overdue'))`,
-        outstanding: sql<string>`coalesce(sum(case when ${invoices.status} in ('pending', 'partial', 'overdue') then ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount} else 0 end), 0)`,
-        overdue: sql<string>`coalesce(sum(case when ${invoices.status} = 'overdue' then ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount} else 0 end), 0)`,
+        unpaidCount: sql<number>`count(*) filter (where ${inArray(invoices.status, [...UNPAID_STATUSES])})`,
+        outstanding: sql<string>`coalesce(sum(case when ${inArray(invoices.status, [...UNPAID_STATUSES])} then ${invoiceBalanceDueSql} else 0 end), 0)`,
+        overdue: sql<string>`coalesce(sum(case when ${invoices.status} = 'overdue' then ${invoiceBalanceDueSql} else 0 end), 0)`,
         // Per-status counts (ADR-0011 parity) in one grouped aggregate instead of 5 COUNT queries.
         paidStatus: sql<number>`count(*) filter (where ${invoices.status} = 'paid')`,
         partialStatus: sql<number>`count(*) filter (where ${invoices.status} = 'partial')`,
@@ -224,8 +240,7 @@ export class InvoicesRepository {
   /**
    * Records a (partial or full) payment in one atomic UPDATE: the CASE expressions
    * read the pre-update row, so concurrent payments cannot under/over-count. Flips
-   * to 'paid' (stamping `paid_at`) once paid_amount reaches the invoice total
-   * (amount + late_fee + tax_amount - discount_amount), else 'partial'.
+   * to 'paid' (stamping `paid_at`) once paid_amount reaches the invoice total, else 'partial'.
    */
   async applyPayment(id: string, amount: number): Promise<Invoice> {
     const [row] = await this.db
@@ -234,12 +249,12 @@ export class InvoicesRepository {
         paidAmount: sql`${invoices.paidAmount} + ${amount}`,
         status: sql`(case
           when ${invoices.paidAmount} + ${amount}
-            >= ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount}
+            >= ${invoiceTotalSql}
           then 'paid' else 'partial'
         end)::invoice_status`,
         paidAt: sql`(case
           when ${invoices.paidAmount} + ${amount}
-            >= ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount}
+            >= ${invoiceTotalSql}
           then now() else ${invoices.paidAt}
         end)`,
         updatedAt: sql`now()`,
@@ -247,10 +262,7 @@ export class InvoicesRepository {
       // Overpay guard lives in the WHERE so concurrent payments cannot both pass a stale
       // balance check; the predicate re-reads the CURRENT row under the row lock.
       .where(
-        and(
-          eq(invoices.id, id),
-          sql`${invoices.paidAmount} + ${amount} <= ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount}`,
-        ),
+        and(eq(invoices.id, id), sql`${invoices.paidAmount} + ${amount} <= ${invoiceTotalSql}`),
       )
       .returning();
     if (!row) {
@@ -313,7 +325,7 @@ export class InvoicesRepository {
         return { invoice, reactivated: false }; // idempotent — see method doc.
       }
 
-      const total = invoice.amount + invoice.lateFee + invoice.taxAmount - invoice.discountAmount;
+      const total = invoiceTotal(invoice);
       const balanceDue = total - invoice.paidAmount;
       if (input.amount > balanceDue) {
         // Balance moved since the caller's snapshot; conflict so it re-reads.
@@ -362,15 +374,7 @@ export class InvoicesRepository {
    * which only adds to the balance.
    */
   private async refreshOutstandingTx(tx: DbTx, customerId: string): Promise<boolean> {
-    const [sumRow] = await tx
-      .select({
-        total: sql<string>`coalesce(sum(${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount}), 0)`,
-      })
-      .from(invoices)
-      .where(
-        and(eq(invoices.customerId, customerId), inArray(invoices.status, [...UNPAID_STATUSES])),
-      );
-    const outstanding = Number(sumRow?.total ?? 0);
+    const outstanding = await sumUnpaid(tx, customerId);
 
     const [customerRow] = await tx
       .select({ status: customers.status })
@@ -393,19 +397,10 @@ export class InvoicesRepository {
   }
 
   /**
-   * Balance due across unpaid invoices: amount + lateFee + taxAmount - discountAmount
-   * - paidAmount (P3.A.4); a 'partial' invoice contributes only its remainder.
+   * Balance due across unpaid invoices; a 'partial' invoice contributes only its remainder.
    */
   async sumUnpaidByCustomer(customerId: string): Promise<number> {
-    const [row] = await this.db
-      .select({
-        total: sql<string>`coalesce(sum(${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount}), 0)`,
-      })
-      .from(invoices)
-      .where(
-        and(eq(invoices.customerId, customerId), inArray(invoices.status, [...UNPAID_STATUSES])),
-      );
-    return Number(row?.total ?? 0);
+    return sumUnpaid(this.db, customerId);
   }
 
   // Batched sumUnpaidByCustomer for the billing cron (R6-DB-2). Customers with no
@@ -416,7 +411,7 @@ export class InvoicesRepository {
     const rows = await this.db
       .select({
         customerId: invoices.customerId,
-        total: sql<string>`coalesce(sum(${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount}), 0)`,
+        total: sql<string>`coalesce(sum(${invoiceBalanceDueSql}), 0)`,
       })
       .from(invoices)
       .where(
