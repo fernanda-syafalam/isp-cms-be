@@ -56,7 +56,7 @@ const tripayCreateResponseSchema = z.object({
       checkout_url: z.string().nullish(),
       expired_time: z.number().finite(), // unix seconds
     })
-    .optional(),
+    .nullish(),
 });
 type TripayCreateResponse = z.infer<typeof tripayCreateResponseSchema>;
 
