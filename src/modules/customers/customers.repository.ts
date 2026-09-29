@@ -29,47 +29,31 @@ import { resellers } from '../../infrastructure/database/schema/resellers.schema
 import { slaCredits } from '../../infrastructure/database/schema/sla-credits.schema';
 import type { CustomerSummary } from './dto/customer-response.dto';
 
-// The transaction handle drizzle hands its callback — used to type
-// `applyProration`'s private write helpers without an `any` (mirrors
-// InvoicesRepository / VouchersRepository's identical local alias).
+// Transaction handle type for the private write helpers (same alias as
+// InvoicesRepository / VouchersRepository).
 type DbTx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
-// Statuses that still owe money — the exact same tuple
-// `InvoicesRepository` uses for `sumUnpaidByCustomer` / `UNPAID_STATUSES`.
-// Duplicated locally (not imported) so this money-critical transaction is
-// self-contained and auditable within this one file, unlike pure formatting
-// helpers (e.g. `formatIdr`), which are extracted to `src/common` since they
-// carry no cross-module coupling risk.
+// Same tuple as `InvoicesRepository`'s UNPAID_STATUSES. Duplicated on purpose
+// so the money-critical proration transaction is auditable within this file.
 const UNPAID_STATUSES = ['pending', 'partial', 'overdue'] as const;
 
-// A customer row joined with its plan's display name and its reseller's
-// name. Neither is stored on the customer (single source of truth lives in
-// plans / resellers) — planName is NOT NULL (inner join, planId is
-// required), resellerName is nullable (left join, resellerId is optional).
+// Customer joined with plan and reseller names (derived, never stored).
+// planName: inner join (planId required); resellerName: left join (optional).
 export type CustomerRow = Customer & { planName: string; resellerName: string | null };
 
 export interface CustomerListFilter {
   q?: string;
-  // Scope to one reseller's acquisitions — set server-side for mitra
-  // principals (P1.5), never taken from client input for them. Staff/admin
-  // may also set this from the client (#26) to view one reseller's
-  // customers without filtering the full list.
+  // Set server-side for mitra principals (P1.5), never from their client
+  // input. Staff/admin may also set it from the client (#26).
   resellerId?: string;
-  // Ops diagnostic (#25): return only customers left with reseller_id IS
-  // NULL after migration 0031's backfill (ambiguous/no name match), so
-  // they can be found and reconciled. Takes precedence over resellerId if
-  // both are somehow set (the controller DTO already rejects that
-  // combination) — admin/staff only, same access boundary as resellerId.
+  // Ops diagnostic (#25): only customers with reseller_id IS NULL (left by
+  // migration 0031's backfill). Wins over resellerId; admin/staff only.
   unassignedReseller?: boolean;
-  // KYC-safe projection (ADR-0010 amendment, SEC-4): when true, npwp/ktp
-  // are never read off the real column — see baseSelectKycSafe(). Set
-  // server-side by CustomersService for mitra principals only; never
-  // taken from client input.
+  // KYC-safe projection (ADR-0010 amendment, SEC-4), see baseSelectKycSafe().
+  // Set server-side for mitra principals only; never from client input.
   excludeKyc?: boolean;
   status?: Customer['status'];
-  // Repeatable area filter: return customers whose areaName is IN this list
-  // OR whose areaName IS NULL (unassigned customers are always visible).
-  // Absent = no area constraint.
+  // Matches areaName IN this list OR IS NULL (unassigned always visible).
   area?: string[];
   sort?: string;
   order?: 'asc' | 'desc';
@@ -77,8 +61,7 @@ export interface CustomerListFilter {
   offset: number;
 }
 
-// Columns the frontend may sort on (camelCase key → Drizzle column).
-// Unknown/absent key falls back to `asc(fullName)` via buildOrderBy — never throws.
+// Sortable columns (camelCase key → column); unknown key falls back to asc(fullName).
 const CUSTOMERS_SORT_WHITELIST = {
   customerNo: customers.customerNo,
   fullName: customers.fullName,
@@ -87,17 +70,12 @@ const CUSTOMERS_SORT_WHITELIST = {
   joinedAt: customers.createdAt,
 } satisfies Record<string, (typeof customers)[keyof typeof customers]>;
 
-// Mutable base-profile fields a client may PATCH. Lifecycle, balance and
-// provisioning are NOT here — they move through dedicated methods.
+// Client-PATCHable fields only; lifecycle, balance and provisioning have dedicated methods.
 type ProfilePatch = Partial<
   Pick<NewCustomer, 'fullName' | 'phone' | 'email' | 'address' | 'planId' | 'resellerId'>
 >;
 
-/**
- * The only place that talks to the `customers` table. Returns domain
- * `CustomerRow` (customer + joined planName) — never Drizzle tuples or
- * raw SQL (Pilar 3).
- */
+/** Sole gate to the `customers` table; returns domain `CustomerRow` (Pilar 3). */
 @Injectable()
 export class CustomersRepository {
   constructor(private readonly drizzle: DrizzleService) {}
@@ -106,18 +84,10 @@ export class CustomersRepository {
     return this.drizzle.db;
   }
 
-  // Every read returns the customer columns plus the joined plan name.
-  // planId is NOT NULL with an FK, so an inner join never drops a row.
-  //
-  // resellerName is DERIVED here from resellers.name via a LEFT JOIN — never
-  // read from a stored column (M1 prod-only bug: no create/update path ever
-  // wrote one, so mitra reads/KPIs keyed off resellerName saw it permanently
-  // empty, and a stored copy would drift whenever a reseller is renamed
-  // anyway). The dead `customers.reseller_name` column this replaced was
-  // dropped in the ARCH-7 cleanup once this join-based derivation was
-  // confirmed to be the only source of the value. The LEFT JOIN (not INNER)
-  // is required so a customer with no reseller (reseller_id IS NULL) is
-  // still returned, with resellerName: null.
+  // planId is NOT NULL with an FK, so the inner join never drops a row.
+  // resellerName is derived from resellers.name (M1: a stored copy was never
+  // written and would drift on rename); the LEFT JOIN keeps customers with
+  // reseller_id IS NULL.
   private baseSelect() {
     return this.db
       .select({ ...getTableColumns(customers), planName: plans.name, resellerName: resellers.name })
@@ -126,15 +96,10 @@ export class CustomersRepository {
       .leftJoin(resellers, eq(customers.resellerId, resellers.id));
   }
 
-  // KYC-safe projection (ADR-0010 amendment / ADR-0015, SEC-4): npwp/ktp
-  // are replaced with a literal SQL NULL instead of the real column, so
-  // the identity values are never read out of Postgres for this query —
-  // not merely nulled after the fact in the response mapper. Used by
-  // list()/findById() only when the caller has been established as a
-  // mitra principal (CustomersService); every other read path
-  // (admin/staff, and the many internal cross-module callers of
-  // CustomersService.findById that never pass a user) keeps using
-  // baseSelect() above, unchanged.
+  // KYC-safe projection (ADR-0010 amendment / ADR-0015, SEC-4): npwp/ktp are
+  // selected as literal NULL so the identity values never leave Postgres,
+  // rather than being nulled later in the mapper. Mitra principals only; all
+  // other reads use baseSelect().
   private baseSelectKycSafe() {
     return this.db
       .select({
@@ -180,11 +145,8 @@ export class CustomersRepository {
 
     const [totals] = await this.db.select({ value: count() }).from(customers).where(where);
 
-    // Scope-wide lifecycle-status + outstanding rollup — computed over the
-    // caller's ACCESS SCOPE (area/resellerId, same as `scopeWhere` above),
-    // ignoring status/q/paging (mirrors the work-orders/invoices summary
-    // aggregate). A single grouped-filter aggregate avoids 5 separate COUNT
-    // queries; missing statuses are zero-filled below.
+    // Rollup over the access scope only (ignores status/q/paging); one
+    // filtered aggregate instead of 5 COUNTs.
     const [summaryRow] = await this.db
       .select({
         total: count(),
@@ -213,16 +175,11 @@ export class CustomersRepository {
     return { items, total: totals?.value ?? 0, summary };
   }
 
-  // The caller's access-scope predicate (area/resellerId) shared by both the
-  // paged `where` and the summary aggregate — status/q are deliberately
-  // excluded here since the summary must stay stable while a user switches
-  // status tabs or types a search query (mirrors the FE mock contract: the
-  // branch scope applies before the status filter).
+  // Access-scope predicate shared by the paged query and the summary. status/q
+  // are excluded so the summary stays stable across status tabs and searches.
   private buildScopeWhere(filter: CustomerListFilter) {
     return and(
-      // Multi-value area scope: match any listed area OR unassigned (null).
-      // The OR-null rule ensures unassigned customers are never hidden when a
-      // branch-scope filter is active.
+      // OR-null keeps unassigned customers visible under a branch scope.
       filter.area && filter.area.length > 0
         ? or(inArray(customers.areaName, filter.area), isNull(customers.areaName))
         : undefined,
@@ -234,12 +191,8 @@ export class CustomersRepository {
     );
   }
 
-  // `excludeKyc` (ADR-0010 amendment / ADR-0015, SEC-4): pass `true` only
-  // from a caller that has already established the requester is a mitra
-  // principal — see baseSelectKycSafe(). Defaults to false (full row) so
-  // every existing internal caller (the many cross-module
-  // `CustomersService.findById(id)` call sites that pass no user) is
-  // unaffected.
+  // `excludeKyc` (SEC-4): pass true only once the requester is established as
+  // a mitra principal; defaults to the full row for internal callers.
   async findById(id: string, opts: { excludeKyc?: boolean } = {}): Promise<CustomerRow | null> {
     const [row] = await (opts.excludeKyc ? this.baseSelectKycSafe() : this.baseSelect())
       .where(eq(customers.id, id))
@@ -247,35 +200,27 @@ export class CustomersRepository {
     return row ?? null;
   }
 
-  // Batched sibling of findById — same select shape (joined planName /
-  // resellerName), used by the billing cron (R6-DB-2) so it stops issuing
-  // one findById per customer id in a loop. Order/dedupe is whatever
-  // Postgres's IN returns (callers key off the row's own `id`, e.g. via a
-  // Map, so ordering never matters). Empty input returns [] WITHOUT
-  // querying — `inArray(col, [])` is a SQL error on some drivers.
+  // Batched findById for the billing cron (R6-DB-2); order is unspecified
+  // (callers key by id). Empty input skips the query: `inArray(col, [])` is a
+  // SQL error on some drivers.
   async findByIds(ids: string[]): Promise<CustomerRow[]> {
     if (ids.length === 0) return [];
     return this.baseSelect().where(inArray(customers.id, ids));
   }
 
-  // Resolve a customer by their (unique-in-practice) email. Transition
-  // fallback for portal sessions predating the userId linkage (P1.3).
+  // Fallback for portal sessions predating the userId linkage (P1.3).
   async findByEmail(email: string): Promise<CustomerRow | null> {
     const [row] = await this.baseSelect().where(eq(customers.email, email)).limit(1);
     return row ?? null;
   }
 
-  // Resolve a customer by their linked login (customers.user_id, unique).
-  // The authoritative portal-session mapping (P1.3).
+  // Authoritative portal-session mapping via customers.user_id (P1.3).
   async findByUserId(userId: string): Promise<CustomerRow | null> {
     const [row] = await this.baseSelect().where(eq(customers.userId, userId)).limit(1);
     return row ?? null;
   }
 
-  // How many customers are linked to a reseller, keyed by the FK
-  // (resellerId) — not a name match, which would silently undercount the
-  // moment a reseller is renamed (same drift class as M1). Used by the
-  // resellers module for the per-reseller customerCount.
+  // Keyed by the FK, not a name match, which undercounts after a rename (M1).
   async countByResellerId(resellerId: string): Promise<number> {
     const [row] = await this.db
       .select({ value: count() })
@@ -296,8 +241,7 @@ export class CustomersRepository {
     );
   }
 
-  // Resolve a customer id from an exact full-name match (first hit). Used
-  // by modules that reference a subscriber by name (e.g. tickets).
+  // First exact full-name match, for modules that reference subscribers by name (tickets).
   async findIdByFullName(fullName: string): Promise<string | null> {
     const [row] = await this.db
       .select({ id: customers.id })
@@ -324,27 +268,13 @@ export class CustomersRepository {
   }
 
   /**
-   * Atomically change a customer's plan AND apply the resulting proration —
-   * MUST-FIX #1/#5 (PR #121 money review): the plan write and the delta
-   * charge/credit succeed or fail together, and the whole decision is made
-   * under ONE lock so two concurrent OR retried calls to the SAME target
-   * plan can never both apply the delta (double-charge / double-credit).
-   *
-   * Locks the customer row `FOR UPDATE` FIRST, then RE-READS `planId`
-   * under that lock — never a caller's outer, pre-lock snapshot (the old
-   * bug: `CustomersService.changePlan` read `planId` via `requireById()`
-   * OUTSIDE any transaction, so two concurrent submits both saw the OLD
-   * plan, both computed the same delta, and both created their own
-   * adjustment invoice). If the locked row's `planId` already equals
-   * `targetPlanId`, this is a pure no-op — a concurrent call (or a retried
-   * request) already won this race and committed; `{ applied: false,
-   * delta: 0 }` is returned so the caller can tell idempotent-no-op apart
-   * from a genuine change. Only the winner computes the delta, from plan
-   * prices read inside this SAME transaction, and applies it via
-   * `applyDeltaTx`.
-   *
-   * `dueDays` (the billing policy's grace period) is threaded through to
-   * the adjustment invoice's due date — see `applyDeltaTx` / MED #4.
+   * Changes the plan and applies the proration delta in one transaction
+   * (PR #121 MUST-FIX #1/#5). The row is locked FOR UPDATE and `planId` is
+   * re-read under the lock, never from a caller's pre-lock snapshot, so
+   * concurrent or retried calls to the same target plan cannot both apply the
+   * delta. If `planId` already equals the target, returns
+   * `{ applied: false, delta: 0 }` (idempotent no-op). `dueDays` sets the
+   * adjustment invoice's due date (see `applyDeltaTx`).
    */
   async changePlan(
     id: string,
@@ -370,10 +300,7 @@ export class CustomersRepository {
         .where(eq(plans.id, input.targetPlanId))
         .limit(1);
       if (!newPlan) {
-        // The service already validates this before calling in — a miss
-        // here means the plan vanished between that check and this lock
-        // (extremely rare). Surfaced the same way `requireById` surfaces a
-        // vanished row: a real invariant violation, not routine input.
+        // The service pre-validates; a miss means the plan vanished before the lock.
         throw new NotFoundException('plan not found');
       }
       const [oldPlan] = await tx
@@ -402,21 +329,13 @@ export class CustomersRepository {
   }
 
   /**
-   * Apply a standalone money delta to a customer's balance via a REAL
-   * invoice line — never a hand-computed delta written straight onto
-   * `outstanding` (that was the silent-wipe bug: `outstanding` is a
-   * DERIVED column, recomputed from unpaid invoices on every billing event
-   * — see `InvoicesRepository.sumUnpaidByCustomer` — so a bare delta with
-   * no backing invoice row gets silently erased by the next recompute).
-   * Kept as its own entry point (over and above `changePlan`, which calls
-   * the same underlying `applyDeltaTx`) for any future caller that already
-   * knows a correct, race-free delta — e.g. a manual admin adjustment.
-   * `changePlan` is the one to use for a plan-change specifically: it
-   * computes the delta itself, atomically, under the customer lock (see
-   * its own doc for why calling this method with an externally
-   * pre-computed delta is exactly the race MUST-FIX #1 closed).
-   *
-   * See `applyDeltaTx` for the charge/credit modeling.
+   * Applies a standalone money delta through a real invoice line, never by
+   * writing `outstanding` directly: it is derived from unpaid invoices
+   * (`InvoicesRepository.sumUnpaidByCustomer`), so a delta without a backing
+   * invoice is erased by the next recompute. For plan changes use
+   * `changePlan`, which computes the delta under the customer lock; passing
+   * an externally computed delta here reopens the MUST-FIX #1 race.
+   * See `applyDeltaTx` for charge/credit modeling.
    */
   async applyProration(
     id: string,
@@ -429,39 +348,23 @@ export class CustomersRepository {
   }
 
   /**
-   * `delta > 0` (charge, e.g. an upgrade): inserts a new `type:
-   * 'adjustment'` invoice for the delta — a real charge with its own
-   * balanceDue. `periodStart`/`periodEnd` are today's date, not the
-   * billing-cycle month, so it can never collide with the customer's
-   * regular monthly invoice under `invoices_customer_period_idx` — that
-   * index is now partial (`WHERE type = 'regular'`) precisely so
-   * adjustment lines are exempt from the one-invoice-per-period rule.
-   * `dueDate = today + dueDays` — the SAME grace period a regular invoice
-   * gets (MED #4, PR #121 review): a bare `dueDate = today` let
-   * `markOverduePastDue` flip it overdue the very next day and
-   * `isolateActiveDebtors` cut service for a small proration charge with
-   * zero grace.
+   * `delta > 0` (charge): inserts an `adjustment` invoice. Its period is today
+   * so it cannot collide with the monthly invoice; `invoices_customer_period_idx`
+   * is partial (`WHERE type = 'regular'`) to exempt adjustments. `dueDate` is
+   * today + `dueDays`, the same grace as a regular invoice (MED #4): with
+   * `dueDate = today`, overdue marking and isolation would hit the customer
+   * the next day.
    *
-   * `delta < 0` (credit, e.g. a downgrade): applied via `applyCreditTx` —
-   * see that method's doc for the full-coverage-or-defer modeling (MED
-   * #3).
+   * `delta < 0` (credit): see `applyCreditTx`.
    *
-   * Either way, `customers.outstanding` is refreshed at the end from the
-   * exact same expression `sumUnpaidByCustomer` uses, in the SAME
-   * transaction — so the adjustment can never be wiped by a later
-   * recompute.
+   * `customers.outstanding` is refreshed in the same transaction so a later
+   * recompute cannot wipe the adjustment.
    *
-   * This is the same deliberate "one repository per table" exception
-   * `InvoicesRepository.recordPayment` / `VouchersRepository.settle`
-   * document: `CustomersRepository` reaches into `invoices` (and, via
-   * `applyCreditTx`, `sla_credits`) directly so the adjustment line and the
-   * outstanding refresh share one transaction. The lock order is INVOICE
-   * (when the credit branch touches one) THEN CUSTOMER LAST, right before
-   * the recompute — the exact order `InvoicesRepository.recordPayment` /
-   * `refreshOutstandingTx` use — so a concurrent payment/credit against the
-   * same customer can only ever serialize on the shared customer-row lock,
-   * never deadlock against this method (neither side ever acquires an
-   * invoice lock AFTER a customer lock it already holds).
+   * Cross-table writes (`invoices`, `sla_credits`) are the same money-path
+   * exception as `InvoicesRepository.recordPayment` / `VouchersRepository.settle`.
+   * Lock order is INVOICE then CUSTOMER LAST (as in `recordPayment` /
+   * `refreshOutstandingTx`), so concurrent payments only serialize on the
+   * customer row and never deadlock.
    */
   private async applyDeltaTx(
     tx: DbTx,
@@ -488,25 +391,15 @@ export class CustomersRepository {
   }
 
   /**
-   * Apply a credit (downgrade proration, or a future caller's) to the
-   * customer's single oldest unpaid invoice, by due date — see
-   * `applyDeltaTx`'s doc for why this never spreads across multiple
-   * invoices. `SELECT ... FOR UPDATE` locks the chosen invoice row so a
-   * concurrent payment/credit against it serializes instead of racing.
+   * Applies a credit to the customer's oldest unpaid invoice (by due date),
+   * locked FOR UPDATE so concurrent payments/credits serialize. Never spread
+   * across invoices.
    *
-   * MED #3 (PR #121 money review — "credit vanishes"): if the customer has
-   * no unpaid invoice at all, OR the credit is LARGER than that invoice's
-   * balance due, this does NOT partially discount it — a partial-now /
-   * implicit-remainder-later split would double count, because a future
-   * billing run's SLA-credit absorption (`InvoicesService
-   * .resolveSlaDiscount`) has no concept of "this credit was already
-   * partly spent." Instead the WHOLE credit is deferred by inserting a
-   * pending `sla_credits` row — the exact same pending-absorption
-   * mechanism a real SLA credit already uses
-   * (`findPendingByCustomer` -> `resolveSlaDiscount` ->
-   * `InvoicesRepository.createBilled`, M2), so a future billing run picks
-   * it up in full. The credit the customer earned is never silently
-   * dropped — only ever fully applied now, or fully deferred.
+   * MED #3 ("credit vanishes"): with no unpaid invoice, or a credit larger
+   * than the balance due, the WHOLE credit is deferred as a pending
+   * `sla_credits` row (absorbed by `InvoicesService.resolveSlaDiscount` on the
+   * next billing run). A partial-now split would double count because that
+   * absorption cannot know part was already spent.
    */
   private async applyCreditTx(
     tx: DbTx,
@@ -541,7 +434,7 @@ export class CustomersRepository {
       return;
     }
 
-    // Defer the WHOLE credit — see method doc.
+    // Defer the whole credit (see method doc).
     await tx.insert(slaCredits).values({
       customerId,
       customerName,
@@ -552,14 +445,9 @@ export class CustomersRepository {
   }
 
   /**
-   * Recompute `customers.outstanding` from the exact same expression
-   * `InvoicesRepository.sumUnpaidByCustomer` uses and persist it, inside
-   * the caller's transaction — mirrors
-   * `InvoicesRepository.refreshOutstandingTx`. The customer row is locked
-   * FOR UPDATE immediately before the recompute (the LAST lock this
-   * transaction takes) so a concurrent write following the same
-   * lock-then-recompute discipline can only serialize against this one,
-   * never deadlock.
+   * Recomputes `customers.outstanding` with the expression from
+   * `InvoicesRepository.sumUnpaidByCustomer`, in the caller's transaction.
+   * The customer row is locked FOR UPDATE last (see `applyDeltaTx` lock order).
    */
   private async refreshOutstandingTx(tx: DbTx, customerId: string): Promise<void> {
     await tx
@@ -587,11 +475,7 @@ export class CustomersRepository {
     return this.applyUpdate(id, patch);
   }
 
-  /**
-   * Move the customer to a new lifecycle status. `clearOutstanding`
-   * zeroes the balance (used by activate-after-payment); the other
-   * transitions leave the balance untouched.
-   */
+  /** Moves lifecycle status; `clearOutstanding` zeroes the balance (activate-after-payment). */
   async setStatus(
     id: string,
     status: Customer['status'],
@@ -599,28 +483,22 @@ export class CustomersRepository {
   ): Promise<CustomerRow> {
     return this.applyUpdate(id, {
       status,
-      // `isolir` carries the reason (overdue vs voluntary/cuti); any other
-      // status clears it (P3.A.3).
+      // Only `isolir` carries a reason (P3.A.3).
       holdReason: status === 'isolir' ? (opts.holdReason ?? 'overdue') : null,
       ...(opts.clearOutstanding ? { outstanding: 0 } : {}),
     });
   }
 
   /**
-   * Reclassify why an `isolir` customer is held — overdue <-> voluntary
-   * (P3.A.3) — without touching `status` (go-live follow-up to D6/NL-2:
-   * `setStatus`'s same-state guard in the service intentionally rejects
-   * isolir -> isolir, so this reason-only swap needs its own write path).
-   * The precondition (customer must currently be `isolir`) is enforced by
-   * `CustomersService.reclassifyHold` before this is called — this is a
-   * plain field write, same contract as `updateKyc`/`relocate` below.
+   * Swaps the `isolir` holdReason (overdue <-> voluntary, P3.A.3) without
+   * touching `status`; the service's same-state guard rejects isolir -> isolir
+   * (D6/NL-2). Precondition enforced in `CustomersService.reclassifyHold`.
    */
   async reclassifyHold(id: string, holdReason: Customer['holdReason']): Promise<CustomerRow> {
     return this.applyUpdate(id, { holdReason });
   }
 
-  // consent_at is set to the DB clock (sql `now()`), which the typed
-  // ProfilePatch set of applyUpdate cannot express — do it directly.
+  // consent_at uses the DB clock, which applyUpdate's typed patch cannot express.
   async recordConsent(id: string): Promise<CustomerRow> {
     const [updated] = await this.db
       .update(customers)
@@ -637,10 +515,7 @@ export class CustomersRepository {
     return this.applyUpdate(id, { ktp: kyc.ktp, npwp: kyc.npwp });
   }
 
-  /**
-   * Mark that an erasure was requested. The actual anonymization is an
-   * async job owned elsewhere — this only records the request time.
-   */
+  /** Records the erasure request time; anonymization runs as a job elsewhere. */
   async requestDataDeletion(id: string): Promise<void> {
     const result = await this.db
       .update(customers)
@@ -652,14 +527,11 @@ export class CustomersRepository {
   }
 
   // --- Billing support ------------------------------------------------
-  // The billing module owns a customer's balance/lifecycle-by-payment.
-  // These two methods are the seam it uses; the logic lives there.
 
   /**
-   * Active customers with their plan's monthly price — the input to a
-   * billing run. Joins plans for the price (never stored on the customer).
-   * `billingAnchorDay` (P3.A.4) drives the invoice due date when set; null
-   * falls back to the global SettingsService dueDays policy.
+   * Active customers with plan monthly price, for a billing run.
+   * `billingAnchorDay` (P3.A.4) drives the due date; null falls back to the
+   * SettingsService dueDays policy.
    */
   async findActiveBillable(): Promise<
     Array<{
@@ -681,10 +553,7 @@ export class CustomersRepository {
       .where(eq(customers.status, 'aktif'));
   }
 
-  /**
-   * Apply a billing effect: set the outstanding balance and/or move the
-   * lifecycle status (e.g. reactivate from isolir once paid up).
-   */
+  /** Sets outstanding and/or status (e.g. reactivate from isolir once paid up). */
   async setBilling(
     id: string,
     patch: {
@@ -729,8 +598,7 @@ export class CustomersRepository {
       .limit(limit);
   }
 
-  // Provisioned subscribers (aktif/isolir) joined with plan name + speed —
-  // the input the usage module computes data-consumption from.
+  // Provisioned subscribers (aktif/isolir) with plan name + speed, for the usage module.
   async findForUsage(): Promise<
     Array<{ id: string; fullName: string; planName: string; planSpeedMbps: number }>
   > {
@@ -780,8 +648,7 @@ export class CustomersRepository {
   }
 
   // --- Analytics support ----------------------------------------------
-  // Aggregate reads for the dashboard/reports rollup. The analytics module
-  // owns no table, so every count it needs is derived here (Pilar 3).
+  // Aggregate reads for analytics, which owns no table (Pilar 3).
 
   /** Subscriber counts grouped by lifecycle status (every status present). */
   async countByStatus(): Promise<Record<Customer['status'], number>> {
@@ -833,11 +700,7 @@ export class CustomersRepository {
     return rows.map((row) => ({ month: row.month, count: row.value }));
   }
 
-  /**
-   * Churned subscribers per calendar month (YYYY-MM) since `since`, keyed by
-   * the time the status moved to `berhenti` (its updated_at — there is no
-   * dedicated churn timestamp yet).
-   */
+  /** Churned per month since `since`, keyed by updated_at (no churn timestamp column). */
   async countChurnedByMonth(since: Date): Promise<Array<{ month: string; count: number }>> {
     const rows = await this.db
       .select({
@@ -850,8 +713,7 @@ export class CustomersRepository {
     return rows.map((row) => ({ month: row.month, count: row.value }));
   }
 
-  // Shared update path: always bumps updated_at, throws NotFound when the
-  // id is absent, then re-reads to attach the joined planName.
+  // Shared update path: bumps updated_at, 404s on a missing id, re-reads for joined names.
   private async applyUpdate(id: string, set: Partial<NewCustomer>): Promise<CustomerRow> {
     const [updated] = await this.db
       .update(customers)
@@ -867,22 +729,19 @@ export class CustomersRepository {
   private async requireById(id: string): Promise<CustomerRow> {
     const row = await this.findById(id);
     if (!row) {
-      // The row existed a moment ago (we just wrote it) — a miss here is
-      // a real invariant violation, not a normal 404.
+      // We just wrote this row; a miss is an invariant violation, not a 404.
       throw new Error('customers row vanished after write');
     }
     return row;
   }
 }
 
-// Whole-day UTC 'YYYY-MM-DD' for the day a proration adjustment invoice is
-// raised on — mirrors `InvoicesService`'s local date helpers.
+// Today as UTC 'YYYY-MM-DD'; mirrors `InvoicesService`'s date helpers.
 function isoToday(): string {
   return isoPlusDays(0);
 }
 
-// Whole-day UTC 'YYYY-MM-DD', `days` from today — used for an adjustment
-// invoice's dueDate (today + the billing policy's grace days, MED #4).
+// UTC 'YYYY-MM-DD', `days` from today (adjustment dueDate, MED #4).
 function isoPlusDays(days: number): string {
   const now = new Date();
   now.setUTCDate(now.getUTCDate() + days);
