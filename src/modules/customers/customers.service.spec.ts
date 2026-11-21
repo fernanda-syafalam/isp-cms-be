@@ -441,19 +441,16 @@ describe('CustomersService', () => {
   });
 
   describe('update', () => {
-    it('passes only provided fields and validates plan when planId changes', async () => {
-      plans.findById.mockResolvedValue({ id: PLAN_ID, name: 'Home 20' });
+    it('never forwards planId (plan changes go through changePlan)', async () => {
       repo.updateProfile.mockResolvedValue(sampleRow);
+      // A stale client can still send planId; the DTO strips it, but the service must not honour it either.
+      const body = { phone: '080000000000', planId: PLAN_ID };
 
-      await service.update(sampleRow.id, {
-        phone: '080000000000',
-        planId: PLAN_ID,
-      });
+      await service.update(sampleRow.id, body);
 
-      expect(plans.findById).toHaveBeenCalledWith(PLAN_ID);
+      expect(plans.findById).not.toHaveBeenCalled();
       expect(repo.updateProfile).toHaveBeenCalledWith(sampleRow.id, {
         phone: '080000000000',
-        planId: PLAN_ID,
       });
     });
 
