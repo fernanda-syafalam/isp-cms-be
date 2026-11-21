@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InventoryItem } from '../../infrastructure/database/schema/inventory.schema';
@@ -101,16 +101,33 @@ describe('InventoryService', () => {
       const result = await service.move(item.id, { type: 'assign', note: 'Budi' });
 
       expect(customers.findIdByFullName).toHaveBeenCalledWith('Budi');
-      expect(repo.update).toHaveBeenCalledWith(item.id, {
-        status: 'installed',
-        assignedTo: 'Budi',
-        assignedCustomerId: 'cust-1',
-      });
+      expect(repo.update).toHaveBeenCalledWith(
+        item.id,
+        { status: 'installed', assignedTo: 'Budi', assignedCustomerId: 'cust-1' },
+        { expectedStatus: 'warehouse' },
+      );
       // No work order supplied -> the movement records a null link.
       expect(repo.addMovement).toHaveBeenCalledWith(
         expect.objectContaining({ type: 'assign', note: 'Budi', workOrderId: null }),
       );
       expect(result.assignedCustomerId).toBe('cust-1');
+    });
+
+    it('assign guards the update on warehouse status and logs no movement on conflict', async () => {
+      repo.findById.mockResolvedValue(item);
+      customers.findIdByFullName.mockResolvedValue('cust-1');
+      repo.update.mockRejectedValue(new ConflictException('ONU sudah dipakai'));
+
+      await expect(service.move(item.id, { type: 'assign', note: 'Budi' })).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+
+      expect(repo.update).toHaveBeenCalledWith(
+        item.id,
+        { status: 'installed', assignedTo: 'Budi', assignedCustomerId: 'cust-1' },
+        { expectedStatus: 'warehouse' },
+      );
+      expect(repo.addMovement).not.toHaveBeenCalled();
     });
 
     // ADR-0003/0009: an install-driven assign records its work order so stock
