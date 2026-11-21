@@ -42,11 +42,11 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
  *
  * Invariant (R10-OPS-1): the API process registers ZERO BullMQ
  * processors/WorkerHosts, so background queue load never steals the API's
- * tuned CPU/mem budget. EmailModule and NotificationsModule below are the
- * PRODUCER side only (queue registration + *Service.enqueue); their
- * consumers (EmailProcessor, NotificationsProcessor) live in
- * EmailWorkerModule / NotificationsWorkerModule, imported only by
- * WorkerModule. SchedulerModule (SchedulerProcessor + the scheduler's own
+ * tuned CPU/mem budget. NotificationsModule below is the PRODUCER side
+ * only (queue registration + *Service.enqueue); its consumer
+ * (NotificationsProcessor) lives in NotificationsWorkerModule, imported
+ * only by WorkerModule. EmailModule and its consumer are unregistered
+ * for the MVP (source kept on disk). SchedulerModule (SchedulerProcessor + the scheduler's own
  * repeatable-job registration) is entirely worker-side and intentionally
  * absent from this import list. See test/worker-isolation.e2e-spec.ts,
  * which fails if a processor is reintroduced here.

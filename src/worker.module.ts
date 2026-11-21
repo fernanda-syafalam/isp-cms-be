@@ -18,14 +18,13 @@ import { SchedulerModule } from './modules/scheduler/scheduler.module';
  * needs JWT issuance/verification.
  *
  * Invariant (R10-OPS-1): this is the ONLY composition root that may import
- * a BullMQ processor. It holds every consumer that exists in the system —
- * EmailProcessor (via EmailWorkerModule), NotificationsProcessor (via
- * NotificationsWorkerModule), and SchedulerProcessor (via SchedulerModule,
+ * a BullMQ processor. It holds every consumer registered for the MVP —
+ * NotificationsProcessor (via NotificationsWorkerModule; EmailWorkerModule
+ * is unregistered, source kept), and SchedulerProcessor (via SchedulerModule,
  * which also brings InvoicesModule + TicketsModule — the domain services
  * SchedulerProcessor dispatches each tick to). DrizzleModule and
- * AuditModule are imported here (they were previously omitted because the
- * email queue alone touches neither) because the scheduler and
- * notifications consumers DO read/write through repositories, and
+ * AuditModule are imported here because the scheduler and notifications
+ * consumers DO read/write through repositories, and
  * PaymentIntentsService (invoked by SchedulerProcessor's
  * `payment-intents.expire-sweep` tick, via InvoicesModule) injects
  * AuditRepository directly. Both are @Global(), so importing each once
