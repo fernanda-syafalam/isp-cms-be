@@ -94,10 +94,6 @@ describe('Staff read-surface gate (e2e)', () => {
 
   const fakeCustomersRepo = {
     list: vi.fn(async () => ({ items: [], total: 0, summary: emptyCustomerSummary })),
-    // resolveForPortal fails closed on a miss (P0.3) — returning null here
-    // makes /v1/portal/me a deterministic 404 for the customer probe below.
-    findByEmail: vi.fn(async () => null),
-    findByUserId: vi.fn(async () => null),
     findById: vi.fn(async (id: string, opts: { excludeKyc?: boolean } = {}) =>
       id === CUSTOMER_ID
         ? {

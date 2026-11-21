@@ -123,6 +123,18 @@ describe('MVP-disabled routes (e2e)', () => {
     expect(res.statusCode).toBe(404);
   });
 
+  // SEC-H1: customers may only poll charge status; settlement is Tripay webhook
+  // or staff confirm only. Passes today because the portal is unregistered; when
+  // it returns, move this to a portal e2e (customer token + confirm spy not called).
+  it('POST /v1/portal/pay-intent/:id/confirm is 404 (SEC-H1)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/portal/pay-intent/00000000-0000-4000-8000-0000000000f1/confirm',
+      headers: await adminHeaders(),
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
   it('GET /v1/analytics/dashboard is 200 without the device fields', async () => {
     const res = await app.inject({
       method: 'GET',

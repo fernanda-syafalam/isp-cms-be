@@ -8,7 +8,6 @@ import { AppModule } from '../src/app.module';
 import { DrizzleService } from '../src/infrastructure/database/drizzle.service';
 import type { User } from '../src/infrastructure/database/schema/users.schema';
 import { RedisService } from '../src/infrastructure/redis/redis.service';
-import { CustomersService } from '../src/modules/customers/customers.service';
 import { BillingAutomationService } from '../src/modules/invoices/billing-automation.service';
 import type {
   IsolirResult,
@@ -25,7 +24,7 @@ import { UsersRepository } from '../src/modules/users/users.repository';
 /**
  * HTTP-boundary safety net (audit finding TEST-C1) for the money-mutating
  * routes: invoice settlement, billing automation, gateway payment intents
- * (staff + portal-scoped). Every dependency below the controller is faked
+ * (staff paths). Every dependency below the controller is faked
  * at the SERVICE seam (not the repository) — the point of this suite is
  * "does the route bind params, validate the DTO, enforce @Roles, and
  * serialize the response correctly", not the business logic underneath
@@ -144,18 +143,6 @@ describe('Money + billing mutating endpoints (e2e)', () => {
   const fakePaymentIntentsService = {
     create: vi.fn(async () => PENDING_INTENT),
     confirm: vi.fn(async () => PAID_INTENT),
-    createForCustomer: vi.fn(async () => PENDING_INTENT),
-    findForCustomer: vi.fn(async () => PENDING_INTENT),
-    pendingForCustomer: vi.fn(async () => []),
-    expireStale: vi.fn(async () => ({ expired: 0 })),
-  };
-
-  // PortalController resolves the caller's own customer through
-  // CustomersService.resolveForPortal — faked at that seam (same pattern
-  // as portal-selfcare.e2e-spec.ts) so the pay-intent tests below never
-  // touch a real repository.
-  const fakeCustomersService = {
-    resolveForPortal: vi.fn(async () => ({ id: CUSTOMER_ID, fullName: 'Budi Santoso' })),
   };
 
   beforeAll(async () => {
@@ -189,8 +176,6 @@ describe('Money + billing mutating endpoints (e2e)', () => {
       .useValue(fakeBillingAutomationService)
       .overrideProvider(PaymentIntentsService)
       .useValue(fakePaymentIntentsService)
-      .overrideProvider(CustomersService)
-      .useValue(fakeCustomersService)
       .compile();
 
     app = moduleFixture.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
