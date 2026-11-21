@@ -2,10 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { daysBetweenDates, wibDateString } from '../../common/utils/wib-date';
 import type { Invoice } from '../../infrastructure/database/schema/invoices.schema';
 import { CustomersRepository } from '../customers/customers.repository';
-import { DevicesRepository } from '../devices/devices.repository';
 import { InvoicesRepository } from '../invoices/invoices.repository';
-import { LeadsRepository } from '../leads/leads.repository';
-import { MonitoringRepository } from '../monitoring/monitoring.repository';
 import { SlaCreditsRepository } from '../sla-credits/sla-credits.repository';
 import { TicketsRepository } from '../tickets/tickets.repository';
 import type { DashboardSummary } from './dto/dashboard-summary-response.dto';
@@ -31,16 +28,13 @@ const MONTH_LABELS = [
 /**
  * Read-only cross-module rollup for the operations dashboard and business
  * reports. Owns no table: every number is derived per request from the
- * customers / invoices / tickets / devices / leads / monitoring / SLA-credit
+ * customers / invoices / tickets / SLA-credit
  * repositories (each the sole owner of its table, Pilar 3).
  *
- * Two values are honest placeholders until their owning module exists:
- *   - `commandCenter.odpFull` is 0 (ODP capacity lives in the topology
- *     module, not yet built).
- *   - the KPI sparkline series flat-line at the current value (there is no
- *     historical snapshot table to reconstruct movement from). `revenueTrend`
- *     and `movement`, by contrast, are real — derived from payments and
- *     subscriber timestamps.
+ * The KPI sparkline series flat-line at the current value (there is no
+ * historical snapshot table to reconstruct movement from). `revenueTrend`
+ * and `movement`, by contrast, are real — derived from payments and
+ * subscriber timestamps.
  */
 @Injectable()
 export class AnalyticsService {
@@ -48,9 +42,6 @@ export class AnalyticsService {
     private readonly customers: CustomersRepository,
     private readonly invoices: InvoicesRepository,
     private readonly tickets: TicketsRepository,
-    private readonly devices: DevicesRepository,
-    private readonly leads: LeadsRepository,
-    private readonly monitoring: MonitoringRepository,
     private readonly slaCredits: SlaCreditsRepository,
   ) {}
 
@@ -66,10 +57,7 @@ export class AnalyticsService {
       unpaid,
       revenueRows,
       ticketCounts,
-      deviceCounts,
-      pipeline,
       slaCreditsPending,
-      devicesAlert,
     ] = await Promise.all([
       this.customers.countByStatus(),
       this.customers.countCreatedSince(startOfMonthUtc(now)),
@@ -78,10 +66,7 @@ export class AnalyticsService {
       this.invoices.listUnpaid(),
       this.invoices.revenueByMonth(window.since),
       this.tickets.countByStatus(),
-      this.devices.countByStatus(),
-      this.leads.activePipeline(),
       this.slaCredits.countPending(),
-      this.monitoring.countUnacknowledged(),
     ]);
 
     const totalCustomers = sumValues(statusCounts);
@@ -102,8 +87,6 @@ export class AnalyticsService {
       openTickets: ticketCounts.open,
       // Of the tickets that reached a terminal state, the share that met SLA.
       slaCompliance: ratio(ticketCounts.resolved, ticketCounts.resolved + ticketCounts.breached, 1),
-      devicesOnline: deviceCounts.online,
-      devicesTotal: deviceCounts.online + deviceCounts.degraded + deviceCounts.offline,
       revenueTrend: fillRevenue(window.months, revenueRows),
       ticketsByStatus: [
         { label: 'Terbuka', count: ticketCounts.open },
@@ -115,13 +98,8 @@ export class AnalyticsService {
       isolatedTrend: flat(statusCounts.isolir),
       arTrend: flat(arOutstanding),
       commandCenter: {
-        pipelineValue: pipeline.value,
-        activeLeads: pipeline.count,
         churnRate: ratio(atRisk, totalCustomers, 0),
         slaCreditsPending,
-        devicesAlert,
-        // ODP capacity is owned by the topology module (not built yet).
-        odpFull: 0,
       },
       customerMix: [
         { label: 'Prospek', count: statusCounts.prospek },

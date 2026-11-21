@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
 import { DrizzleService } from '../src/infrastructure/database/drizzle.service';
 import { RedisService } from '../src/infrastructure/redis/redis.service';
-import { EmailProcessor } from '../src/modules/email/email.processor';
 import { NotificationsProcessor } from '../src/modules/notifications/notifications.processor';
 import { SchedulerProcessor } from '../src/modules/scheduler/scheduler.processor';
 import { WorkerModule } from '../src/worker.module';
@@ -12,7 +11,7 @@ import { WorkerModule } from '../src/worker.module';
  * Locks the R10-OPS-1 invariant: BullMQ processors (WorkerHosts) must be
  * instantiated ONLY in the worker process, never in the API. A regression
  * that reintroduces a processor into AppModule — e.g. importing
- * NotificationsWorkerModule/EmailWorkerModule/SchedulerModule from
+ * NotificationsWorkerModule/SchedulerModule from
  * AppModule, or re-adding *Processor to a producer module's `providers` —
  * must fail this test.
  *
@@ -51,14 +50,13 @@ describe('BullMQ processor isolation (R10-OPS-1)', () => {
       .useValue(redisStub())
       .compile();
 
-    expect(() => moduleRef.get(EmailProcessor, { strict: false })).toThrow();
     expect(() => moduleRef.get(NotificationsProcessor, { strict: false })).toThrow();
     expect(() => moduleRef.get(SchedulerProcessor, { strict: false })).toThrow();
 
     await moduleRef.close();
   });
 
-  it('WorkerModule registers ALL THREE BullMQ processors', async () => {
+  it('WorkerModule registers ALL BullMQ processors', async () => {
     const moduleRef: TestingModule = await Test.createTestingModule({
       imports: [WorkerModule],
     })
@@ -68,7 +66,6 @@ describe('BullMQ processor isolation (R10-OPS-1)', () => {
       .useValue(redisStub())
       .compile();
 
-    expect(moduleRef.get(EmailProcessor, { strict: false })).toBeInstanceOf(EmailProcessor);
     expect(moduleRef.get(NotificationsProcessor, { strict: false })).toBeInstanceOf(
       NotificationsProcessor,
     );

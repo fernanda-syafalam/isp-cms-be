@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { BranchesRepository } from '../branches/branches.repository';
 import { CustomersRepository } from '../customers/customers.repository';
 import { PlansRepository } from '../plans/plans.repository';
 import { PoolsRepository } from '../router-resources/pools.repository';
@@ -17,7 +16,7 @@ const MIN_STAFF_COUNT = 1;
 /**
  * Read-only cross-module rollup for the operator first-run checklist
  * (P3.E.2, docs/FLOWS.md §3.1). Owns no table: every `done` flag is derived
- * per request from the plans / routers / router-resources / branches /
+ * per request from the plans / routers / router-resources /
  * settings / users / customers / work-orders repositories (each the sole
  * owner of its table, Pilar 3).
  *
@@ -32,7 +31,6 @@ export class SetupService {
     private readonly routers: RoutersRepository,
     private readonly profiles: ProfilesRepository,
     private readonly pools: PoolsRepository,
-    private readonly branches: BranchesRepository,
     private readonly settings: SettingsService,
     private readonly users: UsersRepository,
     private readonly customers: CustomersRepository,
@@ -45,7 +43,6 @@ export class SetupService {
       routersPage,
       profilesCount,
       poolsCount,
-      branchesPage,
       settingsResponse,
       staffCount,
       statusCounts,
@@ -55,7 +52,6 @@ export class SetupService {
       this.routers.list({ limit: 1, offset: 0 }),
       this.profiles.countAll(),
       this.pools.countAll(),
-      this.branches.list({ limit: 1, offset: 0 }),
       this.settings.get(),
       this.users.countByRoles(['admin', 'staff']),
       this.customers.countByStatus(),
@@ -64,7 +60,6 @@ export class SetupService {
 
     const plansCount = plansPage.total;
     const routersCount = routersPage.total;
-    const branchesCount = branchesPage.total;
     const companyName = settingsResponse.company.name;
     const instalasiCount = statusCounts.instalasi;
     const aktifCount = statusCounts.aktif;
@@ -78,7 +73,6 @@ export class SetupService {
         profilesCount,
         poolsCount,
       },
-      branches: { done: branchesCount > 0, branchesCount },
       settings: { done: companyName.trim().length > 0, companyName },
       staff: { done: staffCount > MIN_STAFF_COUNT, staffCount },
       onboarding: {

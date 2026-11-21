@@ -175,25 +175,19 @@ describe('Staff read-surface gate (e2e)', () => {
   }
 
   // A representative sweep of the previously-ungated staff read surface —
-  // one list endpoint per module class-gated in P0.2, including the
-  // contracts IDOR (finding #2).
+  // one list endpoint per module class-gated in P0.2.
   const STAFF_GETS = [
     '/v1/customers',
-    '/v1/customers/00000000-0000-0000-0000-0000000000c1/contract',
     '/v1/invoices',
     '/v1/payments',
     '/v1/tickets',
-    '/v1/leads',
     '/v1/resellers',
-    '/v1/vouchers',
     '/v1/routers',
     '/v1/routers/00000000-0000-0000-0000-0000000000r1/secrets',
     '/v1/inventory',
     '/v1/work-orders',
     '/v1/audit',
     '/v1/users',
-    '/v1/accounting/journal',
-    '/v1/monitoring/alerts',
   ];
 
   it('rejects a customer JWT with 403 on every staff GET', async () => {
@@ -355,16 +349,5 @@ describe('Staff read-surface gate (e2e)', () => {
       });
       expect({ url, status: res.statusCode }).toEqual({ url, status: 403 });
     }
-  });
-
-  it('keeps the customer portal reachable for the customer role', async () => {
-    // resolveForPortal fails closed with 404 for an unlinked login (P0.3) —
-    // the point here is that the portal is NOT role-blocked (no 401/403).
-    const res = await app.inject({
-      method: 'GET',
-      url: '/v1/portal/me',
-      headers: { authorization: `Bearer ${await tokenFor('customer')}` },
-    });
-    expect(res.statusCode).toBe(404);
   });
 });

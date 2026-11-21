@@ -7,7 +7,6 @@ import { AppLoggerModule } from './infrastructure/logger/logger.module';
 import { QueueModule } from './infrastructure/queue/queue.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
 import { AuditModule } from './modules/audit/audit.module';
-import { EmailWorkerModule } from './modules/email/email-worker.module';
 import { NotificationsWorkerModule } from './modules/notifications/notifications-worker.module';
 import { SchedulerModule } from './modules/scheduler/scheduler.module';
 
@@ -48,7 +47,6 @@ import { SchedulerModule } from './modules/scheduler/scheduler.module';
     AuditModule,
     RedisModule,
     QueueModule,
-    EmailWorkerModule,
     NotificationsWorkerModule,
     SchedulerModule,
   ],

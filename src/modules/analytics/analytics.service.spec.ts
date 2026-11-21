@@ -1,10 +1,7 @@
 import { Test, type TestingModule } from '@nestjs/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CustomersRepository } from '../customers/customers.repository';
-import { DevicesRepository } from '../devices/devices.repository';
 import { InvoicesRepository } from '../invoices/invoices.repository';
-import { LeadsRepository } from '../leads/leads.repository';
-import { MonitoringRepository } from '../monitoring/monitoring.repository';
 import { SlaCreditsRepository } from '../sla-credits/sla-credits.repository';
 import { TicketsRepository } from '../tickets/tickets.repository';
 import { AnalyticsService } from './analytics.service';
@@ -19,9 +16,6 @@ describe('AnalyticsService', () => {
   let customers: Record<string, ReturnType<typeof vi.fn>>;
   let invoices: Record<string, ReturnType<typeof vi.fn>>;
   let tickets: Record<string, ReturnType<typeof vi.fn>>;
-  let devices: Record<string, ReturnType<typeof vi.fn>>;
-  let leads: Record<string, ReturnType<typeof vi.fn>>;
-  let monitoring: Record<string, ReturnType<typeof vi.fn>>;
   let slaCredits: Record<string, ReturnType<typeof vi.fn>>;
 
   beforeEach(async () => {
@@ -85,13 +79,6 @@ describe('AnalyticsService', () => {
         .fn()
         .mockResolvedValue({ open: 9, in_progress: 5, resolved: 31, breached: 2 }),
     };
-    devices = {
-      countByStatus: vi.fn().mockResolvedValue({ online: 142, degraded: 5, offline: 3 }),
-    };
-    leads = {
-      activePipeline: vi.fn().mockResolvedValue({ value: 36_000_000, count: 4 }),
-    };
-    monitoring = { countUnacknowledged: vi.fn().mockResolvedValue(6) };
     slaCredits = { countPending: vi.fn().mockResolvedValue(3) };
 
     const moduleRef: TestingModule = await Test.createTestingModule({
@@ -100,9 +87,6 @@ describe('AnalyticsService', () => {
         { provide: CustomersRepository, useValue: customers },
         { provide: InvoicesRepository, useValue: invoices },
         { provide: TicketsRepository, useValue: tickets },
-        { provide: DevicesRepository, useValue: devices },
-        { provide: LeadsRepository, useValue: leads },
-        { provide: MonitoringRepository, useValue: monitoring },
         { provide: SlaCreditsRepository, useValue: slaCredits },
       ],
     }).compile();
@@ -138,10 +122,6 @@ describe('AnalyticsService', () => {
         { label: 'Selesai', count: 31 },
       ]);
 
-      // Devices online / total from the status counts.
-      expect(result.devicesOnline).toBe(142);
-      expect(result.devicesTotal).toBe(150);
-
       // Six-month revenue window, zero-filled with short month labels.
       expect(result.revenueTrend).toEqual([
         { month: 'Jan', revenue: 0 },
@@ -157,14 +137,10 @@ describe('AnalyticsService', () => {
       expect(result.isolatedTrend).toEqual([8, 8, 8, 8, 8, 8]);
       expect(result.arTrend).toEqual([459_000, 459_000, 459_000, 459_000, 459_000, 459_000]);
 
-      // Command center rollup; odpFull is 0 until the topology module exists.
+      // Command center rollup.
       expect(result.commandCenter).toEqual({
-        pipelineValue: 36_000_000,
-        activeLeads: 4,
         churnRate: 0.125,
         slaCreditsPending: 3,
-        devicesAlert: 6,
-        odpFull: 0,
       });
 
       expect(result.customerMix).toEqual([
