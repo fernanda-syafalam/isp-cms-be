@@ -200,10 +200,12 @@ export class ResellersRepository {
    */
   async addLedgerEntry(resellerId: string, input: LedgerInput): Promise<Reseller> {
     return this.db.transaction(async (tx) => {
+      // Row lock: without it concurrent debits read a stale balance (lost update / overdraw).
       const [reseller] = await tx
         .select()
         .from(resellers)
         .where(eq(resellers.id, resellerId))
+        .for('update')
         .limit(1);
       if (!reseller) {
         throw new NotFoundException('reseller not found');
