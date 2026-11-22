@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { eq } from 'drizzle-orm';
 import { type NodePgDatabase, drizzle } from 'drizzle-orm/node-postgres';
@@ -139,6 +140,48 @@ describe('InventoryRepository (integration)', () => {
     await repo.remove(made.id);
     expect(await repo.findById(made.id)).toBeNull();
     await expect(repo.remove('00000000-0000-0000-0000-0000000000ff')).rejects.toThrow();
+  });
+
+  // Proves the double-assign race only on real Postgres; runs in CI (Docker), not in `pnpm test`.
+  describe('update with expectedStatus guard', () => {
+    const assignPatch = () => ({
+      status: 'installed' as const,
+      assignedTo: 'Budi',
+      assignedCustomerId: customerId,
+    });
+
+    it('rejects with 409 and leaves the row unchanged when the item is no longer in warehouse', async () => {
+      const made = await repo.create({ kind: 'onu', serial: 'G1', status: 'installed' });
+
+      await expect(
+        repo.update(made.id, assignPatch(), { expectedStatus: 'warehouse' }),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      const after = await repo.findById(made.id);
+      expect(after?.status).toBe('installed');
+      expect(after?.assignedTo).toBeNull();
+    });
+
+    it('lets exactly one of two concurrent guarded updates win', async () => {
+      const made = await repo.create({ kind: 'onu', serial: 'G2' });
+
+      const results = await Promise.allSettled([
+        repo.update(made.id, assignPatch(), { expectedStatus: 'warehouse' }),
+        repo.update(made.id, assignPatch(), { expectedStatus: 'warehouse' }),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]?.reason).toBeInstanceOf(ConflictException);
+    });
+
+    it('keeps the unguarded update working on any status', async () => {
+      const made = await repo.create({ kind: 'onu', serial: 'G3', status: 'installed' });
+      const updated = await repo.update(made.id, { status: 'broken' });
+      expect(updated.status).toBe('broken');
+    });
   });
 
   it('appends movements and lists them newest-first', async () => {

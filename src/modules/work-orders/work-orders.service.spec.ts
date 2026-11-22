@@ -1,4 +1,4 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkOrder } from '../../infrastructure/database/schema/work-orders.schema';
@@ -204,6 +204,21 @@ describe('WorkOrdersService', () => {
       expect(connection.onuSerial).toBe('ZTEG20009001');
       // The customer is still activated and billed.
       expect(invoices.generateFirstInvoice).toHaveBeenCalledWith(CUSTOMER_ID);
+    });
+
+    it('propagates a 409 from the ONU assign before any later cascade step runs', async () => {
+      repo.findById.mockResolvedValue(installWo);
+      customers.findById.mockResolvedValue(customerRow);
+      inventory.move.mockRejectedValue(new ConflictException('ONU sudah dipakai'));
+
+      await expect(service.complete(installWo.id, AUTHOR)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+
+      expect(secrets.create).not.toHaveBeenCalled();
+      expect(invoices.generateFirstInvoice).not.toHaveBeenCalled();
+      expect(customers.markInstalled).not.toHaveBeenCalled();
+      expect(repo.markDone).not.toHaveBeenCalled();
     });
 
     it('falls back to the first profile when none matches the plan name', async () => {

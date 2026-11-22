@@ -12,6 +12,7 @@ import {
   type InventoryListFilter,
   type InventoryPatch,
   InventoryRepository,
+  type InventoryUpdateOptions,
   type MovementListFilter,
 } from './inventory.repository';
 
@@ -87,12 +88,14 @@ export class InventoryService {
 
     let patch: InventoryPatch;
     let note: string;
+    let opts: InventoryUpdateOptions | undefined;
     if (input.type === 'assign') {
       const assignedTo = input.note ?? item.assignedTo;
       const assignedCustomerId = assignedTo
         ? await this.customers.findIdByFullName(assignedTo)
         : null;
       patch = { status: 'installed', assignedTo, assignedCustomerId };
+      opts = { expectedStatus: 'warehouse' };
       note = assignedTo ?? '';
     } else if (input.type === 'return') {
       patch = { status: 'warehouse', assignedTo: null, assignedCustomerId: null };
@@ -102,7 +105,9 @@ export class InventoryService {
       note = input.note ?? 'Rusak';
     }
 
-    const updated = await this.repo.update(id, patch);
+    const updated = opts
+      ? await this.repo.update(id, patch, opts)
+      : await this.repo.update(id, patch);
     await this.repo.addMovement({
       itemId: updated.id,
       serial: updated.serial,

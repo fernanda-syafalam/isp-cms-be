@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { and, asc, count, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import { buildOrderBy } from '../../common/utils/list-sort';
 import { DrizzleService } from '../../infrastructure/database/drizzle.service';
@@ -51,6 +51,13 @@ export interface MovementListFilter {
 export type InventoryPatch = Partial<
   Pick<NewInventoryItem, 'kind' | 'serial' | 'status' | 'assignedTo' | 'assignedCustomerId'>
 >;
+
+export type InventoryStatus = InventoryItem['status'];
+
+export interface InventoryUpdateOptions {
+  // Only update while the row still has this status (compare-and-set).
+  expectedStatus?: InventoryStatus;
+}
 
 /**
  * The only place that talks to `inventory_items` / `stock_movements`.
@@ -116,6 +123,7 @@ export class InventoryRepository {
 
   // The next ONU available to hand out: oldest warehouse stock first
   // (FIFO), so the install cascade consumes physical inventory deterministically.
+  // Deliberately unlocked: the conditional UPDATE in `update(..., { expectedStatus })` is the guard.
   async findAvailableOnu(): Promise<InventoryItem | null> {
     const [row] = await this.db
       .select()
@@ -156,12 +164,27 @@ export class InventoryRepository {
     return row;
   }
 
-  async update(id: string, patch: InventoryPatch): Promise<InventoryItem> {
+  async update(
+    id: string,
+    patch: InventoryPatch,
+    opts?: InventoryUpdateOptions,
+  ): Promise<InventoryItem> {
+    const expectedStatus = opts?.expectedStatus;
     const [row] = await this.db
       .update(inventoryItems)
       .set({ ...patch, updatedAt: sql`now()` })
-      .where(eq(inventoryItems.id, id))
+      .where(
+        and(
+          eq(inventoryItems.id, id),
+          expectedStatus ? eq(inventoryItems.status, expectedStatus) : undefined,
+        ),
+      )
       .returning();
+    if (!row && expectedStatus) {
+      throw new ConflictException(
+        'ONU sudah dipakai atau tidak lagi di gudang — muat ulang lalu coba lagi',
+      );
+    }
     if (!row) {
       throw new NotFoundException('inventory item not found');
     }
