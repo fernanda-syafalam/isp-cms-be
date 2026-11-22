@@ -149,13 +149,11 @@ export class CustomersService {
   }
 
   async update(id: string, input: UpdateCustomerInput): Promise<CustomerResponse> {
-    if (input.planId) await this.requirePlan(input.planId);
     const row = await this.repo.updateProfile(id, {
       ...(input.fullName !== undefined ? { fullName: input.fullName } : {}),
       ...(input.phone !== undefined ? { phone: input.phone } : {}),
       ...(input.email !== undefined ? { email: normalizeEmail(input.email) } : {}),
       ...(input.address !== undefined ? { address: input.address } : {}),
-      ...(input.planId !== undefined ? { planId: input.planId } : {}),
       ...(input.resellerId !== undefined ? { resellerId: input.resellerId } : {}),
     });
     this.logger.log({ customerId: row.id }, 'customer updated');
