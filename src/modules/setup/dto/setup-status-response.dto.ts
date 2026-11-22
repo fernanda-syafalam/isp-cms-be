@@ -20,10 +20,6 @@ export const SetupStatusSchema = z.object({
     profilesCount: z.number().int().nonnegative(),
     poolsCount: z.number().int().nonnegative(),
   }),
-  branches: z.object({
-    done: z.boolean(),
-    branchesCount: z.number().int().nonnegative(),
-  }),
   // The settings row always exists (seeded with defaults on first read), so
   // this reports the configured company name rather than row existence.
   settings: z.object({

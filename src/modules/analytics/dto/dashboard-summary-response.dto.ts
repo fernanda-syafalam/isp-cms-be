@@ -16,7 +16,7 @@ const StatusCountSchema = z.object({
 /**
  * Operations dashboard rollup. A read-only cross-module aggregate — none of
  * these numbers is stored; they are derived per request from customers,
- * invoices, tickets, devices, leads, monitoring and SLA-credit reads.
+ * invoices, tickets and SLA-credit reads.
  *
  * The three short trend series (`subscriberTrend`/`isolatedTrend`/`arTrend`)
  * power KPI sparklines. There is no historical snapshot table yet, so they
@@ -32,8 +32,6 @@ export const DashboardSummarySchema = z.object({
   overdueCount: z.number().int().nonnegative(),
   openTickets: z.number().int().nonnegative(),
   slaCompliance: z.number().min(0).max(1),
-  devicesOnline: z.number().int().nonnegative(),
-  devicesTotal: z.number().int().nonnegative(),
   revenueTrend: z.array(MonthRevenueSchema),
   ticketsByStatus: z.array(StatusCountSchema),
   subscriberTrend: z.array(z.number()),
@@ -41,12 +39,8 @@ export const DashboardSummarySchema = z.object({
   arTrend: z.array(z.number()),
   // Cross-module rollup surfaced as the dashboard "command center".
   commandCenter: z.object({
-    pipelineValue: z.number().int().nonnegative(),
-    activeLeads: z.number().int().nonnegative(),
     churnRate: z.number().min(0).max(1),
     slaCreditsPending: z.number().int().nonnegative(),
-    devicesAlert: z.number().int().nonnegative(),
-    odpFull: z.number().int().nonnegative(),
   }),
   // Subscriber distribution by lifecycle status.
   customerMix: z.array(StatusCountSchema),

@@ -1,6 +1,5 @@
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { BranchesRepository } from '../branches/branches.repository';
 import { CustomersRepository } from '../customers/customers.repository';
 import { PlansRepository } from '../plans/plans.repository';
 import { PoolsRepository } from '../router-resources/pools.repository';
@@ -30,7 +29,6 @@ describe('SetupService', () => {
   let routers: Record<string, ReturnType<typeof vi.fn>>;
   let profiles: Record<string, ReturnType<typeof vi.fn>>;
   let pools: Record<string, ReturnType<typeof vi.fn>>;
-  let branches: Record<string, ReturnType<typeof vi.fn>>;
   let settings: Record<string, ReturnType<typeof vi.fn>>;
   let users: Record<string, ReturnType<typeof vi.fn>>;
   let customers: Record<string, ReturnType<typeof vi.fn>>;
@@ -41,7 +39,6 @@ describe('SetupService', () => {
     routers = { list: vi.fn().mockResolvedValue({ items: [], total: 0 }) };
     profiles = { countAll: vi.fn().mockResolvedValue(0) };
     pools = { countAll: vi.fn().mockResolvedValue(0) };
-    branches = { list: vi.fn().mockResolvedValue({ items: [], total: 0 }) };
     settings = { get: vi.fn().mockResolvedValue(settingsResponse) };
     users = { countByRoles: vi.fn().mockResolvedValue(0) };
     customers = { countByStatus: vi.fn().mockResolvedValue(statusCounts) };
@@ -54,7 +51,6 @@ describe('SetupService', () => {
         { provide: RoutersRepository, useValue: routers },
         { provide: ProfilesRepository, useValue: profiles },
         { provide: PoolsRepository, useValue: pools },
-        { provide: BranchesRepository, useValue: branches },
         { provide: SettingsService, useValue: settings },
         { provide: UsersRepository, useValue: users },
         { provide: CustomersRepository, useValue: customers },
@@ -74,7 +70,6 @@ describe('SetupService', () => {
       profilesCount: 0,
       poolsCount: 0,
     });
-    expect(result.branches).toEqual({ done: false, branchesCount: 0 });
     expect(result.staff).toEqual({ done: false, staffCount: 0 });
     expect(result.onboarding).toEqual({ done: false, instalasiCount: 0, aktifCount: 0 });
     expect(result.workOrders).toEqual({ done: false, installDoneCount: 0 });
@@ -123,16 +118,6 @@ describe('SetupService', () => {
       const result = await service.getStatus();
 
       expect(result.catalogue).toEqual({ done: true, plansCount: 1 });
-    });
-  });
-
-  describe('branches', () => {
-    it('flips done once at least one branch exists', async () => {
-      branches.list.mockResolvedValue({ items: [{ id: 'b1' }], total: 1 });
-
-      const result = await service.getStatus();
-
-      expect(result.branches).toEqual({ done: true, branchesCount: 1 });
     });
   });
 

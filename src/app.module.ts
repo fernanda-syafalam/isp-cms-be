@@ -15,41 +15,24 @@ import { DrizzleModule } from './infrastructure/database/drizzle.module';
 import { AppLoggerModule } from './infrastructure/logger/logger.module';
 import { QueueModule } from './infrastructure/queue/queue.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
-import { AccountingModule } from './modules/accounting/accounting.module';
-import { AcsModule } from './modules/acs/acs.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
-import { AnnouncementsModule } from './modules/announcements/announcements.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
-import { BranchesModule } from './modules/branches/branches.module';
-import { ContractsModule } from './modules/contracts/contracts.module';
-import { CoverageModule } from './modules/coverage/coverage.module';
 import { CustomersModule } from './modules/customers/customers.module';
-import { DevicesModule } from './modules/devices/devices.module';
-import { EmailModule } from './modules/email/email.module';
 import { HealthModule } from './modules/health/health.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
 import { InvoicesModule } from './modules/invoices/invoices.module';
-import { LeadsModule } from './modules/leads/leads.module';
-import { MonitoringModule } from './modules/monitoring/monitoring.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
-import { OdpModule } from './modules/odp/odp.module';
-import { OnboardingModule } from './modules/onboarding/onboarding.module';
 import { PlansModule } from './modules/plans/plans.module';
-import { PortalModule } from './modules/portal/portal.module';
 import { ResellersModule } from './modules/resellers/resellers.module';
 import { RouterResourcesModule } from './modules/router-resources/router-resources.module';
 import { RoutersModule } from './modules/routers/routers.module';
-import { SatisfactionModule } from './modules/satisfaction/satisfaction.module';
 import { SecurityModule } from './modules/security/security.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { SetupModule } from './modules/setup/setup.module';
 import { SlaCreditsModule } from './modules/sla-credits/sla-credits.module';
 import { TicketsModule } from './modules/tickets/tickets.module';
-import { TopologyModule } from './modules/topology/topology.module';
-import { UsageModule } from './modules/usage/usage.module';
 import { UsersModule } from './modules/users/users.module';
-import { VouchersModule } from './modules/vouchers/vouchers.module';
 import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
 
 /**
@@ -59,11 +42,11 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
  *
  * Invariant (R10-OPS-1): the API process registers ZERO BullMQ
  * processors/WorkerHosts, so background queue load never steals the API's
- * tuned CPU/mem budget. EmailModule and NotificationsModule below are the
- * PRODUCER side only (queue registration + *Service.enqueue); their
- * consumers (EmailProcessor, NotificationsProcessor) live in
- * EmailWorkerModule / NotificationsWorkerModule, imported only by
- * WorkerModule. SchedulerModule (SchedulerProcessor + the scheduler's own
+ * tuned CPU/mem budget. NotificationsModule below is the PRODUCER side
+ * only (queue registration + *Service.enqueue); its consumer
+ * (NotificationsProcessor) lives in NotificationsWorkerModule, imported
+ * only by WorkerModule. EmailModule and its consumer are unregistered
+ * for the MVP (source kept on disk). SchedulerModule (SchedulerProcessor + the scheduler's own
  * repeatable-job registration) is entirely worker-side and intentionally
  * absent from this import list. See test/worker-isolation.e2e-spec.ts,
  * which fails if a processor is reintroduced here.
@@ -112,41 +95,24 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
       },
     }),
     QueueModule,
-    AccountingModule,
-    AcsModule,
     AnalyticsModule,
-    AnnouncementsModule,
     AuditModule,
     AuthModule,
-    BranchesModule,
-    ContractsModule,
-    CoverageModule,
     CustomersModule,
-    DevicesModule,
-    EmailModule,
     HealthModule,
     InventoryModule,
     InvoicesModule,
-    LeadsModule,
-    MonitoringModule,
     NotificationsModule,
-    OdpModule,
-    OnboardingModule,
     PlansModule,
-    PortalModule,
     ResellersModule,
     RouterResourcesModule,
     RoutersModule,
-    SatisfactionModule,
     SecurityModule,
     SettingsModule,
     SetupModule,
     SlaCreditsModule,
     TicketsModule,
-    TopologyModule,
-    UsageModule,
     UsersModule,
-    VouchersModule,
     WorkOrdersModule,
   ],
   providers: [

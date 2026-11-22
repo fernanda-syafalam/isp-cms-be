@@ -8,7 +8,6 @@ import { AppModule } from '../src/app.module';
 import { DrizzleService } from '../src/infrastructure/database/drizzle.service';
 import type { User } from '../src/infrastructure/database/schema/users.schema';
 import { RedisService } from '../src/infrastructure/redis/redis.service';
-import { CustomersService } from '../src/modules/customers/customers.service';
 import { BillingAutomationService } from '../src/modules/invoices/billing-automation.service';
 import type {
   IsolirResult,
@@ -25,7 +24,7 @@ import { UsersRepository } from '../src/modules/users/users.repository';
 /**
  * HTTP-boundary safety net (audit finding TEST-C1) for the money-mutating
  * routes: invoice settlement, billing automation, gateway payment intents
- * (staff + portal-scoped). Every dependency below the controller is faked
+ * (staff paths). Every dependency below the controller is faked
  * at the SERVICE seam (not the repository) — the point of this suite is
  * "does the route bind params, validate the DTO, enforce @Roles, and
  * serialize the response correctly", not the business logic underneath
@@ -144,18 +143,6 @@ describe('Money + billing mutating endpoints (e2e)', () => {
   const fakePaymentIntentsService = {
     create: vi.fn(async () => PENDING_INTENT),
     confirm: vi.fn(async () => PAID_INTENT),
-    createForCustomer: vi.fn(async () => PENDING_INTENT),
-    findForCustomer: vi.fn(async () => PENDING_INTENT),
-    pendingForCustomer: vi.fn(async () => []),
-    expireStale: vi.fn(async () => ({ expired: 0 })),
-  };
-
-  // PortalController resolves the caller's own customer through
-  // CustomersService.resolveForPortal — faked at that seam (same pattern
-  // as portal-selfcare.e2e-spec.ts) so the pay-intent tests below never
-  // touch a real repository.
-  const fakeCustomersService = {
-    resolveForPortal: vi.fn(async () => ({ id: CUSTOMER_ID, fullName: 'Budi Santoso' })),
   };
 
   beforeAll(async () => {
@@ -189,8 +176,6 @@ describe('Money + billing mutating endpoints (e2e)', () => {
       .useValue(fakeBillingAutomationService)
       .overrideProvider(PaymentIntentsService)
       .useValue(fakePaymentIntentsService)
-      .overrideProvider(CustomersService)
-      .useValue(fakeCustomersService)
       .compile();
 
     app = moduleFixture.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
@@ -366,81 +351,6 @@ describe('Money + billing mutating endpoints (e2e)', () => {
         headers: { authorization: `Bearer ${token}` },
       });
       expect(confirm.statusCode).toBe(403);
-    });
-  });
-
-  describe('POST /v1/portal/pay-intent (+ GET status) — customer-scoped gateway path', () => {
-    // SECURITY FIX (SEC-H1, was a latent-Critical free-internet hole):
-    // `POST /v1/portal/pay-intent/:id/confirm` let a customer self-settle
-    // their own invoice with zero payment verification — it called straight
-    // through to `payment-intents.service.confirm` (mark paid + reactivate)
-    // with no gateway involved. That route is now REMOVED; the customer may
-    // only create an intent and poll its status (`GET .../pay-intent/:id`).
-    // Settlement survives only on the staff/admin route above (or, P4
-    // future, a signed gateway webhook) — see `payment-intents.service.ts`
-    // `confirm()` / `findForCustomer()`.
-    it('createPayIntent: 201 + shape, customer', async () => {
-      const res = await app.inject({
-        method: 'POST',
-        url: '/v1/portal/pay-intent',
-        payload: { invoiceId: INVOICE_ID, channel: 'qris' },
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${await tokenFor('customer')}`,
-        },
-      });
-      expect(res.statusCode).toBe(201);
-      expect(res.json()).toEqual(PENDING_INTENT);
-    });
-
-    it('GET pay-intent/:id: 200 + shape (status poll only), customer', async () => {
-      const res = await app.inject({
-        method: 'GET',
-        url: `/v1/portal/pay-intent/${INTENT_ID}`,
-        headers: { authorization: `Bearer ${await tokenFor('customer')}` },
-      });
-      expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual(PENDING_INTENT);
-      expect(fakePaymentIntentsService.findForCustomer).toHaveBeenCalledWith(
-        CUSTOMER_ID,
-        INTENT_ID,
-      );
-    });
-
-    it('SEC-H1 regression: the self-settle route is gone — a customer can no longer confirm/pay their own intent', async () => {
-      // `confirm` is shared with the staff/admin describe block above (no
-      // per-test mock reset in this suite), so assert the call count is
-      // unchanged by THIS request rather than "never called".
-      const callsBefore = fakePaymentIntentsService.confirm.mock.calls.length;
-
-      const res = await app.inject({
-        method: 'POST',
-        url: `/v1/portal/pay-intent/${INTENT_ID}/confirm`,
-        headers: { authorization: `Bearer ${await tokenFor('customer')}` },
-      });
-      // No handler matches this path anymore (JwtAuthGuard/RolesGuard never
-      // even run) — Fastify/Nest answers 404, not 403. Either way the
-      // invoice-settlement service is never invoked by a customer.
-      expect(res.statusCode).toBe(404);
-      expect(fakePaymentIntentsService.confirm.mock.calls.length).toBe(callsBefore);
-    });
-
-    it('staff: 403 on the portal-scoped create + poll routes (customer-only surface)', async () => {
-      const token = await tokenFor('staff');
-      const create = await app.inject({
-        method: 'POST',
-        url: '/v1/portal/pay-intent',
-        payload: { invoiceId: INVOICE_ID, channel: 'qris' },
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      });
-      expect(create.statusCode).toBe(403);
-
-      const poll = await app.inject({
-        method: 'GET',
-        url: `/v1/portal/pay-intent/${INTENT_ID}`,
-        headers: { authorization: `Bearer ${token}` },
-      });
-      expect(poll.statusCode).toBe(403);
     });
   });
 });

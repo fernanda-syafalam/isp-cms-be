@@ -7,7 +7,6 @@ import { AppLoggerModule } from './infrastructure/logger/logger.module';
 import { QueueModule } from './infrastructure/queue/queue.module';
 import { RedisModule } from './infrastructure/redis/redis.module';
 import { AuditModule } from './modules/audit/audit.module';
-import { EmailWorkerModule } from './modules/email/email-worker.module';
 import { NotificationsWorkerModule } from './modules/notifications/notifications-worker.module';
 import { SchedulerModule } from './modules/scheduler/scheduler.module';
 
@@ -19,14 +18,13 @@ import { SchedulerModule } from './modules/scheduler/scheduler.module';
  * needs JWT issuance/verification.
  *
  * Invariant (R10-OPS-1): this is the ONLY composition root that may import
- * a BullMQ processor. It holds every consumer that exists in the system —
- * EmailProcessor (via EmailWorkerModule), NotificationsProcessor (via
- * NotificationsWorkerModule), and SchedulerProcessor (via SchedulerModule,
+ * a BullMQ processor. It holds every consumer registered for the MVP —
+ * NotificationsProcessor (via NotificationsWorkerModule; EmailWorkerModule
+ * is unregistered, source kept), and SchedulerProcessor (via SchedulerModule,
  * which also brings InvoicesModule + TicketsModule — the domain services
  * SchedulerProcessor dispatches each tick to). DrizzleModule and
- * AuditModule are imported here (they were previously omitted because the
- * email queue alone touches neither) because the scheduler and
- * notifications consumers DO read/write through repositories, and
+ * AuditModule are imported here because the scheduler and notifications
+ * consumers DO read/write through repositories, and
  * PaymentIntentsService (invoked by SchedulerProcessor's
  * `payment-intents.expire-sweep` tick, via InvoicesModule) injects
  * AuditRepository directly. Both are @Global(), so importing each once
@@ -48,7 +46,6 @@ import { SchedulerModule } from './modules/scheduler/scheduler.module';
     AuditModule,
     RedisModule,
     QueueModule,
-    EmailWorkerModule,
     NotificationsWorkerModule,
     SchedulerModule,
   ],
