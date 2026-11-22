@@ -1,11 +1,11 @@
-import { NotFoundException } from '@nestjs/common';
+import { Logger, NotFoundException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Invoice } from '../../infrastructure/database/schema/invoices.schema';
 import { CustomersRepository } from '../customers/customers.repository';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ResellersRepository } from '../resellers/resellers.repository';
-import { SecretsRepository } from '../router-resources/secrets.repository';
+import { SecretEnforcementService } from '../router-resources/secret-enforcement.service';
 import { SettingsService } from '../settings/settings.service';
 import { SlaCreditsRepository } from '../sla-credits/sla-credits.repository';
 import { InvoicesRepository } from './invoices.repository';
@@ -53,7 +53,7 @@ describe('InvoicesService', () => {
   };
   let repo: Record<string, ReturnType<typeof vi.fn>>;
   let customers: Record<string, ReturnType<typeof vi.fn>>;
-  let secrets: { setDisabledByCustomerId: ReturnType<typeof vi.fn> };
+  let secrets: { applyDisabledForCustomer: ReturnType<typeof vi.fn> };
   let slaCreditsFake: {
     findPendingByCustomer: ReturnType<typeof vi.fn>;
     markAppliedWithInvoice: ReturnType<typeof vi.fn>;
@@ -81,7 +81,7 @@ describe('InvoicesService', () => {
       findById: vi.fn().mockResolvedValue({ id: 'c1', resellerId: null }),
       findBillingInfo: vi.fn(),
     };
-    secrets = { setDisabledByCustomerId: vi.fn() };
+    secrets = { applyDisabledForCustomer: vi.fn() };
     const resellers = {
       findById: vi.fn(),
       postCommissionForInvoice: vi.fn().mockResolvedValue(true),
@@ -107,7 +107,7 @@ describe('InvoicesService', () => {
         InvoicesService,
         { provide: InvoicesRepository, useValue: repo },
         { provide: CustomersRepository, useValue: customers },
-        { provide: SecretsRepository, useValue: secrets },
+        { provide: SecretEnforcementService, useValue: secrets },
         { provide: SettingsService, useValue: settings },
         { provide: ResellersRepository, useValue: resellers },
         { provide: SlaCreditsRepository, useValue: slaCreditsFake },
@@ -282,7 +282,7 @@ describe('InvoicesService', () => {
         undefined,
       );
       // ADR-0008: reactivation re-enables the PPPoE secret on the router.
-      expect(secrets.setDisabledByCustomerId).toHaveBeenCalledWith(CUSTOMER_ID, false);
+      expect(secrets.applyDisabledForCustomer).toHaveBeenCalledWith(CUSTOMER_ID, false);
       expect(result.status).toBe('paid');
       expect(result.paidAt).toBe('2026-06-15T10:00:00.000Z');
       expect(result.balanceDue).toBe(0);
@@ -371,7 +371,7 @@ describe('InvoicesService', () => {
       expect(result.status).toBe('partial');
       expect(result.balanceDue).toBe(122_000);
       // Still in debt -> no reactivation, no commission, no secret re-enable.
-      expect(secrets.setDisabledByCustomerId).not.toHaveBeenCalled();
+      expect(secrets.applyDisabledForCustomer).not.toHaveBeenCalled();
       expect(resellersFake.postCommissionForInvoice).not.toHaveBeenCalled();
     });
 
@@ -400,7 +400,27 @@ describe('InvoicesService', () => {
       expect(result.status).toBe('paid');
       expect(result.paidAt).toBe('2026-06-20T09:00:00.000Z');
       expect(result.balanceDue).toBe(0);
-      expect(secrets.setDisabledByCustomerId).toHaveBeenCalledWith(CUSTOMER_ID, false);
+      expect(secrets.applyDisabledForCustomer).toHaveBeenCalledWith(CUSTOMER_ID, false);
+    });
+
+    it('an enforcement failure (DB/target lookup) is logged and the payment still succeeds', async () => {
+      repo.findById.mockResolvedValue(pendingInvoice);
+      repo.recordPayment.mockResolvedValue({
+        invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
+        reactivated: true,
+      });
+      customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
+      secrets.applyDisabledForCustomer.mockRejectedValue(new Error('router down'));
+      const errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+
+      const result = await service.pay(pendingInvoice.id, { method: 'transfer' });
+
+      expect(result.status).toBe('paid');
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ customerId: CUSTOMER_ID }),
+        expect.any(String),
+      );
+      errorSpy.mockRestore();
     });
 
     it('rejects a payment amount greater than the balance due', async () => {
@@ -513,7 +533,7 @@ describe('InvoicesService', () => {
       // Still in debt (or was never isolir) -> no reactivation, so the
       // secret is left untouched. Deciding + persisting `outstanding` and
       // any reactivation now happens inside `repo.recordPayment` itself.
-      expect(secrets.setDisabledByCustomerId).not.toHaveBeenCalled();
+      expect(secrets.applyDisabledForCustomer).not.toHaveBeenCalled();
     });
 
     it('forwards the internal withinTx hook to repo.recordPayment', async () => {
