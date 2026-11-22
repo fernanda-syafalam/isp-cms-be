@@ -1,3 +1,4 @@
+import { UnprocessableEntityException } from '@nestjs/common';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { eq } from 'drizzle-orm';
 import { type NodePgDatabase, drizzle } from 'drizzle-orm/node-postgres';
@@ -251,6 +252,25 @@ describe('ResellersRepository (integration)', () => {
     // balance unchanged, no ledger row
     expect((await repo.findById(r.id))?.balance).toBe(100_000);
     expect((await repo.listLedger(r.id, { limit: 50, offset: 0 })).total).toBe(0);
+  });
+
+  // Only proves the lost-update race under real Postgres; runs in CI (`pnpm test:int`).
+  it('serialises concurrent debits: surplus ones get 422, no overdraw', async () => {
+    const r = await seed({ balance: 100_000 });
+    // Warm the pool so every debit gets its own live connection and the transactions truly overlap.
+    const clients = await Promise.all(Array.from({ length: 5 }, () => pool.connect()));
+    for (const c of clients) c.release();
+    const debit = () =>
+      repo.addLedgerEntry(r.id, { type: 'deduction', amount: 30_000, note: 'Potong' });
+
+    const results = await Promise.allSettled(Array.from({ length: 5 }, debit));
+
+    const rejected = results.filter((x): x is PromiseRejectedResult => x.status === 'rejected');
+    expect(results.filter((x) => x.status === 'fulfilled')).toHaveLength(3);
+    expect(rejected).toHaveLength(2);
+    for (const x of rejected) expect(x.reason).toBeInstanceOf(UnprocessableEntityException);
+    expect((await repo.findById(r.id))?.balance).toBe(10_000);
+    expect((await repo.listLedger(r.id, { limit: 50, offset: 0 })).total).toBe(3);
   });
 
   it('posts a commission once per invoice — a replay is a no-op (P3.D.1)', async () => {
