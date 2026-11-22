@@ -164,21 +164,11 @@ describe('PaymentIntentsService.settleFromGateway — concurrent delivery (integ
       paymentIntentsService.settleFromGateway(callback),
     ]);
 
-    // The MONEY invariant under test is what got WRITTEN (asserted below),
-    // not the caller-visible `settled` flag on each individual call. At
-    // least one call must report settled — otherwise nobody actually paid.
-    // The other call CAN legitimately observe `settled: false` with reason
-    // `amount_mismatch`: `settleFromGateway` reads the invoice's CURRENT
-    // `balanceDue` (unlocked) to compare against the callback amount BEFORE
-    // calling `confirm()`, and `confirm()` only flips `payment_intents
-    // .status` to 'paid' AFTER the invoice itself is already 'paid' — so a
-    // second delivery scheduled in that narrow window can see balanceDue=0
-    // (the other call already settled the invoice) while `intent.status`
-    // hasn't caught up to 'paid' yet, and trips the amount guard instead of
-    // the idempotent early-return. This is a caller-visible-outcome race
-    // ONLY (a real Tripay retry would land on the now-'paid' intent and
-    // report settled next time) — it never double-writes; see the ledger/
-    // invoice/customer assertions below, which hold regardless.
+    // The MONEY invariant under test is what got WRITTEN (asserted below), not each call's
+    // `settled` flag. At least one call must settle. The other may report `amount_mismatch`:
+    // `settleFromGateway` reads the intent status and the invoice's `balanceDue` unlocked, in
+    // separate reads, so it can see the intent still 'pending' and then a balance already 0.
+    // Caller-visible only — it never double-writes (ledger/invoice/customer assertions below).
     expect(a.settled || b.settled).toBe(true);
     for (const result of [a, b]) {
       if (!result.settled) expect(result.reason).toBe('amount_mismatch');

@@ -3,6 +3,7 @@ import { UnauthorizedException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppConfig } from '../../../config/configuration';
+import { MalformedWebhookError } from './payment-gateway';
 import { TripayPaymentGateway } from './tripay-payment.gateway';
 
 const PRIVATE_KEY = 'test-tripay-private-key';
@@ -112,6 +113,44 @@ describe('TripayPaymentGateway (ADR-0016, live mode)', () => {
       ).rejects.toThrow('Tripay create-transaction failed');
     });
 
+    it('keeps the Tripay message when the error body does not match the schema (data: [])', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({ success: false, message: 'Invalid amount X', data: [] }), {
+          status: 422,
+        }),
+      );
+
+      await expect(
+        gateway.createCharge({
+          invoiceId: 'inv-1',
+          invoiceNo: 'INV-2026-100',
+          merchantRef: 'intent-1',
+          amount: 1,
+          channel: 'qris',
+          customer: { name: 'Budi Santoso' },
+        }),
+      ).rejects.toThrow('Invalid amount X');
+    });
+
+    it('treats a success response missing data.reference as a create-transaction failure', async () => {
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({ success: true, data: { expired_time: 1_783_641_600 } }), {
+          status: 200,
+        }),
+      );
+
+      await expect(
+        gateway.createCharge({
+          invoiceId: 'inv-1',
+          invoiceNo: 'INV-2026-100',
+          merchantRef: 'intent-1',
+          amount: 1,
+          channel: 'qris',
+          customer: { name: 'Budi Santoso' },
+        }),
+      ).rejects.toThrow('Tripay create-transaction failed');
+    });
+
     it('throws for a channel with no mapped Tripay method code, without calling fetch', async () => {
       const fetchSpy = vi.spyOn(globalThis, 'fetch');
 
@@ -199,7 +238,27 @@ describe('TripayPaymentGateway (ADR-0016, live mode)', () => {
       const malformed = Buffer.from('not json');
       expect(() =>
         gateway.verifyAndParseWebhook({ 'x-callback-signature': sign(malformed) }, malformed),
-      ).toThrow(UnauthorizedException);
+      ).toThrow(MalformedWebhookError);
+    });
+
+    it.each([
+      ['missing merchant_ref', { reference: 'T1', status: 'PAID', total_amount: 1 }],
+      [
+        'non-numeric total_amount',
+        { reference: 'T1', merchant_ref: 'i', status: 'PAID', total_amount: 'abc' },
+      ],
+    ])('rejects a signed body with %s', (_label, bad) => {
+      const raw = Buffer.from(JSON.stringify(bad));
+      expect(() =>
+        gateway.verifyAndParseWebhook({ 'x-callback-signature': sign(raw) }, raw),
+      ).toThrow(MalformedWebhookError);
+    });
+
+    it('checks the signature before the schema for an unsigned malformed body', () => {
+      const raw = Buffer.from(JSON.stringify({ reference: 'T1' }));
+      expect(() =>
+        gateway.verifyAndParseWebhook({ 'x-callback-signature': 'deadbeef' }, raw),
+      ).toThrow('invalid webhook signature');
     });
   });
 });

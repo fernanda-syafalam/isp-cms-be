@@ -1,10 +1,12 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { z } from 'zod';
 import type { AppConfig } from '../../../config/configuration';
 import {
   type CreateChargeInput,
   type CreateChargeResult,
+  MalformedWebhookError,
   type PaymentChannel,
   PaymentGateway,
   type WebhookSettlementStatus,
@@ -43,25 +45,28 @@ function toSettlementStatus(status: string): WebhookSettlementStatus {
   return 'failed';
 }
 
-type TripayCreateResponse = {
-  success: boolean;
-  message?: string;
-  data?: {
-    reference: string;
-    pay_code?: string | null;
-    qr_string?: string | null;
-    qr_url?: string | null;
-    checkout_url?: string | null;
-    expired_time: number; // unix seconds
-  };
-};
+const tripayCreateResponseSchema = z.object({
+  success: z.boolean(),
+  message: z.string().nullish(),
+  data: z
+    .object({
+      reference: z.string().min(1),
+      pay_code: z.string().nullish(),
+      qr_string: z.string().nullish(),
+      qr_url: z.string().nullish(),
+      checkout_url: z.string().nullish(),
+      expired_time: z.number().finite(), // unix seconds
+    })
+    .nullish(),
+});
+type TripayCreateResponse = z.infer<typeof tripayCreateResponseSchema>;
 
-type TripayCallbackBody = {
-  reference: string;
-  merchant_ref: string;
-  status: string;
-  total_amount: number;
-};
+const tripayCallbackSchema = z.object({
+  reference: z.string().min(1),
+  merchant_ref: z.string().min(1),
+  status: z.string(),
+  total_amount: z.number().finite(),
+});
 
 /**
  * Live gateway (`PAYMENT_MODE=live`). Talks to Tripay's closed-payment REST
@@ -145,14 +150,7 @@ export class TripayPaymentGateway extends PaymentGateway {
       body: JSON.stringify(body),
     });
 
-    const json = (await res.json()) as TripayCreateResponse;
-    if (!res.ok || !json.success || !json.data) {
-      this.logger.error(
-        { status: res.status, message: json.message, merchantRef: input.merchantRef },
-        'Tripay create-transaction failed',
-      );
-      throw new Error(`Tripay create-transaction failed: ${json.message ?? res.status}`);
-    }
+    const json = this.parseCreateResponse(res, await res.json(), input.merchantRef);
 
     return {
       reference: json.data.reference,
@@ -161,6 +159,32 @@ export class TripayPaymentGateway extends PaymentGateway {
       checkoutUrl: json.data.checkout_url ?? undefined,
       expiresAt: new Date(json.data.expired_time * 1000),
     };
+  }
+
+  /** Any failure (HTTP, `success:false`, or shape mismatch) surfaces as the same
+   *  create-transaction error. Logs status / issue paths only, never payload values. */
+  private parseCreateResponse(
+    res: Response,
+    raw: unknown,
+    merchantRef: string,
+  ): TripayCreateResponse & { data: NonNullable<TripayCreateResponse['data']> } {
+    const parsed = tripayCreateResponseSchema.safeParse(raw);
+    if (parsed.success && res.ok && parsed.data.success && parsed.data.data) {
+      return { ...parsed.data, data: parsed.data.data };
+    }
+    const message = parsed.success
+      ? parsed.data.message
+      : z.object({ message: z.string() }).partial().safeParse(raw).data?.message;
+    this.logger.error(
+      {
+        status: res.status,
+        message,
+        issuePaths: parsed.success ? undefined : parsed.error.issues.map((i) => i.path.join('.')),
+        merchantRef,
+      },
+      'Tripay create-transaction failed',
+    );
+    throw new Error(`Tripay create-transaction failed: ${message ?? res.status}`);
   }
 
   verifyAndParseWebhook(
@@ -180,12 +204,22 @@ export class TripayPaymentGateway extends PaymentGateway {
       throw new UnauthorizedException('invalid webhook signature');
     }
 
-    let payload: TripayCallbackBody;
+    let raw: unknown;
     try {
-      payload = JSON.parse(rawBody.toString('utf8')) as TripayCallbackBody;
+      raw = JSON.parse(rawBody.toString('utf8'));
     } catch {
-      throw new UnauthorizedException('malformed webhook body');
+      this.logger.warn('Tripay webhook: signed body is not valid JSON');
+      throw new MalformedWebhookError();
     }
+    const parsed = tripayCallbackSchema.safeParse(raw);
+    if (!parsed.success) {
+      this.logger.warn(
+        { issuePaths: parsed.error.issues.map((i) => i.path.join('.')) },
+        'Tripay webhook: signed body failed schema validation',
+      );
+      throw new MalformedWebhookError();
+    }
+    const payload = parsed.data;
 
     return {
       reference: payload.reference,

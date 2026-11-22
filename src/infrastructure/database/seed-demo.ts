@@ -1,50 +1,15 @@
 /**
- * DEMO seed — standalone, destructive when explicitly armed.
+ * DEMO seed: realistic-medium ISP dataset for client walkthroughs.
  *
- * Populates a realistic-medium Indonesian ISP dataset (~100 customers, a
- * reseller/mitra hierarchy, hundreds of invoices across every billing
- * state, tickets/SLA/work-orders, inventory, vouchers, ...) so the whole
- * product can be demoed to a client from one clean database.
+ * SAFETY: acts only when `SEED_WIPE=true`; any other value logs a skip and exits 0, so it can
+ * stay wired into a deploy pipeline. When armed it TRUNCATEs every table (RESTART IDENTITY
+ * CASCADE) and repopulates, so re-runs yield the same shape (only ids and now-relative dates differ).
+ * Mock-first islands (ADR-0003) self-seed via their repositories and are not seeded here;
+ * this script does seed `app_settings` and its own `odp_records` (FK targets for customers.odpId).
  *
- * SAFETY: this script only acts when `SEED_WIPE=true`. Any other value
- * (including unset) logs a skip message and exits 0 — safe to leave wired
- * into a deploy pipeline permanently. When armed, it WIPES every table
- * (TRUNCATE ... RESTART IDENTITY CASCADE) and repopulates from scratch, so
- * it is idempotent: re-running with SEED_WIPE=true always yields the same
- * shape of data (same counts, same archetypes, same enum coverage) — only
- * generated ids and "now"-relative dates differ.
- *
- * Deliberately NOT seeded here (see the report from the task that added
- * this file for the full rationale): topology/OSP cabling, devices, NOC
- * monitoring/alerts, ODP capacity fixture from `odp.fixtures.ts`, ACS/CPE,
- * coverage areas, announcements, notification templates, audit log,
- * app security (2FA/sessions) and `app_settings`'s own DEFAULTS constant.
- * All of those are "mock-first" self-seeding islands (ADR-0003): each
- * repository's own `ensureSeeded()`/`getOrCreate()` inserts its canned
- * fixture rows, `onConflictDoNothing`, the first time its module is read
- * — so they populate automatically the moment an operator opens that
- * page, with zero risk of this script fighting the app's own idempotent
- * seed. This script DOES seed `app_settings` (a plain singleton upsert)
- * with the demo company identity so the brand is not left as the
- * hard-coded "Jepara Net" placeholder during a client walkthrough, and
- * seeds its OWN `odp_records` rows (Jakarta/Bandung/Surabaya) so
- * `customers.odpId` has real FKs to point at — these coexist peacefully
- * with the app's own 12-row Jepara ODP fixture once `GET /odp` is first
- * hit (different, non-colliding ids), which is a known, intentional
- * side-effect of the mock-first pattern, not a bug in this script.
- *
- * Run:
- *   pnpm db:up && pnpm db:migrate
- *   SEED_WIPE=true DATABASE_URL=postgres://app:app@localhost:5432/app \
- *     pnpm tsx src/infrastructure/database/seed-demo.ts
- *
- * Or, in the built image:
- *   SEED_WIPE=true node dist/infrastructure/database/seed-demo.js
- *
- * Standalone by design (mirrors seed.ts / migrate.ts): imports only the
- * Drizzle schema, argon2, drizzle-orm/node-postgres and pg — no Nest
- * modules, no service/repository imports — so it stays trivially
- * portable if a future Go rewrite needs an equivalent one-off loader.
+ * Run: SEED_WIPE=true DATABASE_URL=... pnpm tsx src/infrastructure/database/seed-demo.ts
+ * Built image: SEED_WIPE=true node dist/infrastructure/database/seed-demo.js
+ * Standalone like seed.ts / migrate.ts: no Nest imports.
  */
 import { randomUUID } from 'node:crypto';
 import * as argon2 from 'argon2';
@@ -82,10 +47,6 @@ import type {
   NewWorkOrder,
 } from './schema';
 
-// ---------------------------------------------------------------------------
-// Setup
-// ---------------------------------------------------------------------------
-
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) {
   // Fail loud, fail fast — never fall back to a default localhost DB for a
@@ -107,12 +68,8 @@ const DEMO_PASSWORD = 'DemoAshnet!2026';
 
 const NOW = new Date();
 
-// Every table this script owns end-to-end, in an order TRUNCATE...CASCADE
-// does not actually need (CASCADE resolves FK order itself) but that is kept
-// dependency-ordered anyway for readability. Static, hard-coded list — never
-// built from user input, so a plain (non-parameterized) SQL string is safe
-// here (the general "no sql.raw with user input" rule is about *dynamic*
-// identifiers, not this kind of fixed constant).
+// CASCADE resolves FK order; the list is kept dependency-ordered for readability. Fixed constant,
+// so a plain SQL string is safe (no user input).
 const ALL_TABLES = [
   'user_sessions',
   'user_security',
@@ -160,10 +117,8 @@ const ALL_TABLES = [
   'app_settings',
 ] as const;
 
-// Standalone sequences (`pgSequence`, not `GENERATED ALWAYS AS IDENTITY`) are
-// never "owned" by a column, so `TRUNCATE ... RESTART IDENTITY` does not
-// reset them — they must be restarted explicitly to keep re-seeds producing
-// the same human-facing numbers (CUST-9001, INV-2026-100, ...).
+// Standalone sequences are not owned by a column, so RESTART IDENTITY skips them; restart them
+// explicitly to keep human-facing numbers (CUST-9001, INV-2026-100) stable across re-seeds.
 const SEQUENCES_TO_RESTART: Array<{ name: string; startWith: number }> = [
   { name: 'customer_no_seq', startWith: 9001 },
   { name: 'invoice_no_seq', startWith: 100 },
@@ -171,10 +126,6 @@ const SEQUENCES_TO_RESTART: Array<{ name: string; startWith: number }> = [
   { name: 'work_order_code_seq', startWith: 9001 },
   { name: 'contract_no_seq', startWith: 1 },
 ];
-
-// ---------------------------------------------------------------------------
-// Small date helpers (all UTC, all deterministic given `NOW`)
-// ---------------------------------------------------------------------------
 
 function ymd(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -206,10 +157,7 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Name / address fixtures (Indonesian, deterministic index-based pick — no
-// randomness, so two runs with SEED_WIPE=true produce the same shape).
-// ---------------------------------------------------------------------------
+// Deterministic index-based picks (no randomness) so re-seeds produce the same shape.
 
 const MALE_NAMES = [
   'Budi',
@@ -319,9 +267,7 @@ const SURABAYA_AREAS: CityArea[] = [
 ];
 
 const CITY_AREA_POOLS = [JAKARTA_AREAS, BANDUNG_AREAS, SURABAYA_AREAS];
-// Roughly the real-world centroid of each city — customer pins scatter a
-// small deterministic offset around these so the topology/coverage map
-// clusters into three recognizable metro areas instead of one blob.
+// City centroids; customer pins jitter around them so the map shows three metro clusters.
 const CITY_CENTROIDS: Array<{ lat: number; lng: number }> = [
   { lat: -6.2615, lng: 106.8106 }, // Jakarta Selatan-ish
   { lat: -6.9147, lng: 107.6098 }, // Bandung
@@ -356,16 +302,10 @@ function ktpFor(i: number): string {
   return `3271${String(1_000_000_000 + i * 9173).padStart(12, '0')}`;
 }
 
-// PPPoE login derived from the account number, mirroring
-// `WorkOrdersService`'s own `pppoeUsername()` so the convention matches
-// exactly what the app itself would have generated.
+// Mirrors `WorkOrdersService.pppoeUsername()`.
 function pppoeUsernameFor(customerNo: string): string {
   return customerNo.toLowerCase().replace('-', '');
 }
-
-// ---------------------------------------------------------------------------
-// Reference / dimension data
-// ---------------------------------------------------------------------------
 
 const RESELLER_SPECS: Array<NewReseller & { id: string }> = [
   {
@@ -452,8 +392,7 @@ const BRANCH_SPECS: NewBranch[] = [
   },
 ];
 
-// 4 sellable tiers + 1 archived legacy tier still referenced by long-tenure
-// customers (plans are archived, never deleted — Pilar re: FK survival).
+// 4 sellable tiers + 1 archived legacy tier still referenced by long-tenure customers.
 const PLAN_SPECS: Array<NewPlan & { id: string }> = [
   {
     id: randomUUID(),
@@ -493,9 +432,7 @@ const PLAN_SPECS: Array<NewPlan & { id: string }> = [
 ];
 const ACTIVE_PLAN_COUNT = 4; // legacy plan (index 4) is only ever assigned to a few long-tenure customers.
 
-// 14 distribution points across the 3 metro areas. Ids/names are deliberately
-// distinct from `odp.fixtures.ts`'s `buildOdpFixture()` (see the file header)
-// so the two seed sources never collide.
+// Ids/names differ from `odp.fixtures.ts` so the two seed sources never collide.
 function buildOdpSpecs(): Array<NewOdpRecord & { id: string }> {
   const areas: Array<{ id: string; name: string; area: string }> = [
     { id: 'odp-jkt-kemang-01', name: 'ODP-JKT-KEMANG-01', area: 'Jakarta Selatan' },
@@ -658,11 +595,6 @@ function buildIpPoolSpecs(routers: Array<{ id: string; city: string }>): NewIpPo
   return specs;
 }
 
-// ---------------------------------------------------------------------------
-// Users — one login per role (product-owner-mandated emails) + a handful of
-// extra customer-portal accounts, all sharing DEMO_PASSWORD.
-// ---------------------------------------------------------------------------
-
 type SeedUserSpec = Omit<NewUser, 'passwordHash'> & { id: string };
 
 function buildUserSpecs(mitraResellerId: string): SeedUserSpec[] {
@@ -695,9 +627,7 @@ function buildUserSpecs(mitraResellerId: string): SeedUserSpec[] {
       role: 'mitra',
       resellerId: mitraResellerId,
     },
-    // Primary + 4 extra portal logins — each linked to a distinct customer
-    // archetype below via CUSTOMER_LOGIN_LINKS so the portal demo shows
-    // clean/due-soon/partial/isolir/sla-credit states across 5 real accounts.
+    // Primary + 4 extra portal logins, each linked via CUSTOMER_LOGIN_LINKS to a distinct billing state.
     {
       id: randomUUID(),
       email: 'customer@astaweda.com',
@@ -735,11 +665,6 @@ function buildUserSpecs(mitraResellerId: string): SeedUserSpec[] {
     },
   ];
 }
-
-// ---------------------------------------------------------------------------
-// Customers — 100 rows across 8 archetypes (fixed-size, fixed-order blocks
-// so the same index always maps to the same archetype across re-seeds).
-// ---------------------------------------------------------------------------
 
 type CustomerArchetype =
   | 'prospek'
@@ -814,9 +739,7 @@ function buildCustomerPlans(
     const plan = i % 23 === 0 ? plans[4] : plans[i % ACTIVE_PLAN_COUNT];
     if (!plan) throw new Error('plan pool misconfigured');
 
-    // Reseller book-of-business: fixed, non-overlapping index ranges (see
-    // file header commentary for why) rather than modulo, so each mitra's
-    // portfolio is a contiguous, explainable slice.
+    // Fixed contiguous index ranges (not modulo) so each mitra portfolio is an explainable slice.
     let resellerId: string | null = null;
     if (i >= 10 && i < 30)
       resellerId = resellers[0]?.id ?? null; // Kemang Jaya (mitra-scoped)
@@ -866,11 +789,6 @@ function buildCustomerPlans(
     };
   });
 }
-
-// ---------------------------------------------------------------------------
-// Billing history per customer — invoices + payments (+ a couple of payment
-// intents), covering every invoice_status and every payment_method.
-// ---------------------------------------------------------------------------
 
 const PPN_RATE = 0.11;
 const LATE_FEE_IDR = 25_000;
@@ -1169,9 +1087,7 @@ function buildBilling(customer: CustomerPlan, customerId: string): BillingResult
   }
 }
 
-// One standalone `adjustment` invoice (plan-upgrade proration), attached to
-// the first `aktif-good` customer — demonstrates `invoice_type = 'adjustment'`
-// without disturbing the regular-period uniqueness invariant.
+// Standalone `adjustment` invoice (proration) on the first aktif-good customer.
 function buildAdjustmentInvoice(
   customerId: string,
   customerName: string,
@@ -1205,10 +1121,6 @@ function buildAdjustmentInvoice(
   };
   return { invoice, payment };
 }
-
-// ---------------------------------------------------------------------------
-// Tickets + timeline events
-// ---------------------------------------------------------------------------
 
 interface SeededCustomer {
   id: string;
@@ -1396,10 +1308,6 @@ const TICKET_SUBJECTS = [
   'Gangguan total, tidak ada koneksi',
 ];
 
-// ---------------------------------------------------------------------------
-// Contracts (PKS) — one per customer that has reached at least `instalasi`.
-// ---------------------------------------------------------------------------
-
 function buildContract(
   customer: SeededCustomer,
   archetype: CustomerArchetype,
@@ -1428,11 +1336,6 @@ function buildContract(
     signedAt,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Work orders — install (instalasi pipeline + historical installs), repair
-// (dispatched from tickets), dismantle (churned customers).
-// ---------------------------------------------------------------------------
 
 interface WorkOrderRow extends NewWorkOrder {
   id: string;
@@ -1551,10 +1454,7 @@ function buildDismantleWorkOrders(berhentiCustomers: SeededCustomer[]): WorkOrde
   });
 }
 
-// ---------------------------------------------------------------------------
-// Leads (sales pipeline) — a couple `won` leads narratively line up with the
-// `instalasi` customers above (same name/address), no hard FK by design.
-// ---------------------------------------------------------------------------
+// Some `won` leads mirror `instalasi` customers by name/address; no FK by design.
 
 function buildLeads(
   resellers: Array<{ id: string }>,
@@ -1603,10 +1503,6 @@ function buildLeads(
   }
   return leads;
 }
-
-// ---------------------------------------------------------------------------
-// Inventory (warehouse + deployed ONUs) + stock-movement ledger.
-// ---------------------------------------------------------------------------
 
 interface InventoryRow extends NewInventoryItem {
   id: string;
@@ -1741,10 +1637,6 @@ function buildStockMovements(
   return movements;
 }
 
-// ---------------------------------------------------------------------------
-// Vouchers (hotspot loket sales).
-// ---------------------------------------------------------------------------
-
 function buildVouchers(
   activeResellers: Array<{ id: string }>,
   upsellCustomers: SeededCustomer[],
@@ -1786,11 +1678,6 @@ function buildVouchers(
   });
 }
 
-// ---------------------------------------------------------------------------
-// PPPoE (per router) — profiles already built; secrets follow the billed
-// customer base, throttled to the isolir profile for suspended accounts.
-// ---------------------------------------------------------------------------
-
 function buildPppSecrets(
   customers: SeededCustomer[],
   routers: Array<{ id: string; city: string }>,
@@ -1831,10 +1718,6 @@ function buildPppSecrets(
       };
     });
 }
-
-// ---------------------------------------------------------------------------
-// Reseller ledger + payouts.
-// ---------------------------------------------------------------------------
 
 function buildResellerLedgerAndPayouts(
   resellerSpecs: Array<{ id: string; commissionPct: number; status: 'active' | 'inactive' }>,
@@ -1939,12 +1822,7 @@ function buildResellerLedgerAndPayouts(
   return { ledger, payouts, finalBalances };
 }
 
-// ---------------------------------------------------------------------------
-// Customer archetype -> lifecycle status/hold-reason + a standalone
-// outstanding-balance projection (pure function of the archetype + plan
-// price, so it can be computed before the customer row — and therefore its
-// real id — exists).
-// ---------------------------------------------------------------------------
+// Archetype -> status/hold-reason and outstanding balance; pure so it runs before the customer id exists.
 
 function statusFor(archetype: CustomerArchetype): {
   status: NewCustomer['status'];
@@ -1982,10 +1860,6 @@ function projectedOutstanding(archetype: CustomerArchetype, planPrice: number): 
   return buildBilling(placeholderPlan, 'placeholder').outstanding;
 }
 
-// ---------------------------------------------------------------------------
-// main()
-// ---------------------------------------------------------------------------
-
 async function main(): Promise<void> {
   if (process.env.SEED_WIPE !== 'true') {
     console.log('SEED_WIPE is not "true" — skipping the demo seed (safe no-op).');
@@ -1998,13 +1872,11 @@ async function main(): Promise<void> {
   try {
     console.log('SEED_WIPE=true — wiping and repopulating the demo dataset...');
 
-    // --- Wipe ------------------------------------------------------------
     await pool.query(`TRUNCATE TABLE ${ALL_TABLES.join(', ')} RESTART IDENTITY CASCADE`);
     for (const seq of SEQUENCES_TO_RESTART) {
       await pool.query(`ALTER SEQUENCE ${seq.name} RESTART WITH ${seq.startWith}`);
     }
 
-    // --- Dimension tables --------------------------------------------------
     const resellerRows = await db.insert(schema.resellers).values(RESELLER_SPECS).returning();
     await db.insert(schema.branches).values(BRANCH_SPECS);
     const planRows = await db.insert(schema.plans).values(PLAN_SPECS).returning();
@@ -2017,7 +1889,6 @@ async function main(): Promise<void> {
     await db.insert(schema.users).values(userSpecs.map((u) => ({ ...u, passwordHash })));
     const userIdByEmail = new Map(userSpecs.map((u) => [u.email, u.id]));
 
-    // --- Customers -----------------------------------------------------
     const customerPlans = buildCustomerPlans(planRows, resellerRows, odpRows);
     const planNameById = new Map(planRows.map((p) => [p.id, p.name]));
 
@@ -2114,10 +1985,7 @@ async function main(): Promise<void> {
     }
     const customerNoByCustomerId = new Map(insertedCustomers.map((c) => [c.id, c.customerNo]));
 
-    // --- Network: routers + PPPoE profiles/secrets + Mikrotik resources ---
-    // Built ONCE into a local variable — every id below (router, profile)
-    // comes from these same spec objects, never a fresh call, so nothing
-    // can drift out of sync with what was actually inserted.
+    // Built once: every router/profile id comes from these same specs, so nothing drifts from what was inserted.
     const routerSpecs = buildRouterSpecs();
     await db.insert(schema.routers).values(routerSpecs.map(({ city, ...r }) => r));
     const routersForLookup = routerSpecs.map((r) => ({ id: r.id, city: r.city }));
@@ -2152,7 +2020,6 @@ async function main(): Promise<void> {
         .where(eq(schema.routers.id, router.id));
     }
 
-    // --- Billing: invoices + payments + payment intents ------------------
     const allInvoices: InvoiceRow[] = [];
     const allPayments: PaymentRow[] = [];
     const invoicesByCustomerId = new Map<string, InvoiceRow[]>();
@@ -2221,13 +2088,11 @@ async function main(): Promise<void> {
     });
     if (intentSpecs.length > 0) await db.insert(schema.paymentIntents).values(intentSpecs);
 
-    // --- Contracts (PKS) ---------------------------------------------------
     const contractSpecs = seededCustomers
       .filter((c) => c.archetype !== 'prospek')
       .map((c) => buildContract(c, c.archetype, c.planName));
     await db.insert(schema.contracts).values(contractSpecs);
 
-    // --- Tickets + timeline events ------------------------------------
     const slaCreditCustomers = seededCustomers.filter((c) => c.archetype === 'aktif-slacredit');
     const generalTicketPool = seededCustomers.filter((c) => c.index >= 5);
     const ticketBuild = buildTickets(slaCreditCustomers, generalTicketPool);
@@ -2295,7 +2160,6 @@ async function main(): Promise<void> {
     });
     await db.insert(schema.slaCredits).values(slaCreditSpecs);
 
-    // --- Work orders -------------------------------------------------------
     const instalasiCustomers = seededCustomers.filter((c) => c.archetype === 'instalasi');
     const historicalInstallCustomers = seededCustomers
       .filter((c) => c.archetype === 'aktif-good')
@@ -2318,10 +2182,8 @@ async function main(): Promise<void> {
     for (const wo of dismantleWorkOrders)
       if (wo.customerId) dismantleWoByCustomer.set(wo.customerId, wo.id);
 
-    // --- Leads (sales pipeline) --------------------------------------------
     await db.insert(schema.leads).values(buildLeads(resellerRows, instalasiCustomers));
 
-    // --- Inventory + stock movements ---------------------------------------
     const { items: inventoryItems, churnedItemCustomerId } = buildInventory(gponCustomers);
     await db.insert(schema.inventoryItems).values(inventoryItems);
     const stockMovements = buildStockMovements(
@@ -2334,12 +2196,10 @@ async function main(): Promise<void> {
       await db.insert(schema.stockMovements).values(batch);
     }
 
-    // --- Vouchers ------------------------------------------------------
     const activeResellers = resellerRows.filter((r) => r.status === 'active');
     const upsellCustomers = seededCustomers.filter((c) => c.archetype === 'aktif-good');
     await db.insert(schema.vouchers).values(buildVouchers(activeResellers, upsellCustomers));
 
-    // --- Reseller ledger + payouts ------------------------------------------
     const invoicesByReseller = new Map<string, InvoiceRow[]>();
     for (const c of seededCustomers) {
       if (!c.resellerId) continue;
@@ -2357,7 +2217,6 @@ async function main(): Promise<void> {
       await db.update(schema.resellers).set({ balance }).where(eq(schema.resellers.id, resellerId));
     }
 
-    // --- App settings (demo company identity, singleton) --------------------
     await db.insert(schema.appSettings).values({
       companyName: 'Astaweda Net',
       companyAddress: 'Jl. Kemang Raya No. 88, Jakarta Selatan',
@@ -2371,7 +2230,6 @@ async function main(): Promise<void> {
       taxPpnRate: PPN_RATE,
     });
 
-    // --- Summary -------------------------------------------------------
     console.log('\nDemo seed complete. Row counts:');
     for (const table of ALL_TABLES) {
       const { rows } = await pool.query<{ n: string }>(`SELECT count(*)::int AS n FROM ${table}`);

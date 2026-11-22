@@ -14,10 +14,10 @@ import {
 import { SlaCreditsRepository } from '../sla-credits/sla-credits.repository';
 import type { InvoiceListResponse, InvoiceSummary } from './dto/invoice-response.dto';
 import type { PaymentReconciliation } from './dto/payment-reconciliation.dto';
+import { invoiceTotal } from './invoice-total';
 
-// The transaction handle drizzle hands its callback — used to type the
-// private write helper without an `any` (mirrors VouchersRepository).
-type DbTx = Parameters<Parameters<Db['transaction']>[0]>[0];
+// Drizzle transaction handle, typed without `any` (mirrors VouchersRepository).
+export type DbTx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 export interface InvoiceListFilter {
   status?: Invoice['status'];
@@ -47,9 +47,7 @@ const INVOICE_SORT_WHITELIST = {
   lastRemindedAt: invoices.lastRemindedAt,
 } satisfies Record<string, (typeof invoices)[keyof typeof invoices]>;
 
-// Columns the frontend is allowed to sort payments on (camelCase key → Drizzle column).
-// Extend this map as new sortable columns are added; never pass arbitrary
-// column references — the whitelist is the security boundary.
+// Sortable payment columns (camelCase key → column); the whitelist is the security boundary.
 const PAYMENT_SORT_WHITELIST = {
   paidAt: payments.paidAt,
   invoiceNo: payments.invoiceNo,
@@ -57,29 +55,37 @@ const PAYMENT_SORT_WHITELIST = {
   customerName: payments.customerName,
 } satisfies Record<string, (typeof payments)[keyof typeof payments]>;
 
-// Statuses that still owe money — used for the outstanding/aging total.
-// 'partial' (P3.A.4) is unpaid too: a part-paid invoice still counts as
-// outstanding and still gets dunned until it reaches 'paid'.
+// Statuses that still owe money (outstanding/aging); 'partial' stays unpaid until 'paid'.
 const UNPAID_STATUSES = ['pending', 'partial', 'overdue'] as const;
 
-// Statuses eligible to flip to 'overdue' once past due date, and eligible
-// for the "due soon" (not-yet-overdue) dunning cohort. Excludes 'overdue'
-// itself — those invoices already went through the transition.
+/** Single SQL definition of the invoice total; keep in sync with `invoiceTotal` (TS). */
+const invoiceTotalSql = sql`(${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount})`;
+
+/** Single SQL definition of the balance still owed on an invoice (total minus paid). */
+const invoiceBalanceDueSql = sql`(${invoiceTotalSql} - ${invoices.paidAmount})`;
+
+// Eligible to flip to 'overdue' and for the due-soon dunning cohort; excludes 'overdue' itself.
 const NOT_YET_OVERDUE_STATUSES = ['pending', 'partial'] as const;
 
+/** Balance due across a customer's unpaid invoices; shared by the plain and in-transaction callers. */
+async function sumUnpaid(executor: Db | DbTx, customerId: string): Promise<number> {
+  const [row] = await executor
+    .select({ total: sql<string>`coalesce(sum(${invoiceBalanceDueSql}), 0)` })
+    .from(invoices)
+    .where(
+      and(eq(invoices.customerId, customerId), inArray(invoices.status, [...UNPAID_STATUSES])),
+    );
+  return Number(row?.total ?? 0);
+}
+
 /**
- * The only place that talks to the `invoices` and `payments` tables.
- * Returns domain rows — never Drizzle tuples or raw SQL (Pilar 3).
+ * Sole gate to `invoices`/`payments`; returns domain rows, never Drizzle tuples (Pilar 3).
  */
 @Injectable()
 export class InvoicesRepository {
   constructor(
     private readonly drizzle: DrizzleService,
-    // M2 dedup follow-up: createBilled delegates the SLA-credit 'applied'
-    // write to SlaCreditsRepository's own tx-accepting
-    // markAppliedWithInvoice (passing this transaction's `tx` handle) so
-    // that SET shape has exactly one owner — mirrors InvoicesService's
-    // identical injection for the read side (resolveSlaDiscount).
+    // createBilled delegates the SLA-credit 'applied' write to SlaCreditsRepository (one owner of that SET shape).
     private readonly slaCredits: SlaCreditsRepository,
   ) {}
 
@@ -118,19 +124,14 @@ export class InvoicesRepository {
 
     const [filteredCount] = await this.db.select({ value: count() }).from(invoices).where(where);
 
-    // Full-set summary — computed over ALL invoices, ignoring status/q/paging.
-    // balance due per invoice = amount + late_fee + tax_amount - discount_amount
-    // - paid_amount (P3.A.4) — a 'partial' invoice only contributes what's
-    // actually still owed, never its full gross total (no double-count with
-    // what was already paid or discounted via an SLA credit).
+    // Full-set summary over ALL invoices (ignores status/q/paging).
     const [summaryRow] = await this.db
       .select({
         total: count(),
-        unpaidCount: sql<number>`count(*) filter (where ${invoices.status} in ('pending', 'partial', 'overdue'))`,
-        outstanding: sql<string>`coalesce(sum(case when ${invoices.status} in ('pending', 'partial', 'overdue') then ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount} else 0 end), 0)`,
-        overdue: sql<string>`coalesce(sum(case when ${invoices.status} = 'overdue' then ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount} else 0 end), 0)`,
-        // Per-status counts (FE status filter tabs, ADR-0011 parity) — a
-        // single grouped-filter aggregate avoids 5 separate COUNT queries.
+        unpaidCount: sql<number>`count(*) filter (where ${inArray(invoices.status, [...UNPAID_STATUSES])})`,
+        outstanding: sql<string>`coalesce(sum(case when ${inArray(invoices.status, [...UNPAID_STATUSES])} then ${invoiceBalanceDueSql} else 0 end), 0)`,
+        overdue: sql<string>`coalesce(sum(case when ${invoices.status} = 'overdue' then ${invoiceBalanceDueSql} else 0 end), 0)`,
+        // Per-status counts (ADR-0011 parity) in one grouped aggregate instead of 5 COUNT queries.
         paidStatus: sql<number>`count(*) filter (where ${invoices.status} = 'paid')`,
         partialStatus: sql<number>`count(*) filter (where ${invoices.status} = 'partial')`,
         pendingStatus: sql<number>`count(*) filter (where ${invoices.status} = 'pending')`,
@@ -179,29 +180,15 @@ export class InvoicesRepository {
   }
 
   /**
-   * Create a billing-run invoice and, in the SAME transaction (M2, mirrors
-   * `recordPayment`'s C2 pattern / `SlaCreditsRepository.applyWithInvoiceCredit`):
-   * absorb the given pending SLA credits into it, and refresh the customer's
-   * `outstanding`. Previously `InvoicesService.run()`/`generateFirstInvoice()`
-   * did this as three separate round-trips — `create`, then
-   * `SlaCreditsRepository.markAppliedWithInvoice`, then a public
-   * `sumUnpaidByCustomer` + `CustomersRepository.setBilling` — so a crash
-   * between them left a committed invoice with un-absorbed SLA credits (the
-   * customer overbilled) or a stale `outstanding`, and `existsForPeriod`
-   * would then skip that customer on every retry (the invoice already
-   * "exists" for the period, so the next run never revisits it).
+   * Creates a billing-run invoice and, in the SAME transaction (M2, like
+   * `recordPayment`), absorbs the given pending SLA credits and refreshes the
+   * customer's `outstanding`, so a crash cannot leave overbilling, a stale
+   * `outstanding`, or an invoice that `existsForPeriod` then skips on every retry.
    *
-   * The credit absorption itself is NOT re-implemented here (dedup
-   * follow-up, PR review): it calls back into the injected
-   * `SlaCreditsRepository.markAppliedWithInvoice`, passing this
-   * transaction's `tx` handle, so the 'applied' SET shape keeps exactly one
-   * owner. Only the `customers.outstanding` refresh is the deliberate "one
-   * repository per table" exception `recordPayment` /
-   * `SlaCreditsRepository.applyWithInvoiceCredit` document — reached into
-   * directly so it stays inside the new invoice's transaction. `creditIds`
-   * is empty for most customers (no pending SLA credit) — the credit
-   * UPDATE is a no-op then (see `markAppliedWithInvoice`'s own empty-array
-   * guard).
+   * Credit absorption is delegated to `SlaCreditsRepository.markAppliedWithInvoice`
+   * (given this `tx`) so the 'applied' SET shape has one owner. Writing
+   * `customers.outstanding` is the money-path exception documented on
+   * `recordPayment`. `creditIds` is usually empty, which makes the credit UPDATE a no-op.
    */
   async createBilled(input: NewInvoice, creditIds: string[]): Promise<Invoice> {
     return this.db.transaction(async (tx) => {
@@ -212,25 +199,16 @@ export class InvoicesRepository {
 
       await this.slaCredits.markAppliedWithInvoice(creditIds, invoice.id, tx);
 
-      // Reuses the same helper `recordPayment` uses — see its doc. The
-      // reactivate-if-isolir branch it also computes is a no-op here in
-      // practice (a freshly-billed customer only ever ADDS to `outstanding`,
-      // see the original `refreshOutstanding`'s doc in the service), but
-      // reusing the one audited implementation beats a parallel copy.
+      // Same helper as `recordPayment`; its reactivate branch is a no-op here (a new invoice only adds to `outstanding`).
       await this.refreshOutstandingTx(tx, invoice.customerId);
       return invoice;
     });
   }
 
-  // True if the customer already has a REGULAR invoice for this period —
-  // the partial unique index (`WHERE type = 'regular'`) guarantees it, this
-  // lets a billing run skip cleanly. MUST-FIX #2 (PR #121 money review):
-  // this MUST filter on type — a proration 'adjustment' invoice raised on
-  // the 1st shares that same-day periodStart with the month's regular
-  // invoice (`currentPeriod()` in InvoicesService), so without the type
-  // filter `run()` / `generateFirstInvoice()` would see "already invoiced
-  // this period" from the adjustment alone and skip billing the customer
-  // for the month entirely (free month / lost revenue).
+  // True if the customer already has a REGULAR invoice for this period (backed by the
+  // partial unique index `WHERE type = 'regular'`). Must filter on type: a proration
+  // 'adjustment' invoice on the 1st shares the regular invoice's periodStart and would
+  // make the billing run skip the month (lost revenue).
   async existsForPeriod(customerId: string, periodStart: string): Promise<boolean> {
     const [row] = await this.db
       .select({ id: invoices.id })
@@ -246,11 +224,7 @@ export class InvoicesRepository {
     return Boolean(row);
   }
 
-  /**
-   * All-or-nothing settlement: flips straight to 'paid' regardless of what
-   * was already paid. Superseded by `applyPayment` for the loket/partial-pay
-   * flow (P3.A.4) — kept for callers that only ever settle in full.
-   */
+  /** All-or-nothing settlement straight to 'paid'; `applyPayment` supersedes it for partial-pay flows. */
   async markPaid(id: string): Promise<Invoice> {
     const [row] = await this.db
       .update(invoices)
@@ -264,13 +238,9 @@ export class InvoicesRepository {
   }
 
   /**
-   * Record a (partial or full) payment against an invoice: increments
-   * `paid_amount` by `amount` and derives the new status from a single
-   * atomic UPDATE — the CASE expressions read the pre-update row (standard
-   * Postgres SET semantics), so a concurrent payment can never under- or
-   * over-count. Flips to 'paid' (and stamps `paid_at`) only once the new
-   * paid_amount reaches the invoice total (amount + late_fee + tax_amount -
-   * discount_amount); otherwise the invoice is 'partial'.
+   * Records a (partial or full) payment in one atomic UPDATE: the CASE expressions
+   * read the pre-update row, so concurrent payments cannot under/over-count. Flips
+   * to 'paid' (stamping `paid_at`) once paid_amount reaches the invoice total, else 'partial'.
    */
   async applyPayment(id: string, amount: number): Promise<Invoice> {
     const [row] = await this.db
@@ -279,30 +249,24 @@ export class InvoicesRepository {
         paidAmount: sql`${invoices.paidAmount} + ${amount}`,
         status: sql`(case
           when ${invoices.paidAmount} + ${amount}
-            >= ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount}
+            >= ${invoiceTotalSql}
           then 'paid' else 'partial'
         end)::invoice_status`,
         paidAt: sql`(case
           when ${invoices.paidAmount} + ${amount}
-            >= ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount}
+            >= ${invoiceTotalSql}
           then now() else ${invoices.paidAt}
         end)`,
         updatedAt: sql`now()`,
       })
-      // Overpay guard lives in the WHERE (not just the service snapshot) so two
-      // concurrent payments cannot both pass a stale balance check and overshoot
-      // paid_amount. The predicate re-reads the CURRENT row under the row lock.
+      // Overpay guard lives in the WHERE so concurrent payments cannot both pass a stale
+      // balance check; the predicate re-reads the CURRENT row under the row lock.
       .where(
-        and(
-          eq(invoices.id, id),
-          sql`${invoices.paidAmount} + ${amount} <= ${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount}`,
-        ),
+        and(eq(invoices.id, id), sql`${invoices.paidAmount} + ${amount} <= ${invoiceTotalSql}`),
       )
       .returning();
     if (!row) {
-      // The invoice exists (service checked) but the balance no longer admits
-      // this amount — a concurrent payment moved it. Surface as a conflict so
-      // the caller re-reads rather than silently over-crediting.
+      // Balance no longer admits this amount (concurrent payment); conflict so the caller re-reads.
       const current = await this.findById(id);
       if (!current) throw new NotFoundException('invoice not found');
       throw new ConflictException('Saldo tagihan sudah berubah — muat ulang lalu coba lagi');
@@ -311,42 +275,27 @@ export class InvoicesRepository {
   }
 
   /**
-   * Record a (partial or full) payment against an invoice, atomically (C2,
-   * mirrors `VouchersRepository.settle` / `ResellersRepository.disbursePayout`):
-   * the ledger row, the invoice's `paid_amount`/status flip, and the paying
-   * customer's `outstanding` refresh either all land together or none do.
-   * Previously these were three separate round-trips through `applyPayment` +
-   * `createPayment` + a later `sumUnpaidByCustomer`/`setBilling` call — a
-   * crash after the status flip committed left a `paid` invoice with no
-   * payments row: money invisible to cash-drawer reconciliation and never
-   * retried.
+   * Records a (partial or full) payment atomically (C2, mirrors
+   * `VouchersRepository.settle`): the ledger row, the invoice `paid_amount`/status
+   * flip and the customer `outstanding` refresh all land together or none do.
    *
-   * Steps, all inside `tx`:
-   *  1. `SELECT ... FOR UPDATE` locks the invoice row — a concurrent second
-   *     call on the same id blocks until this transaction commits, then
-   *     re-reads a status/balance that has since moved.
-   *  2. Idempotency: an already-`paid` invoice is a no-op — no new payment
-   *     row, no re-application (mirrors `settle()`'s used-voucher guard; the
-   *     service already short-circuits on this too, so this is defense in
-   *     depth against a race between the service's read and this lock).
-   *  3. Re-validates `input.amount` against the balance due on the LOCKED
-   *     row (not the caller's possibly-stale snapshot) — throws the same
-   *     `ConflictException` the old `applyPayment` WHERE guard threw on a
-   *     genuine race.
-   *  4. Inserts the payment ledger row.
-   *  5. Updates `paid_amount`/status/`paid_at` on the invoice.
-   *  6. Recomputes and persists `customers.outstanding` from the exact same
-   *     expression `sumUnpaidByCustomer` uses — never a hand-computed delta
-   *     (see `VouchersRepository.allocateToInvoices` for why that matters).
+   * Inside `tx`:
+   *  1. `SELECT ... FOR UPDATE` locks the invoice; a concurrent call on the same id
+   *     blocks, then re-reads the moved status/balance.
+   *  2. An already-`paid` invoice is a no-op (idempotent; defense in depth against
+   *     a race with the service's own short-circuit).
+   *  3. `input.amount` is re-validated against the balance due on the LOCKED row,
+   *     not the caller's possibly-stale snapshot.
+   *  4. Insert the payment row; 5. update `paid_amount`/status/`paid_at`.
+   *  6. Refresh `customers.outstanding` from the same expression as
+   *     `sumUnpaidByCustomer`, never a hand-computed delta (see
+   *     `VouchersRepository.allocateToInvoices`).
    *
-   * This is the same deliberate "one repository per table" exception
-   * `VouchersRepository.settle` documents: it reaches into `customers`
-   * directly so the outstanding refresh shares this transaction. Whether the
-   * payment cleared an isolir customer's debt is signaled back via
-   * `reactivated` — flipping `customers.status` back to `aktif` is done here
-   * (same table, same transaction), but re-enabling the PPPoE secret (a
-   * different module's repository) and posting the reseller commission stay
-   * in the service, outside this transaction, unchanged from before.
+   * Writing `customers` here is the sanctioned money-path exception to "one
+   * repository per table" (as in `VouchersRepository.settle`). `reactivated`
+   * reports whether an isolir customer was flipped back to `aktif`; re-enabling
+   * the PPPoE secret and posting the reseller commission stay in the service,
+   * outside this transaction.
    */
   async recordPayment(
     invoiceId: string,
@@ -355,12 +304,12 @@ export class InvoicesRepository {
       method: Payment['method'];
       tenderedAmount: number | null;
       changeAmount: number | null;
-      // Cashier's manual-entry justification (FIN-D) — null for a
-      // gateway-settled payment (`PaymentIntentsService.settleIntent` never
-      // passes one). Purely additive metadata: never read by the
-      // idempotency/amount checks above.
+      // Cashier's manual-entry justification (FIN-D); null for gateway-settled payments. Metadata only.
       note: string | null;
     },
+    // Runs last inside the transaction so a caller's own write commits or
+    // rolls back together with the payment (e.g. flipping a payment intent).
+    withinTx?: (tx: DbTx) => Promise<void>,
   ): Promise<{ invoice: Invoice; reactivated: boolean }> {
     return this.db.transaction(async (tx) => {
       const [invoice] = await tx
@@ -376,11 +325,10 @@ export class InvoicesRepository {
         return { invoice, reactivated: false }; // idempotent — see method doc.
       }
 
-      const total = invoice.amount + invoice.lateFee + invoice.taxAmount - invoice.discountAmount;
+      const total = invoiceTotal(invoice);
       const balanceDue = total - invoice.paidAmount;
       if (input.amount > balanceDue) {
-        // The balance moved under us since the caller's snapshot — surface as
-        // a conflict so it re-reads rather than silently over-crediting.
+        // Balance moved since the caller's snapshot; conflict so it re-reads.
         throw new ConflictException('Saldo tagihan sudah berubah — muat ulang lalu coba lagi');
       }
 
@@ -413,32 +361,20 @@ export class InvoicesRepository {
       }
 
       const reactivated = await this.refreshOutstandingTx(tx, invoice.customerId);
+      await withinTx?.(tx);
       return { invoice: updated, reactivated };
     });
   }
 
   /**
-   * Recompute `customers.outstanding` from `sumUnpaidByCustomer`'s exact
-   * expression and persist it, inside the caller's transaction — shared by
-   * `recordPayment` (C2) and `createBilled` (M2), and available to any
-   * other write that must keep `outstanding` in sync within the same
-   * transaction. Reactivates an isolir customer whose balance just reached
-   * zero — mirrors `InvoicesService.refreshCustomerBilling`'s old gate
-   * (strictly on the balance, never on "no more overdue invoices"). In
-   * `createBilled` this reactivation branch is a practical no-op: a
-   * freshly-created invoice only ever ADDS to the balance, so it can't be
-   * the write that brings an isolir customer's outstanding down to zero.
+   * Recomputes and persists `customers.outstanding` inside the caller's transaction
+   * (shared by `recordPayment` and `createBilled`), using `sumUnpaidByCustomer`'s
+   * expression. Reactivates an isolir customer whose balance reaches exactly zero
+   * (gated on balance, not on "no overdue invoices"); a no-op in `createBilled`,
+   * which only adds to the balance.
    */
   private async refreshOutstandingTx(tx: DbTx, customerId: string): Promise<boolean> {
-    const [sumRow] = await tx
-      .select({
-        total: sql<string>`coalesce(sum(${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount}), 0)`,
-      })
-      .from(invoices)
-      .where(
-        and(eq(invoices.customerId, customerId), inArray(invoices.status, [...UNPAID_STATUSES])),
-      );
-    const outstanding = Number(sumRow?.total ?? 0);
+    const outstanding = await sumUnpaid(tx, customerId);
 
     const [customerRow] = await tx
       .select({ status: customers.status })
@@ -461,37 +397,21 @@ export class InvoicesRepository {
   }
 
   /**
-   * Sum of what's still owed across every unpaid invoice: balance due =
-   * amount + lateFee + taxAmount - discountAmount - paidAmount (P3.A.4). A
-   * 'partial' invoice only contributes its remaining slice, never its full
-   * gross total, so this never double-counts a payment already recorded or
-   * an SLA credit already applied as a discount line.
+   * Balance due across unpaid invoices; a 'partial' invoice contributes only its remainder.
    */
   async sumUnpaidByCustomer(customerId: string): Promise<number> {
-    const [row] = await this.db
-      .select({
-        total: sql<string>`coalesce(sum(${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount}), 0)`,
-      })
-      .from(invoices)
-      .where(
-        and(eq(invoices.customerId, customerId), inArray(invoices.status, [...UNPAID_STATUSES])),
-      );
-    return Number(row?.total ?? 0);
+    return sumUnpaid(this.db, customerId);
   }
 
-  // Batched sibling of sumUnpaidByCustomer — exact same balance-due
-  // expression and UNPAID_STATUSES filter, grouped by customer, used by the
-  // billing cron (R6-DB-2) so it stops issuing one sum query per customer
-  // id in a loop. A customer with no unpaid invoices is simply absent from
-  // the map (never a zero-valued key) — callers must treat a missing key
-  // as 0, exactly like sumUnpaidByCustomer's own coalesce(...,0) does for a
-  // single id. Empty input returns an empty Map WITHOUT querying.
+  // Batched sumUnpaidByCustomer for the billing cron (R6-DB-2). Customers with no
+  // unpaid invoices are absent from the map — treat a missing key as 0. Empty input
+  // returns an empty Map without querying.
   async sumUnpaidByCustomers(customerIds: string[]): Promise<Map<string, number>> {
     if (customerIds.length === 0) return new Map();
     const rows = await this.db
       .select({
         customerId: invoices.customerId,
-        total: sql<string>`coalesce(sum(${invoices.amount} + ${invoices.lateFee} + ${invoices.taxAmount} - ${invoices.discountAmount} - ${invoices.paidAmount}), 0)`,
+        total: sql<string>`coalesce(sum(${invoiceBalanceDueSql}), 0)`,
       })
       .from(invoices)
       .where(
@@ -504,11 +424,8 @@ export class InvoicesRepository {
     return new Map(rows.map((row) => [row.customerId, Number(row.total)]));
   }
 
-  // Batched sibling of existsForPeriod — same type='regular' filter (see
-  // that method's doc for why the type filter matters), used by
-  // schedulerPreview (R6-DB-5) so it stops issuing one exists query per
-  // billable customer in a loop. Empty input returns an empty Set WITHOUT
-  // querying.
+  // Batched existsForPeriod (same type='regular' filter) for schedulerPreview (R6-DB-5).
+  // Empty input returns an empty Set without querying.
   async existingRegularForPeriod(customerIds: string[], periodStart: string): Promise<Set<string>> {
     if (customerIds.length === 0) return new Set();
     const rows = await this.db
@@ -533,18 +450,9 @@ export class InvoicesRepository {
   }
 
   // --- Billing automation ---------------------------------------------
-  //
-  // TIME-1: every `current_date`/`now()` in this section is a Postgres-side
-  // SQL literal, evaluated against the connection's SESSION timezone — see
-  // `customerIdsIsolirEligible`'s doc comment for why that's a distinct fix
-  // from the Node-process `TZ` env var, and `drizzle.service.ts` for where
-  // the session timezone is actually pinned to Asia/Jakarta.
+  // TIME-1: `current_date`/`now()` here run in the DB session timezone (Asia/Jakarta); see `customerIdsIsolirEligible`.
 
-  /**
-   * Flip pending/partial invoices past their due date to overdue + apply
-   * the late fee. A 'partial' invoice past due is still unpaid, so it
-   * transitions too (paid_amount is untouched — only status/lateFee change).
-   */
+  /** Flips pending/partial invoices past due to overdue and applies the late fee; `paid_amount` is untouched. */
   async markOverduePastDue(lateFee: number): Promise<number> {
     const result = await this.db
       .update(invoices)
@@ -574,8 +482,7 @@ export class InvoicesRepository {
       .where(
         and(
           inArray(invoices.status, [...NOT_YET_OVERDUE_STATUSES]),
-          // Cast the bound param: `date + unknown` is ambiguous in Postgres, so
-          // an untyped $n fails with "operator is not unique". `date + int` adds days.
+          // Cast the bound param: `date + unknown` is ambiguous in Postgres ("operator is not unique").
           sql`${invoices.dueDate} <= current_date + ${days}::int`,
         ),
       );
@@ -597,8 +504,7 @@ export class InvoicesRepository {
       .where(
         and(
           inArray(invoices.status, [...NOT_YET_OVERDUE_STATUSES]),
-          // Cast the bound param: `date + unknown` is ambiguous in Postgres, so
-          // an untyped $n fails with "operator is not unique". `date + int` adds days.
+          // Cast: see countPendingDueSoon.
           sql`${invoices.dueDate} <= current_date + ${days}::int`,
         ),
       );
@@ -624,26 +530,13 @@ export class InvoicesRepository {
   }
 
   /**
-   * Distinct customers whose oldest overdue invoice is past due by MORE
-   * than `graceDays` (D2): dueDate + graceDays < today. Matching on any
-   * overdue row is equivalent to checking only the customer's oldest one —
-   * a later invoice's dueDate is >= the oldest invoice's dueDate, so if the
-   * later one already clears `dueDate + graceDays < today`, the oldest
-   * (smaller dueDate) clears it too. This intentionally does not change
-   * `markOverduePastDue`/`customerIdsWithOverdue` (dunning still fires as
-   * soon as an invoice is overdue) — only isolir selection respects grace.
-   * TIME-1 (fixed): `current_date`/`now()` here (and in the rest of this
-   * file's overdue/reminder/isolir queries) are evaluated against the
-   * connection's Postgres SESSION timezone, which `DrizzleService` now
-   * pins explicitly to Asia/Jakarta at connect time (`options: '-c
-   * timezone=...'`) — see that file's doc comment. Before that fix,
-   * `current_date` silently fell back to the DB server's own default
-   * timezone (typically UTC on a managed Postgres), which is a *different*
-   * bug from the Node-process TZ issue: setting `TZ=Asia/Jakarta` on the
-   * container does NOT change what a remote Postgres server considers
-   * `current_date` to be — that's governed purely by the session's
-   * TimeZone GUC. An int-spec asserting the session timezone lives in
-   * `drizzle.service.timezone.int-spec.ts`.
+   * Distinct customers with an overdue invoice past due by MORE than `graceDays`
+   * (D2): dueDate + graceDays < today. Any overdue row suffices — whenever a later
+   * invoice clears the bar the oldest does too. Only isolir selection respects
+   * grace; dunning still fires as soon as an invoice is overdue.
+   * TIME-1: `current_date` uses the Postgres SESSION timezone (pinned to
+   * Asia/Jakarta in `DrizzleService`); the container `TZ` env does not affect a
+   * remote server.
    */
   async customerIdsIsolirEligible(graceDays: number): Promise<string[]> {
     const rows = await this.db
@@ -652,8 +545,7 @@ export class InvoicesRepository {
       .where(
         and(
           eq(invoices.status, 'overdue'),
-          // Cast the bound param: `date + unknown` is ambiguous in Postgres,
-          // same reasoning as the other `+ ${days}::int` casts in this file.
+          // Cast: see countPendingDueSoon.
           sql`${invoices.dueDate} + ${graceDays}::int < current_date`,
         ),
       );
@@ -668,16 +560,14 @@ export class InvoicesRepository {
       .where(
         and(
           inArray(invoices.status, [...NOT_YET_OVERDUE_STATUSES]),
-          // Cast the bound param: `date + unknown` is ambiguous in Postgres, so
-          // an untyped $n fails with "operator is not unique". `date + int` adds days.
+          // Cast: see countPendingDueSoon.
           sql`${invoices.dueDate} <= current_date + ${days}::int`,
         ),
       );
     return rows.map((r) => r.customerId);
   }
 
-  // Paid invoices settled within a YYYY-MM period (cash-basis) — the source
-  // of the accounting journal. Ordered by settlement time.
+  // Paid invoices settled in a YYYY-MM period (cash-basis), by settlement time.
   async findPaidInPeriod(period: string): Promise<Invoice[]> {
     return this.db
       .select()
@@ -690,11 +580,7 @@ export class InvoicesRepository {
 
   // --- Analytics support ----------------------------------------------
 
-  /**
-   * Every unpaid invoice (pending + overdue), oldest due date first. The
-   * analytics rollup derives total receivables, the overdue slice, and the
-   * aging buckets from this single read.
-   */
+  /** Unpaid invoices, oldest due date first; feeds the analytics receivables/aging rollup. */
   async listUnpaid(): Promise<Invoice[]> {
     return this.db
       .select()
@@ -717,10 +603,8 @@ export class InvoicesRepository {
   }
 
   /**
-   * The loket/cash-drawer closing report for one calendar day (UTC,
-   * P3.A.4): per-method count + amount totals, plus the cash-only
-   * tendered/change roll-up. A method with no payments that day is simply
-   * absent from `byMethod` (never a zero row).
+   * Cash-drawer closing report for one UTC day (P3.A.4). A method with no
+   * payments is absent from `byMethod`.
    */
   async reconciliation(date: string): Promise<PaymentReconciliation> {
     const rows = await this.db

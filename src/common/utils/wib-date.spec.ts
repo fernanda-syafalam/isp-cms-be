@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { daysBetweenDates, wibDateString } from './wib-date';
+import { daysBetweenDates, wibDateString, wibMonthStart } from './wib-date';
+
+describe('wibMonthStart', () => {
+  it.each([
+    ['mid-month', '2026-03-15T05:00:00Z', '2026-03-01'],
+    ['already next month in WIB', '2026-01-31T17:30:00Z', '2026-02-01'],
+    ['last WIB minute of the month', '2026-02-28T16:59:59Z', '2026-02-01'],
+    ['year rollover', '2025-12-31T17:00:00Z', '2026-01-01'],
+  ])('%s', (_name, iso, expected) => {
+    expect(wibMonthStart(new Date(iso))).toBe(expected);
+  });
+});
 
 describe('wibDateString', () => {
   it('reads the WIB calendar day (WIB is UTC+7, so it rolls over 7 hours before the UTC day does)', () => {
