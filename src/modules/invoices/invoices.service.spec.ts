@@ -260,6 +260,8 @@ describe('InvoicesService', () => {
           paidAt: new Date('2026-06-15T10:00:00.000Z'),
         },
         reactivated: true,
+        appliedAmount: 222_000,
+        claimed: true,
       });
       // Only used for the commission lookup now — reactivation is decided
       // and applied inside the repository's transaction.
@@ -303,6 +305,8 @@ describe('InvoicesService', () => {
       repo.recordPayment.mockResolvedValue({
         invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
         reactivated: false,
+        appliedAmount: 222_000,
+        claimed: true,
       });
       customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
 
@@ -323,6 +327,8 @@ describe('InvoicesService', () => {
       repo.recordPayment.mockResolvedValue({
         invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
         reactivated: false,
+        appliedAmount: 222_000,
+        claimed: true,
       });
       customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
 
@@ -340,6 +346,8 @@ describe('InvoicesService', () => {
       repo.recordPayment.mockResolvedValue({
         invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
         reactivated: false,
+        appliedAmount: 222_000,
+        claimed: true,
       });
       customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
 
@@ -358,6 +366,8 @@ describe('InvoicesService', () => {
       repo.recordPayment.mockResolvedValue({
         invoice: { ...pendingInvoice, status: 'partial', paidAmount: 100_000 },
         reactivated: false,
+        appliedAmount: 222_000,
+        claimed: true,
       });
       customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
 
@@ -386,6 +396,8 @@ describe('InvoicesService', () => {
           paidAt: new Date('2026-06-20T09:00:00.000Z'),
         },
         reactivated: true,
+        appliedAmount: 222_000,
+        claimed: true,
       });
       customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
 
@@ -436,6 +448,8 @@ describe('InvoicesService', () => {
       repo.recordPayment.mockResolvedValue({
         invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
         reactivated: false,
+        appliedAmount: 222_000,
+        claimed: true,
       });
       customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
 
@@ -469,6 +483,8 @@ describe('InvoicesService', () => {
       repo.recordPayment.mockResolvedValue({
         invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
         reactivated: false,
+        appliedAmount: 222_000,
+        claimed: true,
       });
       customers.findById.mockResolvedValue({
         id: CUSTOMER_ID,
@@ -493,6 +509,8 @@ describe('InvoicesService', () => {
       repo.recordPayment.mockResolvedValue({
         invoice: { ...pendingInvoice, status: 'partial', paidAmount: 100_000 },
         reactivated: false,
+        appliedAmount: 222_000,
+        claimed: true,
       });
       customers.findById.mockResolvedValue({
         id: CUSTOMER_ID,
@@ -511,6 +529,8 @@ describe('InvoicesService', () => {
       repo.recordPayment.mockResolvedValue({
         invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
         reactivated: false,
+        appliedAmount: 222_000,
+        claimed: true,
       });
       customers.findById.mockResolvedValue({ id: CUSTOMER_ID, status: 'aktif', resellerId: 'r-1' });
       resellersFake.findById.mockResolvedValue({ id: 'r-1', commissionPct: 0 });
@@ -525,6 +545,8 @@ describe('InvoicesService', () => {
       repo.recordPayment.mockResolvedValue({
         invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
         reactivated: false,
+        appliedAmount: 222_000,
+        claimed: true,
       });
       customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
 
@@ -536,31 +558,39 @@ describe('InvoicesService', () => {
       expect(secrets.applyDisabledForCustomer).not.toHaveBeenCalled();
     });
 
-    it('forwards the internal withinTx hook to repo.recordPayment', async () => {
+    it('forwards the internal claim hook to repo.recordPayment', async () => {
       repo.findById.mockResolvedValue(pendingInvoice);
       repo.recordPayment.mockResolvedValue({
         invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
         reactivated: false,
+        appliedAmount: 222_000,
+        claimed: true,
       });
       customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
-      const withinTx = vi.fn().mockResolvedValue(undefined);
+      const claim = vi.fn().mockResolvedValue(true);
 
-      await service.pay(pendingInvoice.id, { method: 'qris' }, { withinTx });
+      const outcome = await service.payWithOutcome(
+        pendingInvoice.id,
+        { method: 'qris' },
+        { claim },
+      );
+      expect(outcome).toMatchObject({ appliedAmount: 222_000, claimedIntent: true });
 
       expect(repo.recordPayment).toHaveBeenCalledWith(
         pendingInvoice.id,
         expect.objectContaining({ amount: 222_000 }),
-        withinTx,
+        claim,
       );
     });
 
     it('is a no-op for an already-paid invoice (no duplicate ledger entry)', async () => {
       repo.findById.mockResolvedValue({ ...pendingInvoice, status: 'paid' });
-      const withinTx = vi.fn();
-      const result = await service.pay(pendingInvoice.id, { method: 'qris' }, { withinTx });
+      const claim = vi.fn();
+      const result = await service.payWithOutcome(pendingInvoice.id, { method: 'qris' }, { claim });
       expect(repo.recordPayment).not.toHaveBeenCalled();
-      expect(withinTx).not.toHaveBeenCalled();
-      expect(result.status).toBe('paid');
+      expect(claim).not.toHaveBeenCalled();
+      expect(result.invoice.status).toBe('paid');
+      expect(result).toMatchObject({ appliedAmount: 0, claimedIntent: false });
     });
 
     it('throws 404 for an unknown invoice', async () => {
@@ -577,6 +607,8 @@ describe('InvoicesService', () => {
         repo.recordPayment.mockResolvedValue({
           invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
           reactivated: false,
+          appliedAmount: 222_000,
+          claimed: true,
         });
         customers.findById.mockResolvedValue({
           id: CUSTOMER_ID,
@@ -602,6 +634,8 @@ describe('InvoicesService', () => {
         repo.recordPayment.mockResolvedValue({
           invoice: { ...pendingInvoice, status: 'partial', paidAmount: 100_000 },
           reactivated: false,
+          appliedAmount: 222_000,
+          claimed: true,
         });
         customers.findById.mockResolvedValue({
           id: CUSTOMER_ID,
@@ -620,6 +654,8 @@ describe('InvoicesService', () => {
         repo.recordPayment.mockResolvedValue({
           invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
           reactivated: false,
+          appliedAmount: 222_000,
+          claimed: true,
         });
         customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null, phone: null });
 
@@ -634,6 +670,8 @@ describe('InvoicesService', () => {
         repo.recordPayment.mockResolvedValue({
           invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
           reactivated: false,
+          appliedAmount: 222_000,
+          claimed: true,
         });
         customers.findById.mockResolvedValue({
           id: CUSTOMER_ID,

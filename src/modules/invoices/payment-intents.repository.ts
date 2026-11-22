@@ -1,5 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { and, desc, eq, getTableColumns, gt, lt, sql } from 'drizzle-orm';
+import { Injectable } from '@nestjs/common';
+import { and, desc, eq, getTableColumns, gt, lt, ne, sql } from 'drizzle-orm';
 import { type Db, DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type NewPaymentIntent,
@@ -59,28 +59,28 @@ export class PaymentIntentsRepository {
       .orderBy(desc(paymentIntents.createdAt));
   }
 
-  async markPaid(id: string): Promise<PaymentIntent> {
-    return this.markPaidTx(this.db, id);
+  /**
+   * Atomically flips a non-paid intent to paid; null when it was already paid (another delivery
+   * won). The single claim point for settlement, so a token can only be spent once.
+   */
+  async claimPaid(id: string): Promise<PaymentIntent | null> {
+    return this.claimPaidTx(this.db, id);
   }
 
-  /** Same update on a caller-owned transaction (or the plain db handle). */
-  async markPaidTx(tx: Db | DbTx, id: string): Promise<PaymentIntent> {
+  async claimPaidTx(tx: Db | DbTx, id: string): Promise<PaymentIntent | null> {
     const [row] = await tx
       .update(paymentIntents)
       .set({ status: 'paid', paidAt: sql`now()` })
-      .where(eq(paymentIntents.id, id))
+      .where(and(eq(paymentIntents.id, id), ne(paymentIntents.status, 'paid')))
       .returning();
-    if (!row) {
-      throw new NotFoundException('payment intent not found');
-    }
-    return row;
+    return row ?? null;
   }
 
   async markExpired(id: string): Promise<void> {
     await this.db
       .update(paymentIntents)
       .set({ status: 'expired' })
-      .where(eq(paymentIntents.id, id));
+      .where(and(eq(paymentIntents.id, id), eq(paymentIntents.status, 'pending')));
   }
 
   /**

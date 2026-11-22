@@ -155,15 +155,30 @@ describe('PaymentIntentsRepository (integration)', () => {
     expect(await repo.findById('00000000-0000-0000-0000-0000000000ff')).toBeNull();
   });
 
-  it('marks an intent paid with a paidAt timestamp', async () => {
+  it('claims a pending intent as paid with a paidAt timestamp', async () => {
     const created = await repo.create(pending());
-    const paid = await repo.markPaid(created.id);
-    expect(paid.status).toBe('paid');
-    expect(paid.paidAt).toBeInstanceOf(Date);
+    const claimed = await repo.claimPaid(created.id);
+    expect(claimed?.status).toBe('paid');
+    expect(claimed?.paidAt).toBeInstanceOf(Date);
   });
 
-  it('rejects marking an unknown intent paid', async () => {
-    await expect(repo.markPaid('00000000-0000-0000-0000-0000000000ff')).rejects.toThrow();
+  it('claims an intent only once: the second claim returns null and leaves paidAt untouched', async () => {
+    const created = await repo.create(pending());
+    const first = await repo.claimPaid(created.id);
+    const second = await repo.claimPaid(created.id);
+    expect(second).toBeNull();
+    expect((await repo.findById(created.id))?.paidAt).toEqual(first?.paidAt);
+  });
+
+  it('returns null when claiming an unknown intent', async () => {
+    expect(await repo.claimPaid('00000000-0000-0000-0000-0000000000ff')).toBeNull();
+  });
+
+  it('markExpired never flips a paid intent back to expired', async () => {
+    const created = await repo.create(pending());
+    await repo.claimPaid(created.id);
+    await repo.markExpired(created.id);
+    expect((await repo.findById(created.id))?.status).toBe('paid');
   });
 
   it('marks an intent expired', async () => {
@@ -180,7 +195,7 @@ describe('PaymentIntentsRepository (integration)', () => {
     const alreadyPaid = await repo.create(
       pending({ expiresAt: new Date('2026-06-18T00:00:00.000Z') }),
     );
-    await repo.markPaid(alreadyPaid.id);
+    await repo.claimPaid(alreadyPaid.id);
 
     const expired = await repo.expireStalePending(now);
 
@@ -205,7 +220,7 @@ describe('PaymentIntentsRepository (integration)', () => {
       const paidIntent = await repo.create(
         pending({ invoiceId, channel: 'qris', expiresAt: inOneHour }),
       );
-      await repo.markPaid(paidIntent.id);
+      await repo.claimPaid(paidIntent.id);
       const lapsedIntent = await repo.create(
         pending({ invoiceId, channel: 'qris', expiresAt: oneHourAgo }),
       );

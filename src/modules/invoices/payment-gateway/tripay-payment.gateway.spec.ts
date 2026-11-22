@@ -247,6 +247,18 @@ describe('TripayPaymentGateway (ADR-0016, live mode)', () => {
         'non-numeric total_amount',
         { reference: 'T1', merchant_ref: 'i', status: 'PAID', total_amount: 'abc' },
       ],
+      [
+        'zero total_amount',
+        { reference: 'T1', merchant_ref: 'i', status: 'PAID', total_amount: 0 },
+      ],
+      [
+        'negative total_amount',
+        { reference: 'T1', merchant_ref: 'i', status: 'PAID', total_amount: -5 },
+      ],
+      [
+        'fractional total_amount',
+        { reference: 'T1', merchant_ref: 'i', status: 'PAID', total_amount: 10.5 },
+      ],
     ])('rejects a signed body with %s', (_label, bad) => {
       const raw = Buffer.from(JSON.stringify(bad));
       expect(() =>

@@ -20,15 +20,15 @@ import { MalformedWebhookError, PaymentGateway, type WebhookVerifyResult } from 
  * JWT to check. Authentication is entirely `gateway.verifyAndParseWebhook`'s
  * job (HMAC-SHA256 over the raw body, see `TripayPaymentGateway`'s doc
  * comment) — this controller stays thin: verify, then delegate to
- * `PaymentIntentsService.settleFromGateway` (idempotency + amount check +
+ * `PaymentIntentsService.settleFromGateway` (idempotency + amount handling +
  * the actual `invoices.pay` transaction all live there, reused from the
  * existing `confirm()` path — SEC-H1: never reimplemented here).
  *
  * M1: this handler always 200s once the signature is valid — including for
  * an already-settled duplicate, a non-'paid' status (`markGatewayNonSettlement`),
  * AND a DETERMINISTIC reason `settleFromGateway` refused to settle (unknown
- * intent / reference mismatch / amount mismatch). Refusing to settle is
- * still the correct MONEY decision in all three cases (never paper over a
+ * intent / reference mismatch). Refusing to settle is
+ * still the correct MONEY decision in both cases (never paper over a
  * mismatch) — each is logged as an `audit: true` reconciliation alert at
  * the service layer for a human to follow up on — but retrying the exact
  * same callback can never turn a permanent condition into a success, so

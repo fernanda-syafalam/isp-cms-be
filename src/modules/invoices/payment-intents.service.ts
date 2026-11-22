@@ -22,7 +22,7 @@ const VA_CHANNELS = new Set<Channel>(['va_bca', 'va_mandiri', 'va_bri', 'va_bni'
 /** M1: deterministic non-settle conditions are returned, not thrown; callers use `reason` only for logging/response. */
 export type SettleFromGatewayResult =
   | { settled: true }
-  | { settled: false; reason: 'unknown_intent' | 'reference_mismatch' | 'amount_mismatch' };
+  | { settled: false; reason: 'unknown_intent' | 'reference_mismatch' };
 
 @Injectable()
 export class PaymentIntentsService {
@@ -102,30 +102,50 @@ export class PaymentIntentsService {
       throw new ConflictException('payment intent expired');
     }
 
-    return this.settleIntent(intent);
+    const outcome = await this.settleIntent(intent);
+    if (outcome.intent) return toIntentResponse(outcome.intent);
+    const current = await this.repo.findById(id); // lost the claim race: already settled
+    if (!current) throw new NotFoundException('payment intent not found');
+    return toIntentResponse(current);
   }
 
   /**
    * Settle body shared by `confirm()` and `settleFromGateway` (which must settle regardless of
-   * local expiry). Private so settlement is only reachable via those two (SEC-H1). The invoice
-   * payment and the intent's `paid` flip commit in one transaction via recordPayment's
-   * `withinTx`; an already-paid invoice skips the hook, so it falls back to a plain markPaid.
+   * local expiry). Private so settlement is only reachable via those two (SEC-H1). The intent is
+   * CLAIMED (conditional flip to paid) first inside recordPayment's transaction, under the invoice
+   * lock, so concurrent deliveries record at most one payment and a failed insert releases the
+   * claim. `intent: null` means another delivery already claimed it (nothing recorded).
    * Locking and idempotency: see InvoicesRepository.recordPayment.
    */
-  private async settleIntent(intent: PaymentIntentRow): Promise<PaymentIntentResponse> {
-    let settled: PaymentIntentRow | undefined;
-    await this.invoices.pay(
+  private async settleIntent(intent: PaymentIntentRow, amount?: number): Promise<SettleOutcome> {
+    const claimed: { row: PaymentIntentRow | null } = { row: null };
+    const outcome = await this.invoices.payWithOutcome(
       intent.invoiceId,
-      { method: channelToMethod(intent.channel) },
+      { method: channelToMethod(intent.channel), ...(amount === undefined ? {} : { amount }) },
       {
-        withinTx: async (tx) => {
-          settled = await this.repo.markPaidTx(tx, intent.id);
+        claim: async (tx) => {
+          claimed.row = await this.repo.claimPaidTx(tx, intent.id);
+          return claimed.row !== null;
         },
       },
     );
-    const paid = settled ?? (await this.repo.markPaid(intent.id));
-    this.logger.log({ intentId: intent.id, invoiceId: intent.invoiceId }, 'payment intent settled');
-    return toIntentResponse(paid);
+    let row = claimed.row;
+    // The hook never ran (invoice already paid) or lost the claim on an unpaid invoice; claiming
+    // directly is then a harmless null no-op in the lost case.
+    if (!outcome.claimedIntent && outcome.appliedAmount === 0) {
+      row = await this.repo.claimPaid(intent.id);
+    }
+    if (row) {
+      this.logger.log(
+        { intentId: intent.id, invoiceId: intent.invoiceId },
+        'payment intent settled',
+      );
+    }
+    return {
+      intent: row,
+      appliedAmount: outcome.appliedAmount,
+      invoiceStatus: outcome.invoice.status,
+    };
   }
 
   /**
@@ -135,7 +155,9 @@ export class PaymentIntentsService {
    *
    * Checks, in order: unknown intent; already 'paid' (idempotent no-op on redelivery); callback
    * `reference` must match the stored `gatewayReference` (blocks a forged merchant_ref aimed at
-   * another intent); paid amount must equal the current `balanceDue`.
+   * another intent). The paid amount is authoritative (MONEY-1): less than `balanceDue` records a
+   * partial payment, more settles `balanceDue` and flags the excess for manual refund; both are
+   * audited. Replays are no-ops via the intent's 'paid' status (flipped in the pay transaction).
    *
    * M1: the failing checks are deterministic, so they are logged as `audit: true` reconciliation
    * alerts and returned as `{ settled: false, reason }` instead of throwing; a non-2xx would make
@@ -178,19 +200,7 @@ export class PaymentIntentsService {
     }
 
     const invoice = await this.invoices.findById(intent.invoiceId);
-    if (invoice.balanceDue !== parsed.amount) {
-      this.logger.error(
-        {
-          audit: true,
-          intentId: intent.id,
-          invoiceId: invoice.id,
-          expected: invoice.balanceDue,
-          received: parsed.amount,
-        },
-        'tripay webhook: amount mismatch — acknowledging without settling; reconcile manually (e.g. balanceDue moved via another channel since the charge was created, or this is a bad/forged callback)',
-      );
-      return { settled: false, reason: 'amount_mismatch' };
-    }
+    const balanceDue = Math.max(invoice.balanceDue, 0);
 
     // Gateway PAID is authoritative, so settle even if the intent lapsed locally (near-deadline
     // payment, or expireStale ran first). Going through confirm() would throw on its expiry guard,
@@ -202,7 +212,50 @@ export class PaymentIntentsService {
         'tripay webhook: settling a locally-expired intent — gateway confirms payment (late settlement); invoice credited',
       );
     }
-    await this.settleIntent(intent);
+    const outcome =
+      balanceDue > 0
+        ? await this.settleIntent(intent, Math.min(parsed.amount, balanceDue))
+        : await this.claimWithoutPayment(intent, invoice.status);
+    if (!outcome.intent) {
+      this.logger.log(
+        { intentId: intent.id, reference: parsed.reference },
+        'tripay webhook: intent already claimed by a concurrent delivery — idempotent no-op',
+      );
+      return { settled: true };
+    }
+    await this.auditGatewayAmount(intent, parsed, outcome);
+    return { settled: true };
+  }
+
+  /** Nothing is owed (paid or zero-total invoice): claim the intent so the money is audited as excess, never retried. */
+  private async claimWithoutPayment(
+    intent: PaymentIntentRow,
+    invoiceStatus: InvoiceResponse['status'],
+  ): Promise<SettleOutcome> {
+    return { intent: await this.repo.claimPaid(intent.id), appliedAmount: 0, invoiceStatus };
+  }
+
+  /** Warns on an overpayment and writes the audit row, both from the amount the ledger actually took. */
+  private async auditGatewayAmount(
+    intent: PaymentIntentRow,
+    parsed: { reference: string; amount: number },
+    outcome: SettleOutcome,
+  ): Promise<void> {
+    const excess = parsed.amount - outcome.appliedAmount;
+    const action = gatewayAuditAction(excess, outcome.invoiceStatus);
+    if (excess > 0) {
+      this.logger.warn(
+        {
+          audit: true,
+          intentId: intent.id,
+          invoiceId: intent.invoiceId,
+          applied: outcome.appliedAmount,
+          received: parsed.amount,
+          excess,
+        },
+        'tripay webhook: overpayment — invoice settled for balanceDue only; excess must be refunded manually',
+      );
+    }
     // R8-OBS-3: best-effort — a failed audit insert must never roll back or 5xx a settlement
     // that already moved money (ADR-0012).
     await notifyBestEffort(
@@ -210,15 +263,14 @@ export class PaymentIntentsService {
       () =>
         this.auditRepo.record({
           actor: 'tripay-webhook',
-          action: 'payment.settle_gateway',
+          action,
           entity: 'invoice',
           entityId: intent.invoiceId,
-          summary: `payment.settle_gateway success intentId=${intent.id} reference=${parsed.reference} amount=${parsed.amount}`,
+          summary: `${action} intentId=${intent.id} reference=${parsed.reference} received=${parsed.amount} applied=${outcome.appliedAmount} excess=${excess}`,
         }),
       { intentId: intent.id, invoiceId: intent.invoiceId, reference: parsed.reference },
-      'audit persist failed (payment.settle_gateway)',
+      `audit persist failed (${action})`,
     );
-    return { settled: true };
   }
 
   /**
@@ -290,6 +342,21 @@ export class PaymentIntentsService {
     if (expired > 0) this.logger.log({ expired }, 'expired stale payment intents');
     return { expired };
   }
+}
+
+interface SettleOutcome {
+  /** The claimed (now paid) intent row; null when a concurrent delivery already claimed it. */
+  intent: PaymentIntentRow | null;
+  appliedAmount: number;
+  invoiceStatus: InvoiceResponse['status'];
+}
+
+function gatewayAuditAction(
+  excess: number,
+  invoiceStatus: InvoiceResponse['status'],
+): 'payment.settle_gateway' | 'payment.gateway_underpaid' | 'payment.gateway_overpaid' {
+  if (excess > 0) return 'payment.gateway_overpaid';
+  return invoiceStatus === 'paid' ? 'payment.settle_gateway' : 'payment.gateway_underpaid';
 }
 
 function channelToMethod(channel: Channel): RecordPaymentInput['method'] {

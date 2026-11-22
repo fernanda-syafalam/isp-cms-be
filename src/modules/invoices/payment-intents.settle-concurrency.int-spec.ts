@@ -50,6 +50,7 @@ describe('PaymentIntentsService.settleFromGateway — concurrent delivery (integ
   let paymentIntentsRepo: PaymentIntentsRepository;
   let paymentIntentsService: PaymentIntentsService;
   let customerId: string;
+  const auditActions: string[] = [];
 
   beforeAll(async () => {
     container = await new PostgreSqlContainer('postgres:16-alpine').start();
@@ -87,7 +88,11 @@ describe('PaymentIntentsService.settleFromGateway — concurrent delivery (integ
     // create()'s concern, minting a NEW charge) — stub it too. AuditRepository
     // (R8-OBS-3) is a best-effort side channel here too, same posture as
     // notificationsStub above — never asserted on by this concurrency test.
-    const auditStub = { record: async () => undefined } as unknown as AuditRepository;
+    const auditStub = {
+      record: async (entry: { action: string }) => {
+        auditActions.push(entry.action);
+      },
+    } as unknown as AuditRepository;
     paymentIntentsService = new PaymentIntentsService(
       paymentIntentsRepo,
       invoicesService,
@@ -121,6 +126,7 @@ describe('PaymentIntentsService.settleFromGateway — concurrent delivery (integ
   });
 
   beforeEach(async () => {
+    auditActions.length = 0;
     await db.delete(paymentIntents);
     await db.delete(payments);
     await db.delete(invoices);
@@ -169,15 +175,11 @@ describe('PaymentIntentsService.settleFromGateway — concurrent delivery (integ
       paymentIntentsService.settleFromGateway(callback),
     ]);
 
-    // The MONEY invariant under test is what got WRITTEN (asserted below), not each call's
-    // `settled` flag. At least one call must settle. The other may report `amount_mismatch`:
-    // `settleFromGateway` reads the intent status and the invoice's `balanceDue` unlocked, in
-    // separate reads, so it can see the intent still 'pending' and then a balance already 0.
-    // Caller-visible only — it never double-writes (ledger/invoice/customer assertions below).
-    expect(a.settled || b.settled).toBe(true);
-    for (const result of [a, b]) {
-      if (!result.settled) expect(result.reason).toBe('amount_mismatch');
-    }
+    // The MONEY invariant under test is what got WRITTEN (asserted below). Both calls
+    // acknowledge: one claims the intent and records the payment, the other loses the claim
+    // under the invoice lock and is an idempotent no-op.
+    expect(a).toEqual({ settled: true });
+    expect(b).toEqual({ settled: true });
 
     const ledger = await invoicesRepo.listPayments({ limit: 50, offset: 0 });
     expect(ledger.total).toBe(1); // FOR UPDATE serialized the loser into the idempotent no-op branch
@@ -206,5 +208,50 @@ describe('PaymentIntentsService.settleFromGateway — concurrent delivery (integ
       .limit(1);
     expect(finalCustomer?.status).toBe('aktif'); // reactivated exactly once
     expect(finalCustomer?.outstanding).toBe(0);
+  });
+
+  it('two concurrent underpaid deliveries (2 x 50 against 100) record exactly one 50 payment and one underpaid audit', async () => {
+    const invoice = await invoicesRepo.create({
+      customerId,
+      customerName: 'Budi',
+      periodStart: '2026-07-01',
+      periodEnd: '2026-07-31',
+      amount: 100_000,
+      taxAmount: 0,
+      dueDate: '2026-07-10',
+    }); // total = 100_000
+
+    const intent = await paymentIntentsRepo.create({
+      invoiceId: invoice.id,
+      invoiceNo: invoice.invoiceNo,
+      customerName: invoice.customerName,
+      amount: 100_000,
+      channel: 'qris',
+      qrPayload: `ID.MOCK.QRIS|qris|${invoice.invoiceNo}|100000`,
+      gatewayReference: 'T-REF-CONCURRENCY-2',
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    });
+    const callback = { reference: 'T-REF-CONCURRENCY-2', invoiceRef: intent.id, amount: 50_000 };
+
+    const [a, b] = await Promise.all([
+      paymentIntentsService.settleFromGateway(callback),
+      paymentIntentsService.settleFromGateway(callback),
+    ]);
+
+    expect(a).toEqual({ settled: true });
+    expect(b).toEqual({ settled: true });
+
+    const ledger = await invoicesRepo.listPayments({ limit: 50, offset: 0 });
+    expect(ledger.total).toBe(1);
+    expect(ledger.items[0]?.amount).toBe(50_000);
+
+    const [finalInvoice] = await db
+      .select()
+      .from(invoices)
+      .where(eq(invoices.id, invoice.id))
+      .limit(1);
+    expect(finalInvoice?.status).toBe('partial');
+    expect(finalInvoice?.paidAmount).toBe(50_000);
+    expect(auditActions).toEqual(['payment.gateway_underpaid']);
   });
 });
