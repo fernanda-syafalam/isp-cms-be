@@ -1,7 +1,7 @@
 /**
  * DEMO seed: realistic-medium ISP dataset for client walkthroughs.
  *
- * SAFETY: acts only when `SEED_WIPE=true`; any other value logs a skip and exits 0, so it can
+ * SAFETY: acts only when `SEED_WIPE=true` and only when NODE_ENV is development/test or DEPLOY_ENV=demo; any other value logs a skip and exits 0, so it can
  * stay wired into a deploy pipeline. When armed it TRUNCATEs every table (RESTART IDENTITY
  * CASCADE) and repopulates, so re-runs yield the same shape (only ids and now-relative dates differ).
  * Mock-first islands (ADR-0003) self-seed via their repositories and are not seeded here;
@@ -46,13 +46,6 @@ import type {
   NewVoucher,
   NewWorkOrder,
 } from './schema';
-
-const DATABASE_URL = process.env.DATABASE_URL;
-if (!DATABASE_URL) {
-  // Fail loud, fail fast — never fall back to a default localhost DB for a
-  // destructive script (mirrors migrate.ts).
-  throw new Error('DATABASE_URL is required to run the demo seed');
-}
 
 // Mirrors src/modules/users/users.service.ts ARGON2_OPTIONS exactly, so the
 // seeded hashes verify through the real login path.
@@ -1860,10 +1853,35 @@ function projectedOutstanding(archetype: CustomerArchetype, planPrice: number): 
   return buildBilling(placeholderPlan, 'placeholder').outstanding;
 }
 
+/**
+ * Decides whether the destructive wipe may run. Returns false for a safe
+ * no-op (SEED_WIPE not 'true'). SEED_WIPE=true is allowed only on an explicit
+ * allowlist (NODE_ENV development/test, or DEPLOY_ENV=demo) and throws
+ * otherwise, so a stray flag can never truncate production data.
+ */
+export function assertWipeAllowed(env: NodeJS.ProcessEnv): boolean {
+  if (env.SEED_WIPE !== 'true') return false;
+  const allowed =
+    env.NODE_ENV === 'development' || env.NODE_ENV === 'test' || env.DEPLOY_ENV === 'demo';
+  if (!allowed) {
+    throw new Error(
+      'Refusing to wipe: SEED_WIPE=true requires NODE_ENV=development|test or DEPLOY_ENV=demo (demo environments only)',
+    );
+  }
+  return true;
+}
+
 async function main(): Promise<void> {
-  if (process.env.SEED_WIPE !== 'true') {
+  if (!assertWipeAllowed(process.env)) {
     console.log('SEED_WIPE is not "true" — skipping the demo seed (safe no-op).');
     return;
+  }
+
+  const DATABASE_URL = process.env.DATABASE_URL;
+  if (!DATABASE_URL) {
+    // Fail loud, fail fast — never fall back to a default localhost DB for a
+    // destructive script (mirrors migrate.ts).
+    throw new Error('DATABASE_URL is required to run the demo seed');
   }
 
   const pool = new Pool({ connectionString: DATABASE_URL, max: 5 });
@@ -2245,7 +2263,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err: unknown) => {
-  console.error('Demo seed failed:', err);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((err: unknown) => {
+    console.error('Demo seed failed:', err);
+    process.exitCode = 1;
+  });
+}

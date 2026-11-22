@@ -116,6 +116,9 @@ services:
 
   # One-shot demo-data (re)seed. No-ops unless SEED_WIPE=true, so it is safe
   # to leave wired into every deploy — do NOT make api/worker depend on it.
+  # SEED_WIPE=true TRUNCATEs every table, so seed-demo.ts also requires
+  # NODE_ENV=development|test or DEPLOY_ENV=demo (demo env only, never on
+  # production); otherwise it throws before touching the database.
   seed:
     image: isp-cms-be:dokploy
     command: ["dist/infrastructure/database/seed-demo.js"]
@@ -123,6 +126,7 @@ services:
     environment:
       <<: *app-env
       SEED_WIPE: ${SEED_WIPE:-false}
+      DEPLOY_ENV: ${DEPLOY_ENV:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
