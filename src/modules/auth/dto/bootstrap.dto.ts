@@ -12,6 +12,8 @@ export const BootstrapSchema = z
     email: z.email().max(255),
     fullName: z.string().trim().min(1).max(120),
     password: z.string().min(12).max(128),
+    // Required on a production (non-demo) deploy; ignored elsewhere.
+    bootstrapToken: z.string().max(256).optional(),
   })
   .strict();
 

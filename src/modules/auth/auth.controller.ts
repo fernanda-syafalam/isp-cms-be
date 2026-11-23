@@ -122,8 +122,11 @@ export class AuthController {
    */
   @Public()
   @Get('bootstrap')
-  async bootstrapStatus(): Promise<{ required: boolean }> {
-    return { required: await this.auth.bootstrapRequired() };
+  async bootstrapStatus(): Promise<{ required: boolean; tokenRequired: boolean }> {
+    return {
+      required: await this.auth.bootstrapRequired(),
+      tokenRequired: this.auth.bootstrapTokenRequired(),
+    };
   }
 
   /**

@@ -1,4 +1,5 @@
-import { ConflictException, UnauthorizedException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { Test, type TestingModule } from '@nestjs/testing';
 import * as argon2 from 'argon2';
@@ -35,6 +36,7 @@ describe('AuthService', () => {
   };
   let security: { verifyLoginChallenge: ReturnType<typeof vi.fn> };
   let audit: { record: ReturnType<typeof vi.fn> };
+  let appConfig: { nodeEnv: string; deployEnv?: string; bootstrapToken?: string };
 
   const password = 'correct-horse-battery-staple';
   let user: User;
@@ -65,6 +67,10 @@ describe('AuthService', () => {
     // Default: no 2FA challenge — matches every pre-existing regression test.
     security = { verifyLoginChallenge: vi.fn().mockResolvedValue('ok') };
     audit = { record: vi.fn().mockResolvedValue(undefined) };
+    appConfig = { nodeEnv: 'test' };
+    const config = {
+      get: (path: string) => appConfig[path.replace('app.', '') as keyof typeof appConfig],
+    };
 
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
@@ -75,6 +81,7 @@ describe('AuthService', () => {
         { provide: RefreshTokenService, useValue: refresh },
         { provide: SecurityService, useValue: security },
         { provide: AuditRepository, useValue: audit },
+        { provide: ConfigService, useValue: config },
       ],
     }).compile();
     service = moduleRef.get(AuthService);
@@ -415,6 +422,50 @@ describe('AuthService', () => {
       usersService.bootstrapAdmin.mockResolvedValue(null);
       await expect(service.bootstrapAdmin(input, meta)).rejects.toBeInstanceOf(ConflictException);
       expect(refresh.mint).not.toHaveBeenCalled();
+    });
+
+    describe('BOOTSTRAP_TOKEN (SEC-A2)', () => {
+      const token = 'a'.repeat(40);
+
+      it('outside production ignores the token and never forwards it', async () => {
+        usersService.bootstrapAdmin.mockResolvedValue({ ...user, role: 'admin' });
+        expect(service.bootstrapTokenRequired()).toBe(false);
+        await service.bootstrapAdmin({ ...input, bootstrapToken: 'whatever' }, meta);
+        expect(usersService.bootstrapAdmin).toHaveBeenCalledWith(input);
+      });
+
+      it('in production without BOOTSTRAP_TOKEN set -> 403 before touching users', async () => {
+        appConfig = { nodeEnv: 'production' };
+        expect(service.bootstrapTokenRequired()).toBe(true);
+        await expect(
+          service.bootstrapAdmin({ ...input, bootstrapToken: token }, meta),
+        ).rejects.toBeInstanceOf(ForbiddenException);
+        expect(usersService.bootstrapAdmin).not.toHaveBeenCalled();
+      });
+
+      it('in production with a missing or wrong token -> 403', async () => {
+        appConfig = { nodeEnv: 'production', bootstrapToken: token };
+        await expect(service.bootstrapAdmin(input, meta)).rejects.toBeInstanceOf(
+          ForbiddenException,
+        );
+        await expect(
+          service.bootstrapAdmin({ ...input, bootstrapToken: 'b'.repeat(40) }, meta),
+        ).rejects.toBeInstanceOf(ForbiddenException);
+        expect(usersService.bootstrapAdmin).not.toHaveBeenCalled();
+      });
+
+      it('in production with the right token -> creates the admin', async () => {
+        appConfig = { nodeEnv: 'production', bootstrapToken: token };
+        usersService.bootstrapAdmin.mockResolvedValue({ ...user, role: 'admin' });
+        const out = await service.bootstrapAdmin({ ...input, bootstrapToken: token }, meta);
+        expect(out.user.role).toBe('admin');
+        expect(usersService.bootstrapAdmin).toHaveBeenCalledWith(input);
+      });
+
+      it('DEPLOY_ENV=demo in production does not require the token', () => {
+        appConfig = { nodeEnv: 'production', deployEnv: 'demo' };
+        expect(service.bootstrapTokenRequired()).toBe(false);
+      });
     });
   });
 });

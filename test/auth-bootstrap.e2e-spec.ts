@@ -1,8 +1,9 @@
 import fastifyCookie from '@fastify/cookie';
 import { VersioningType } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test, type TestingModule } from '@nestjs/testing';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../src/app.module';
 import { DrizzleService } from '../src/infrastructure/database/drizzle.service';
 import type { NewUser, User } from '../src/infrastructure/database/schema/users.schema';
@@ -19,6 +20,8 @@ import { createFakeRedisClient } from '../src/test-utils/fake-redis-client';
 describe('Auth bootstrap (e2e)', () => {
   let app: NestFastifyApplication;
   const store: User[] = [];
+  let appConfig: ConfigService;
+  const settings: Record<string, string | undefined> = {};
 
   beforeAll(async () => {
     const fakeRepo = {
@@ -71,6 +74,11 @@ describe('Auth bootstrap (e2e)', () => {
     app.enableVersioning({ type: VersioningType.URI });
     await app.init();
     await app.getHttpAdapter().getInstance().ready();
+    // Drive the production/token predicate per test without booting in prod mode.
+    appConfig = app.get(ConfigService);
+    const realGet = appConfig.get.bind(appConfig) as (path: string, opts?: unknown) => unknown;
+    vi.spyOn(appConfig, 'get').mockImplementation(((path: string, opts?: unknown) =>
+      path in settings ? settings[path] : realGet(path, opts)) as never);
   });
 
   afterAll(async () => {
@@ -83,10 +91,59 @@ describe('Auth bootstrap (e2e)', () => {
     password: 'correct-horse-battery-staple',
   };
 
+  const post = (body: object) =>
+    app.inject({
+      method: 'POST',
+      url: '/v1/auth/bootstrap',
+      payload: body,
+      headers: { 'content-type': 'application/json' },
+    });
+  const token = 't'.repeat(40);
+
   it('reports required:true on an empty instance', async () => {
     const res = await app.inject({ method: 'GET', url: '/v1/auth/bootstrap' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ required: true });
+    expect(res.json()).toEqual({ required: true, tokenRequired: false });
+  });
+
+  describe('production deploy (BOOTSTRAP_TOKEN)', () => {
+    it('GET reports tokenRequired:true', async () => {
+      settings['app.nodeEnv'] = 'production';
+      settings['app.deployEnv'] = undefined;
+      const res = await app.inject({ method: 'GET', url: '/v1/auth/bootstrap' });
+      expect(res.json()).toEqual({ required: true, tokenRequired: true });
+    });
+
+    it('403 when BOOTSTRAP_TOKEN is not configured', async () => {
+      settings['app.bootstrapToken'] = undefined;
+      expect((await post({ ...payload, bootstrapToken: token })).statusCode).toBe(403);
+      expect(store).toHaveLength(0);
+    });
+
+    it('403 on a wrong or missing token', async () => {
+      settings['app.bootstrapToken'] = token;
+      expect((await post({ ...payload, bootstrapToken: 'w'.repeat(40) })).statusCode).toBe(403);
+      expect((await post(payload)).statusCode).toBe(403);
+      expect(store).toHaveLength(0);
+    });
+
+    it('201 with the right token', async () => {
+      settings['app.bootstrapToken'] = token;
+      const res = await post({ ...payload, bootstrapToken: token });
+      expect(res.statusCode).toBe(201);
+      store.length = 0; // reset for the dev-mode flow below
+    });
+
+    it('dev mode ignores the token', async () => {
+      for (const k of Object.keys(settings)) delete settings[k];
+      expect((await post({ ...payload, bootstrapToken: 'ignored' })).statusCode).toBe(201);
+      store.length = 0;
+    });
+  });
+
+  it('creates nothing yet: reset to the empty instance', async () => {
+    const res = await app.inject({ method: 'GET', url: '/v1/auth/bootstrap' });
+    expect(res.json()).toEqual({ required: true, tokenRequired: false });
   });
 
   it('creates the first admin, logs in, and sets the refresh cookie', async () => {
@@ -106,7 +163,7 @@ describe('Auth bootstrap (e2e)', () => {
 
   it('reports required:false once an admin exists', async () => {
     const res = await app.inject({ method: 'GET', url: '/v1/auth/bootstrap' });
-    expect(res.json()).toEqual({ required: false });
+    expect(res.json()).toEqual({ required: false, tokenRequired: false });
   });
 
   it('rejects a second bootstrap attempt with 409', async () => {
