@@ -1,6 +1,7 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { z } from 'zod';
+import { MvpDisabled } from '../../common/decorators/mvp-disabled.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { PaymentReconciliationDto } from './dto/payment-reconciliation.dto';
 import { InvoicesService } from './invoices.service';
@@ -32,6 +33,7 @@ export class PaymentsController {
 
   // The loket/cash-drawer closing report for one day (P3.A.4).
   @Roles('admin', 'staff')
+  @MvpDisabled()
   @Get('reconciliation')
   @ZodSerializerDto(PaymentReconciliationDto)
   reconciliation(@Query() query: unknown) {

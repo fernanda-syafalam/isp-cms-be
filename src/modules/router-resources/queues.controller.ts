@@ -13,6 +13,7 @@ import {
 import { ZodSerializerDto } from 'nestjs-zod';
 import { z } from 'zod';
 import { Audit } from '../../common/decorators/audit.decorator';
+import { MvpDisabled } from '../../common/decorators/mvp-disabled.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import {
   CreateQueueDto,
@@ -35,6 +36,7 @@ const ListQuerySchema = z.object({
 export class QueuesController {
   constructor(private readonly queues: QueuesService) {}
 
+  @MvpDisabled()
   @Get()
   @ZodSerializerDto(QueueListResponseDto)
   list(@Param('routerId') routerId: string, @Query() query: unknown) {
@@ -43,6 +45,7 @@ export class QueuesController {
 
   @Roles('admin', 'staff')
   @Audit('router.queue_create')
+  @MvpDisabled()
   @Post()
   @ZodSerializerDto(QueueResponseDto)
   create(@Param('routerId') routerId: string, @Body() body: CreateQueueDto) {
@@ -51,6 +54,7 @@ export class QueuesController {
 
   @Roles('admin', 'staff')
   @Audit('router.queue_update')
+  @MvpDisabled()
   @Patch(':id')
   @ZodSerializerDto(QueueResponseDto)
   update(
@@ -63,6 +67,7 @@ export class QueuesController {
 
   @Roles('admin', 'staff')
   @Audit('router.queue_delete')
+  @MvpDisabled()
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Param('routerId') routerId: string, @Param('id') id: string): Promise<void> {

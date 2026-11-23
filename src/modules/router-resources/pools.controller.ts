@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
 import { Audit } from '../../common/decorators/audit.decorator';
+import { MvpDisabled } from '../../common/decorators/mvp-disabled.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CreatePoolDto, PoolResponseDto } from './dto/pool.dto';
 import { PoolsService } from './pools.service';
@@ -10,6 +11,7 @@ import { PoolsService } from './pools.service';
 export class PoolsController {
   constructor(private readonly pools: PoolsService) {}
 
+  @MvpDisabled()
   @Get()
   list(@Param('routerId') routerId: string) {
     return this.pools.list(routerId);
@@ -17,6 +19,7 @@ export class PoolsController {
 
   @Roles('admin', 'staff')
   @Audit('router.pool_create')
+  @MvpDisabled()
   @Post()
   @ZodSerializerDto(PoolResponseDto)
   create(@Param('routerId') routerId: string, @Body() body: CreatePoolDto) {
@@ -25,6 +28,7 @@ export class PoolsController {
 
   @Roles('admin', 'staff')
   @Audit('router.pool_delete')
+  @MvpDisabled()
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Param('routerId') routerId: string, @Param('id') id: string): Promise<void> {
