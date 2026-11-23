@@ -1,9 +1,19 @@
-import { ConflictException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { createHash, timingSafeEqual } from 'node:crypto';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import type { AuthUser } from '../../common/decorators/current-user.decorator';
 import { notifyBestEffort } from '../../common/notifications/notify-best-effort';
 import { isRoleDisabled } from '../../common/security/mvp-roles';
+import type { AppConfig } from '../../config/configuration';
+import { isProductionDeploy } from '../../config/deploy-env';
 import type { NewAuditLogEntry } from '../../infrastructure/database/schema/audit.schema';
 import { AuditRepository } from '../audit/audit.repository';
 import { SecurityService } from '../security/security.service';
@@ -51,7 +61,30 @@ export class AuthService {
     // and the failure path here never reaches a 2xx the interceptor keys on.
     // AuditModule is @Global(), so no extra module import is required.
     private readonly auditRepo: AuditRepository,
+    private readonly config: ConfigService<{ app: AppConfig }, true>,
   ) {}
+
+  /** True on a production (non-demo) deploy, where bootstrap needs BOOTSTRAP_TOKEN. */
+  bootstrapTokenRequired(): boolean {
+    return isProductionDeploy(
+      this.config.get('app.nodeEnv', { infer: true }),
+      this.config.get('app.deployEnv', { infer: true }),
+    );
+  }
+
+  /** SEC-A2: gate the first-admin claim behind BOOTSTRAP_TOKEN (production only). */
+  private assertBootstrapToken(supplied: string | undefined): void {
+    if (!this.bootstrapTokenRequired()) return;
+    const expected = this.config.get('app.bootstrapToken', { infer: true });
+    if (!expected) {
+      throw new ForbiddenException('bootstrap disabled: set BOOTSTRAP_TOKEN');
+    }
+    // Hash both sides so the buffers are equal length (no length leak).
+    const digest = (v: string) => createHash('sha256').update(v).digest();
+    if (!supplied || !timingSafeEqual(digest(supplied), digest(expected))) {
+      throw new ForbiddenException('invalid bootstrap token');
+    }
+  }
 
   /** True only when no user exists yet — the first-run bootstrap window. */
   async bootstrapRequired(): Promise<boolean> {
@@ -66,7 +99,9 @@ export class AuthService {
    * an advisory lock so concurrent bootstrap attempts cannot both succeed.
    */
   async bootstrapAdmin(input: BootstrapInput, meta: SessionMeta): Promise<LoginResult> {
-    const user = await this.users.bootstrapAdmin(input);
+    const { bootstrapToken, ...adminInput } = input;
+    this.assertBootstrapToken(bootstrapToken);
+    const user = await this.users.bootstrapAdmin(adminInput);
     if (!user) {
       throw new ConflictException('bootstrap already completed');
     }

@@ -12,6 +12,7 @@ export const appConfig = registerAs('app', () => {
   return {
     nodeEnv: env.NODE_ENV,
     deployEnv: env.DEPLOY_ENV,
+    bootstrapToken: env.BOOTSTRAP_TOKEN,
     port: env.PORT,
     database: {
       url: env.DATABASE_URL,

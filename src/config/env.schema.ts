@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isProductionDeploy } from './deploy-env';
 
 const TWOFA_ENC_KEY_BYTES = 32;
 
@@ -29,11 +30,69 @@ function isValidTwoFaEncKey(value: string): boolean {
  * See v2 Best Practices doc, Pilar 1 ("Konfigurasi dengan validasi
  * schema") for the broader pattern.
  */
+/** Compose forwards unset `${VAR:-}` as "" — treat blank as absent. */
+const emptyAsUndefined = <T extends z.ZodType>(schema: T) =>
+  z.preprocess((v) => (v === '' ? undefined : v), schema);
+
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '0.0.0.0']);
+
+function isLocalOrigin(origin: string): boolean {
+  if (!URL.canParse(origin)) return false;
+  const host = new URL(origin).hostname.replace(/\.$/, '');
+  return LOCAL_HOSTS.has(host) || host.endsWith('.localhost');
+}
+
+interface ProductionGuardEnv {
+  NODE_ENV: string;
+  DEPLOY_ENV?: string | undefined;
+  ROUTEROS_MODE: string;
+  PAYMENT_MODE: string;
+  NOTIFICATION_MODE: string;
+  COOKIE_SECURE: boolean;
+  CORS_ORIGINS: string;
+}
+
+/**
+ * A real production deploy must not boot with the simulation/dev defaults
+ * (silent no-op network enforcement, mock payments, log-only notifications,
+ * insecure cookies, localhost CORS). Demo deploys opt out via DEPLOY_ENV=demo.
+ */
+function addProductionIssues(env: ProductionGuardEnv, ctx: z.RefinementCtx): void {
+  if (!isProductionDeploy(env.NODE_ENV, env.DEPLOY_ENV)) return;
+  const fix = 'set the live value, or DEPLOY_ENV=demo for the demo deploy';
+  const violations: Array<[key: string, bad: boolean, what: string]> = [
+    ['ROUTEROS_MODE', env.ROUTEROS_MODE === 'simulation', 'ROUTEROS_MODE=simulation'],
+    ['PAYMENT_MODE', env.PAYMENT_MODE === 'simulation', 'PAYMENT_MODE=simulation'],
+    ['NOTIFICATION_MODE', env.NOTIFICATION_MODE === 'log', 'NOTIFICATION_MODE=log'],
+    ['COOKIE_SECURE', env.COOKIE_SECURE === false, 'COOKIE_SECURE=false'],
+    [
+      'CORS_ORIGINS',
+      env.CORS_ORIGINS.split(',')
+        .map((o) => o.trim())
+        .some(isLocalOrigin),
+      'a localhost/127.0.0.1 entry in CORS_ORIGINS',
+    ],
+  ];
+  for (const [key, bad, what] of violations) {
+    if (bad) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `${what} is not allowed in production: ${fix}`,
+        path: [key],
+      });
+    }
+  }
+}
+
 export const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     // Set to 'demo' on demo deployments only; gates demo-data seeding (topology).
-    DEPLOY_ENV: z.string().optional(),
+    DEPLOY_ENV: emptyAsUndefined(z.string().optional()),
+    // One-time secret required by POST /v1/auth/bootstrap on a production
+    // (non-demo) deploy, so the first admin cannot be claimed by whoever
+    // reaches a fresh instance first (SEC-A2). Ignored outside production.
+    BOOTSTRAP_TOKEN: emptyAsUndefined(z.string().min(32).optional()),
     PORT: z.coerce.number().int().positive().default(3000),
 
     DATABASE_URL: z.string().min(1),
@@ -139,20 +198,21 @@ export const envSchema = z
     // written, no external call. 'wa' sends through a Fonnte/Wablas-class
     // WhatsApp HTTP gateway. See src/modules/notifications/transports/.
     NOTIFICATION_MODE: z.enum(['log', 'wa']).default('log'),
-    WA_API_URL: z.string().url().optional(),
-    WA_API_TOKEN: z.string().optional(),
+    WA_API_URL: emptyAsUndefined(z.string().url().optional()),
+    WA_API_TOKEN: emptyAsUndefined(z.string().optional()),
 
     // Payment gateway (ADR-0016). 'simulation' (default) keeps the existing
     // dev/demo VA/QR mock behavior with no real money movement; 'live' charges
     // through Tripay and settles only via its signed webhook (SEC-H1: never
     // customer-callable). See src/modules/invoices/payment-gateway/.
     PAYMENT_MODE: z.enum(['simulation', 'live']).default('simulation'),
-    TRIPAY_API_KEY: z.string().optional(),
-    TRIPAY_PRIVATE_KEY: z.string().optional(),
-    TRIPAY_MERCHANT_CODE: z.string().optional(),
-    TRIPAY_BASE_URL: z.string().url().optional(),
+    TRIPAY_API_KEY: emptyAsUndefined(z.string().optional()),
+    TRIPAY_PRIVATE_KEY: emptyAsUndefined(z.string().optional()),
+    TRIPAY_MERCHANT_CODE: emptyAsUndefined(z.string().optional()),
+    TRIPAY_BASE_URL: emptyAsUndefined(z.string().url().optional()),
   })
   .superRefine((env, ctx) => {
+    addProductionIssues(env, ctx);
     // Fail FAST at startup if NOTIFICATION_MODE=wa is armed without the
     // gateway credentials, not silently no-op on the first real dunning
     // cycle in production.

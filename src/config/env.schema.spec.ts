@@ -142,3 +142,100 @@ describe('envSchema — CORS_ORIGINS wildcard (R10-OPS-9)', () => {
     },
   );
 });
+
+describe('envSchema — production guard (no simulation in prod)', () => {
+  const live = {
+    ROUTEROS_MODE: 'live',
+    PAYMENT_MODE: 'live',
+    TRIPAY_API_KEY: 'k',
+    TRIPAY_PRIVATE_KEY: 'p',
+    TRIPAY_MERCHANT_CODE: 'm',
+    TRIPAY_BASE_URL: 'https://tripay.example.com',
+    NOTIFICATION_MODE: 'wa',
+    WA_API_URL: 'https://wa-gateway.example.com/send',
+    WA_API_TOKEN: 'token',
+    COOKIE_SECURE: 'true',
+    CORS_ORIGINS: 'https://app.example.com',
+  };
+  const prod = (over: Record<string, string> = {}) =>
+    baseEnv({ NODE_ENV: 'production', ...live, ...over });
+  const paths = (env: Record<string, string>): string[] => {
+    const result = envSchema.safeParse(env);
+    return result.success ? [] : result.error.issues.map((i) => i.path.join('.'));
+  };
+
+  it('passes in production with every live value', () => {
+    expect(envSchema.safeParse(prod()).success).toBe(true);
+  });
+
+  it.each([
+    ['ROUTEROS_MODE', { ROUTEROS_MODE: 'simulation' }],
+    ['PAYMENT_MODE', { PAYMENT_MODE: 'simulation' }],
+    ['NOTIFICATION_MODE', { NOTIFICATION_MODE: 'log' }],
+    ['COOKIE_SECURE', { COOKIE_SECURE: 'false' }],
+    ['CORS_ORIGINS', { CORS_ORIGINS: 'https://app.example.com, http://localhost:5173' }],
+    ['CORS_ORIGINS', { CORS_ORIGINS: 'http://127.0.0.1:5173' }],
+  ])('rejects %s alone in production', (key, over) => {
+    expect(paths(prod(over))).toEqual([key]);
+  });
+
+  it('reports each violation as its own issue (5 for all defaults)', () => {
+    const result = envSchema.safeParse(baseEnv({ NODE_ENV: 'production' }));
+    expect(result.success).toBe(false);
+    const issues = result.success ? [] : result.error.issues;
+    expect(issues.map((i) => i.path.join('.')).sort()).toEqual(
+      [
+        'CORS_ORIGINS',
+        'COOKIE_SECURE',
+        'NOTIFICATION_MODE',
+        'PAYMENT_MODE',
+        'ROUTEROS_MODE',
+      ].sort(),
+    );
+    expect(issues[0]?.message).toContain('DEPLOY_ENV=demo');
+  });
+
+  it.each([
+    'http://[::1]:5173',
+    'http://0.0.0.0:3000',
+    'http://admin.localhost',
+    'http://localhost.:5173',
+  ])('treats %s as a local CORS origin', (origin) => {
+    expect(paths(prod({ CORS_ORIGINS: origin }))).toEqual(['CORS_ORIGINS']);
+  });
+
+  it('still guards when DEPLOY_ENV is blank (compose forwards "")', () => {
+    expect(paths(baseEnv({ NODE_ENV: 'production', DEPLOY_ENV: '' }))).toHaveLength(5);
+  });
+
+  it('exempts DEPLOY_ENV=demo (all simulation defaults validate)', () => {
+    const parsed = envSchema.parse(baseEnv({ NODE_ENV: 'production', DEPLOY_ENV: 'demo' }));
+    expect(parsed.PAYMENT_MODE).toBe('simulation');
+  });
+
+  it('leaves development untouched', () => {
+    expect(envSchema.safeParse(baseEnv({ NODE_ENV: 'development' })).success).toBe(true);
+  });
+});
+
+describe('envSchema — BOOTSTRAP_TOKEN', () => {
+  it('is optional', () => {
+    expect(envSchema.parse(baseEnv()).BOOTSTRAP_TOKEN).toBeUndefined();
+  });
+
+  it('treats blank BOOTSTRAP_TOKEN and TRIPAY_API_KEY as unset', () => {
+    const parsed = envSchema.parse(baseEnv({ BOOTSTRAP_TOKEN: '', TRIPAY_API_KEY: '' }));
+    expect(parsed.BOOTSTRAP_TOKEN).toBeUndefined();
+    expect(parsed.TRIPAY_API_KEY).toBeUndefined();
+  });
+
+  it('rejects a token shorter than 32 chars', () => {
+    expect(envSchema.safeParse(baseEnv({ BOOTSTRAP_TOKEN: 'short' })).success).toBe(false);
+  });
+
+  it('accepts a 32+ char token', () => {
+    expect(envSchema.parse(baseEnv({ BOOTSTRAP_TOKEN: 'x'.repeat(32) })).BOOTSTRAP_TOKEN).toBe(
+      'x'.repeat(32),
+    );
+  });
+});

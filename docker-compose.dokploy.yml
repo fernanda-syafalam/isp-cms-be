@@ -33,6 +33,10 @@
 # list and how to generate secrets is in .env.dokploy.example.
 x-app-env: &app-env
   NODE_ENV: production
+  # 'demo' on the demo deploy only; lifts the no-simulation-in-production guard.
+  DEPLOY_ENV: ${DEPLOY_ENV:-}
+  # Required by POST /v1/auth/bootstrap on production; unset = bootstrap disabled.
+  BOOTSTRAP_TOKEN: ${BOOTSTRAP_TOKEN:-}
   PORT: "3000"
   # TIME-1: the business clock is WIB (Asia/Jakarta), not UTC. The
   # Dockerfile already sets `ENV TZ=Asia/Jakarta` as the image default;
@@ -63,6 +67,14 @@ x-app-env: &app-env
   OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-isp-cms-be}
   SERVICE_VERSION: ${SERVICE_VERSION:-0.0.0}
   ROUTEROS_MODE: ${ROUTEROS_MODE:-simulation}
+  PAYMENT_MODE: ${PAYMENT_MODE:-simulation}
+  NOTIFICATION_MODE: ${NOTIFICATION_MODE:-log}
+  TRIPAY_API_KEY: ${TRIPAY_API_KEY:-}
+  TRIPAY_PRIVATE_KEY: ${TRIPAY_PRIVATE_KEY:-}
+  TRIPAY_MERCHANT_CODE: ${TRIPAY_MERCHANT_CODE:-}
+  TRIPAY_BASE_URL: ${TRIPAY_BASE_URL:-}
+  WA_API_URL: ${WA_API_URL:-}
+  WA_API_TOKEN: ${WA_API_TOKEN:-}
   # Guards `seed` (dist/infrastructure/database/seed-demo.js): only 'true'
   # arms the wipe-and-reseed. Defaults to 'false' so `seed` is a safe no-op
   # on every ordinary deploy — see that file's header for the full contract.

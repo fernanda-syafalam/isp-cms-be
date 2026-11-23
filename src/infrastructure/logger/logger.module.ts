@@ -35,6 +35,8 @@ import type { AppConfig } from '../../config/configuration';
               'req.body.token',
               'req.body.accessToken',
               'req.body.refreshToken',
+              'req.body.bootstrapToken',
+              '*.bootstrapToken',
               // TOTP 2FA (login challenge + enroll/confirm/disable). `code`
               // is scoped to req.body only (not wildcarded) — it also names
               // unrelated business identifiers (ticket/work-order/voucher
