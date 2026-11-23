@@ -27,13 +27,17 @@ const ARGON2_OPTIONS: argon2.Options = {
   parallelism: 1,
 };
 
+// Wider than the HTTP DTO on purpose: the DTO is the assignment gate; the
+// unregistered onboarding module still passes 'customer' (no login possible).
+type NewUserInput = Omit<CreateUserInput, 'role'> & { role: User['role'] };
+
 @Injectable()
 export class UsersService {
   private readonly logger = new Logger(UsersService.name);
 
   constructor(private readonly repo: UsersRepository) {}
 
-  async create(input: CreateUserInput): Promise<User> {
+  async create(input: NewUserInput): Promise<User> {
     // Normalize once here so the stored row and the conflict-check are
     // both against the canonical form — see common/utils/normalize-email.
     const email = normalizeEmail(input.email);

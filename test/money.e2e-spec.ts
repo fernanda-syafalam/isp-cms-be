@@ -211,7 +211,7 @@ describe('Money + billing mutating endpoints (e2e)', () => {
       expect(fakeInvoicesService.pay).toHaveBeenCalledWith(INVOICE_ID, { method: 'transfer' });
     });
 
-    it('customer: 403 (role without access, guard runs before the service)', async () => {
+    it('customer: 401 (role disabled for the MVP, rejected before the service)', async () => {
       const res = await app.inject({
         method: 'POST',
         url: `/v1/invoices/${INVOICE_ID}/pay`,
@@ -221,7 +221,7 @@ describe('Money + billing mutating endpoints (e2e)', () => {
           authorization: `Bearer ${await tokenFor('customer')}`,
         },
       });
-      expect(res.statusCode).toBe(403);
+      expect(res.statusCode).toBe(401);
     });
 
     it('400s on a malformed body (ZodValidationPipe wiring)', async () => {
@@ -283,7 +283,7 @@ describe('Money + billing mutating endpoints (e2e)', () => {
       expect(res.json()).toEqual(SCHEDULER_RUN_RESULT);
     });
 
-    it('rejects customer and mitra with 403 on every billing mutation', async () => {
+    it('rejects customer and mitra (roles disabled for the MVP) with 401 on every billing mutation', async () => {
       const endpoints = [
         '/v1/billing/run',
         '/v1/billing/isolir-overdue',
@@ -297,7 +297,7 @@ describe('Money + billing mutating endpoints (e2e)', () => {
             url,
             headers: { authorization: `Bearer ${token}` },
           });
-          expect({ role, url, status: res.statusCode }).toEqual({ role, url, status: 403 });
+          expect({ role, url, status: res.statusCode }).toEqual({ role, url, status: 401 });
         }
         const remind = await app.inject({
           method: 'POST',
@@ -305,7 +305,7 @@ describe('Money + billing mutating endpoints (e2e)', () => {
           payload: {},
           headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
         });
-        expect({ role, status: remind.statusCode }).toEqual({ role, status: 403 });
+        expect({ role, status: remind.statusCode }).toEqual({ role, status: 401 });
       }
     });
   });
@@ -335,7 +335,7 @@ describe('Money + billing mutating endpoints (e2e)', () => {
       expect(res.json()).toEqual(PAID_INTENT);
     });
 
-    it('customer: 403 on both routes', async () => {
+    it('customer: 401 on both routes (role disabled for the MVP)', async () => {
       const token = await tokenFor('customer');
       const create = await app.inject({
         method: 'POST',
@@ -343,14 +343,14 @@ describe('Money + billing mutating endpoints (e2e)', () => {
         payload: { invoiceId: INVOICE_ID, channel: 'qris' },
         headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
       });
-      expect(create.statusCode).toBe(403);
+      expect(create.statusCode).toBe(401);
 
       const confirm = await app.inject({
         method: 'POST',
         url: `/v1/payments/intent/${INTENT_ID}/confirm`,
         headers: { authorization: `Bearer ${token}` },
       });
-      expect(confirm.statusCode).toBe(403);
+      expect(confirm.statusCode).toBe(401);
     });
   });
 });

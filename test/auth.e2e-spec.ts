@@ -22,6 +22,7 @@ import { createFakeRedisClient } from '../src/test-utils/fake-redis-client';
 describe('Auth (e2e)', () => {
   let app: NestFastifyApplication;
   let storedUser: User;
+  let disabledUsers: User[];
 
   beforeAll(async () => {
     const passwordHash = await argon2.hash('correct-horse-battery-staple', {
@@ -32,16 +33,26 @@ describe('Auth (e2e)', () => {
       email: 'alice@b.test',
       fullName: 'Alice',
       passwordHash,
-      role: 'customer',
+      role: 'teknisi',
       resellerId: null,
       createdAt: new Date('2026-01-01T00:00:00Z'),
       updatedAt: new Date('2026-01-01T00:00:00Z'),
       deletedAt: null,
     };
 
+    disabledUsers = (['mitra', 'customer'] as const).map((role, i) => ({
+      ...storedUser,
+      id: `00000000-0000-0000-0000-00000000010${i}`,
+      email: `${role}@b.test`,
+      role,
+    }));
+
     const fakeRepo = {
       findById: vi.fn(async (id: string) => (id === storedUser.id ? storedUser : null)),
-      findByEmail: vi.fn(async (email: string) => (email === storedUser.email ? storedUser : null)),
+      findByEmail: vi.fn(async (email: string) => {
+        if (email === storedUser.email) return storedUser;
+        return disabledUsers.find((u) => u.email === email) ?? null;
+      }),
       create: vi.fn(),
       listPage: vi.fn(),
       softDelete: vi.fn(),
@@ -229,5 +240,67 @@ describe('Auth (e2e)', () => {
       headers: { cookie: `refresh_token=${cookie}` },
     });
     expect(refresh.statusCode).toBe(401);
+  });
+
+  describe('MVP-disabled roles (mitra, customer)', () => {
+    // requestId is per-request, so it is the only field allowed to differ.
+    const withoutRequestId = (body: Record<string, unknown>) => ({ ...body, requestId: undefined });
+    const login = (email: string, password: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/v1/auth/login',
+        payload: { email, password },
+        headers: { 'content-type': 'application/json' },
+      });
+
+    it.each(['mitra', 'customer'] as const)(
+      'login with the CORRECT password as %s is identical to a wrong password, with no cookie or token',
+      async (role) => {
+        const baseline = await login(storedUser.email, 'wrong-password');
+        const res = await login(`${role}@b.test`, 'correct-horse-battery-staple');
+        expect(res.statusCode).toBe(401);
+        expect(res.statusCode).toBe(baseline.statusCode);
+        expect(withoutRequestId(res.json())).toEqual(withoutRequestId(baseline.json()));
+        expect(res.cookies).toEqual([]);
+        expect(res.json()).not.toHaveProperty('accessToken');
+        expect(res.json()).not.toHaveProperty('refreshToken');
+      },
+    );
+
+    it.each(['mitra', 'customer'] as const)(
+      'refresh for a user whose role became %s returns the same 401 as an invalid refresh token',
+      async (role) => {
+        const ok = await login(storedUser.email, 'correct-horse-battery-staple');
+        const cookie = getCookie(ok, 'refresh_token');
+        const invalid = await app.inject({
+          method: 'POST',
+          url: '/v1/auth/refresh',
+          headers: { cookie: 'refresh_token=not-a-real-token' },
+        });
+
+        const original = storedUser.role;
+        storedUser.role = role;
+        try {
+          const res = await app.inject({
+            method: 'POST',
+            url: '/v1/auth/refresh',
+            headers: { cookie: `refresh_token=${cookie}` },
+          });
+          expect(res.statusCode).toBe(401);
+          expect(withoutRequestId(res.json())).toEqual(withoutRequestId(invalid.json()));
+          expect(getCookie(res, 'refresh_token')).toBeUndefined();
+        } finally {
+          storedUser.role = original;
+        }
+
+        // The presented token was consumed and its successor revoked.
+        const replay = await app.inject({
+          method: 'POST',
+          url: '/v1/auth/refresh',
+          headers: { cookie: `refresh_token=${cookie}` },
+        });
+        expect(replay.statusCode).toBe(401);
+      },
+    );
   });
 });

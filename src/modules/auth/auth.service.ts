@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import type { AuthUser } from '../../common/decorators/current-user.decorator';
 import { notifyBestEffort } from '../../common/notifications/notify-best-effort';
+import { isRoleDisabled } from '../../common/security/mvp-roles';
 import type { NewAuditLogEntry } from '../../infrastructure/database/schema/audit.schema';
 import { AuditRepository } from '../audit/audit.repository';
 import { SecurityService } from '../security/security.service';
@@ -109,7 +110,9 @@ export class AuthService {
     const passwordOk = await argon2
       .verify(user?.passwordHash ?? fakeHash, password)
       .catch(() => false);
-    if (!user || !passwordOk) {
+    // A disabled role is indistinguishable from a bad password (checked after
+    // the argon2 verify so timing does not reveal it).
+    if (!user || !passwordOk || isRoleDisabled(user.role)) {
       // R8-OBS-2: audited under the SAME 'invalid_credentials' reason for
       // both "no such user" and "wrong password" — do not let the audit
       // trail leak the enumeration signal the response body already hides.
@@ -169,6 +172,11 @@ export class AuthService {
     const user = await this.usersRepo.findById(userId);
     if (!user) {
       // User got deleted between issuance and refresh; treat as logged out.
+      throw new UnauthorizedException('invalid refresh token');
+    }
+    if (isRoleDisabled(user.role)) {
+      // rotate() already minted the successor token; drop it so no live token remains.
+      await this.refreshTokens.revoke(refresh.token);
       throw new UnauthorizedException('invalid refresh token');
     }
     const accessToken = await this.signAccess(user.id, user.role, refresh.sessionId);

@@ -1,5 +1,6 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
+import { AssignableRoleSchema } from '../../../common/security/mvp-roles';
 
 /**
  * Input for POST /v1/users. `.strict()` rejects unknown fields, which
@@ -10,7 +11,7 @@ export const CreateUserSchema = z
     email: z.email().max(255),
     fullName: z.string().trim().min(1).max(120),
     password: z.string().min(12).max(128),
-    role: z.enum(['admin', 'staff', 'customer', 'teknisi', 'mitra']).default('customer'),
+    role: AssignableRoleSchema,
   })
   .strict();
 

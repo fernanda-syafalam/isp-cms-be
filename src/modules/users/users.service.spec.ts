@@ -59,7 +59,7 @@ describe('UsersService', () => {
         email: 'a@b.test',
         fullName: 'A B',
         password: 'correct horse battery staple',
-        role: 'customer',
+        role: 'staff',
       });
 
       expect(created).toEqual(sampleUser);
@@ -77,7 +77,7 @@ describe('UsersService', () => {
           email: sampleUser.email,
           fullName: 'X',
           password: 'a-fresh-password-here',
-          role: 'customer',
+          role: 'staff',
         }),
       ).rejects.toBeInstanceOf(ConflictException);
       expect(repo.create).not.toHaveBeenCalled();
@@ -91,7 +91,7 @@ describe('UsersService', () => {
         email: '  Bob@X.com  ',
         fullName: 'Bob',
         password: 'correct horse battery staple',
-        role: 'customer',
+        role: 'staff',
       });
 
       expect(repo.findByEmail).toHaveBeenCalledWith('bob@x.com');
@@ -183,7 +183,7 @@ describe('UsersService', () => {
         email: 'verify@test',
         fullName: 'V',
         password: 'another-secret-pass-9',
-        role: 'customer',
+        role: 'staff',
       });
 
       const ok = await argon2.verify(created.passwordHash, 'another-secret-pass-9');

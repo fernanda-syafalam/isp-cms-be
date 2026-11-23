@@ -27,7 +27,7 @@ describe('Settings role-scoped exposure (e2e)', () => {
     email: 'actor@settings.test',
     fullName: 'Actor',
     passwordHash: 'irrelevant',
-    role: 'customer',
+    role: 'admin',
     resellerId: null,
     createdAt: new Date('2026-01-01T00:00:00Z'),
     updatedAt: new Date('2026-01-01T00:00:00Z'),
@@ -128,19 +128,22 @@ describe('Settings role-scoped exposure (e2e)', () => {
     });
   });
 
-  it('rejects staff and customer with 403 on GET /v1/settings', async () => {
-    for (const role of ['staff', 'customer'] as const) {
+  it('rejects staff with 403 and customer with 401 on GET /v1/settings', async () => {
+    for (const [role, status] of [
+      ['staff', 403],
+      ['customer', 401],
+    ] as const) {
       const res = await app.inject({
         method: 'GET',
         url: '/v1/settings',
         headers: { authorization: `Bearer ${await tokenFor(role)}` },
       });
-      expect({ role, status: res.statusCode }).toEqual({ role, status: 403 });
+      expect({ role, status: res.statusCode }).toEqual({ role, status });
     }
   });
 
   it('serves only the invoice-needed subset on GET /v1/settings/public, for every role', async () => {
-    for (const role of ['admin', 'staff', 'customer'] as const) {
+    for (const role of ['admin', 'staff', 'teknisi'] as const) {
       const res = await app.inject({
         method: 'GET',
         url: '/v1/settings/public',

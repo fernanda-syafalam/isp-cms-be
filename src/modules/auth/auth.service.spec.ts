@@ -12,6 +12,9 @@ import { UsersRepository } from '../users/users.repository';
 import { UsersService } from '../users/users.service';
 import { AuthService } from './auth.service';
 
+const DISABLED_ROLES = ['mitra', 'customer'] as const;
+const ENABLED_ROLES = ['admin', 'staff', 'teknisi'] as const;
+
 const meta: SessionMeta = { userAgent: 'Mozilla/5.0 (Test)', ip: '203.0.113.1' };
 
 describe('AuthService', () => {
@@ -43,7 +46,7 @@ describe('AuthService', () => {
       email: 'a@b.test',
       fullName: 'A',
       passwordHash,
-      role: 'customer',
+      role: 'admin',
       resellerId: null,
       createdAt: new Date('2026-01-01T00:00:00Z'),
       updatedAt: new Date('2026-01-01T00:00:00Z'),
@@ -168,6 +171,46 @@ describe('AuthService', () => {
       expect(out.accessToken).toBe('signed.jwt.value');
     });
 
+    describe('MVP-disabled roles', () => {
+      it.each(DISABLED_ROLES)(
+        'rejects a %s login with the same 401 as a wrong password, issuing nothing',
+        async (role) => {
+          repo.findByEmail.mockResolvedValue({ ...user, role });
+          const bad = await service
+            .login(user.email, 'wrong-password', undefined, meta)
+            .catch((e: UnauthorizedException) => e);
+          const disabled = await service
+            .login(user.email, password, undefined, meta)
+            .catch((e: UnauthorizedException) => e);
+          expect(disabled).toBeInstanceOf(UnauthorizedException);
+          expect((disabled as UnauthorizedException).getStatus()).toBe(
+            (bad as UnauthorizedException).getStatus(),
+          );
+          expect((disabled as UnauthorizedException).getResponse()).toEqual(
+            (bad as UnauthorizedException).getResponse(),
+          );
+          expect(security.verifyLoginChallenge).not.toHaveBeenCalled();
+          expect(refresh.mint).not.toHaveBeenCalled();
+          expect(jwt.signAsync).not.toHaveBeenCalled();
+          expect(audit.record).not.toHaveBeenCalledWith(
+            expect.objectContaining({ summary: expect.stringContaining('success') }),
+          );
+          expect(audit.record).toHaveBeenCalledTimes(2);
+          const [badAudit, disabledAudit] = audit.record.mock.calls.map(([entry]) => entry);
+          expect(disabledAudit).toEqual(badAudit);
+          expect(disabledAudit.summary).toContain('invalid_credentials');
+          expect(disabledAudit.entityId).toBeUndefined();
+        },
+      );
+
+      it.each(ENABLED_ROLES)('still logs a %s in', async (role) => {
+        repo.findByEmail.mockResolvedValue({ ...user, role });
+        const out = await service.login(user.email, password, undefined, meta);
+        expect(out.user.role).toBe(role);
+        expect(refresh.mint).toHaveBeenCalled();
+      });
+    });
+
     describe('with two-factor enabled', () => {
       it('rejects with totp_required when no code is submitted, never touching the password-check-only path', async () => {
         repo.findByEmail.mockResolvedValue(user);
@@ -271,6 +314,37 @@ describe('AuthService', () => {
       await expect(service.refresh('refresh-A', meta)).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
+    });
+
+    describe('MVP-disabled roles', () => {
+      const rotated = {
+        userId: '00000000-0000-0000-0000-000000000001',
+        sessionId: 'sess-A',
+        refresh: { token: 'refresh-B', expiresInSeconds: 604_800, sessionId: 'sess-A' },
+      };
+
+      it.each(DISABLED_ROLES)(
+        'rejects a %s refresh with 401 and revokes the rotated token',
+        async (role) => {
+          refresh.rotate.mockResolvedValue(rotated);
+          repo.findById.mockResolvedValue({ ...user, role });
+          await expect(service.refresh('refresh-A', meta)).rejects.toMatchObject({
+            message: 'invalid refresh token',
+            status: 401,
+          });
+          expect(refresh.revoke).toHaveBeenCalledWith('refresh-B');
+          expect(jwt.signAsync).not.toHaveBeenCalled();
+          expect(audit.record).not.toHaveBeenCalled();
+        },
+      );
+
+      it.each(ENABLED_ROLES)('still refreshes a %s', async (role) => {
+        refresh.rotate.mockResolvedValue(rotated);
+        repo.findById.mockResolvedValue({ ...user, role });
+        const out = await service.refresh('refresh-A', meta);
+        expect(out.user.role).toBe(role);
+        expect(refresh.revoke).not.toHaveBeenCalled();
+      });
     });
 
     it('lets RefreshTokenService.rotate raise (unknown / replayed token)', async () => {

@@ -48,7 +48,7 @@ describe('Password lifecycle (e2e)', () => {
       email: 'alice@b.test',
       fullName: 'Alice',
       passwordHash: await argon2.hash(OLD_PASSWORD, { type: argon2.argon2id }),
-      role: 'customer',
+      role: 'teknisi',
       resellerId: null,
       createdAt: new Date('2026-01-01T00:00:00Z'),
       updatedAt: new Date('2026-01-01T00:00:00Z'),
