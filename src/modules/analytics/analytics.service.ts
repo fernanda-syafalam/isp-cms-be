@@ -3,7 +3,6 @@ import { daysBetweenDates, wibDateString } from '../../common/utils/wib-date';
 import type { Invoice } from '../../infrastructure/database/schema/invoices.schema';
 import { CustomersRepository } from '../customers/customers.repository';
 import { InvoicesRepository } from '../invoices/invoices.repository';
-import { SlaCreditsRepository } from '../sla-credits/sla-credits.repository';
 import { TicketsRepository } from '../tickets/tickets.repository';
 import type { DashboardSummary } from './dto/dashboard-summary-response.dto';
 import type { ReportsSummary } from './dto/reports-summary-response.dto';
@@ -42,32 +41,22 @@ export class AnalyticsService {
     private readonly customers: CustomersRepository,
     private readonly invoices: InvoicesRepository,
     private readonly tickets: TicketsRepository,
-    private readonly slaCredits: SlaCreditsRepository,
   ) {}
 
   async getDashboard(): Promise<DashboardSummary> {
     const now = new Date();
     const window = buildMonthWindow(now);
 
-    const [
-      statusCounts,
-      newThisMonth,
-      atRisk,
-      activeBillable,
-      unpaid,
-      revenueRows,
-      ticketCounts,
-      slaCreditsPending,
-    ] = await Promise.all([
-      this.customers.countByStatus(),
-      this.customers.countCreatedSince(startOfMonthUtc(now)),
-      this.customers.countAtRisk(),
-      this.customers.findActiveBillable(),
-      this.invoices.listUnpaid(),
-      this.invoices.revenueByMonth(window.since),
-      this.tickets.countByStatus(),
-      this.slaCredits.countPending(),
-    ]);
+    const [statusCounts, newThisMonth, atRisk, activeBillable, unpaid, revenueRows, ticketCounts] =
+      await Promise.all([
+        this.customers.countByStatus(),
+        this.customers.countCreatedSince(startOfMonthUtc(now)),
+        this.customers.countAtRisk(),
+        this.customers.findActiveBillable(),
+        this.invoices.listUnpaid(),
+        this.invoices.revenueByMonth(window.since),
+        this.tickets.countByStatus(),
+      ]);
 
     const totalCustomers = sumValues(statusCounts);
     const mrr = activeBillable.reduce((sum, c) => sum + c.planPriceMonthly, 0);
@@ -99,7 +88,6 @@ export class AnalyticsService {
       arTrend: flat(arOutstanding),
       commandCenter: {
         churnRate: ratio(atRisk, totalCustomers, 0),
-        slaCreditsPending,
       },
       customerMix: [
         { label: 'Prospek', count: statusCounts.prospek },

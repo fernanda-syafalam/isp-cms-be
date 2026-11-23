@@ -85,7 +85,6 @@ export class OnboardingService {
       ktp: input.ktp ?? null,
       npwp: input.npwp ?? null,
       consentAt: input.consent ? new Date() : null,
-      resellerId: input.resellerId ?? null,
     });
     await this.workOrders.scheduleInstallForCustomer({
       customerId: customer.id,
@@ -139,7 +138,6 @@ export class OnboardingService {
       areaName: input.areaName,
       planId: input.planId,
       userId: login?.userId ?? null,
-      resellerId: input.resellerId ?? null,
     });
     await this.workOrders.scheduleInstall({
       customerId: customer.id,

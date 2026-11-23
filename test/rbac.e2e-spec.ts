@@ -177,7 +177,6 @@ describe('Staff read-surface gate (e2e)', () => {
     '/v1/invoices',
     '/v1/payments',
     '/v1/tickets',
-    '/v1/resellers',
     '/v1/routers',
     '/v1/routers/00000000-0000-0000-0000-0000000000r1/secrets',
     '/v1/inventory',
@@ -234,7 +233,7 @@ describe('Staff read-surface gate (e2e)', () => {
 
   it('keeps teknisi out of the staff-only surface', async () => {
     const token = await tokenFor('teknisi');
-    for (const url of ['/v1/customers', '/v1/invoices', '/v1/users', '/v1/resellers']) {
+    for (const url of ['/v1/customers', '/v1/invoices', '/v1/users']) {
       const res = await app.inject({
         method: 'GET',
         url,
@@ -272,15 +271,6 @@ describe('Staff read-surface gate (e2e)', () => {
         byStatus: { prospek: 0, instalasi: 0, aktif: 0, isolir: 0, berhenti: 0 },
       },
     });
-  });
-
-  it('404s a mitra reading a reseller that is not theirs', async () => {
-    const res = await app.inject({
-      method: 'GET',
-      url: '/v1/resellers/00000000-0000-0000-0000-0000000000e9',
-      headers: { authorization: `Bearer ${await tokenFor('mitra')}` },
-    });
-    expect(res.statusCode).toBe(404);
   });
 
   // ADR-0010 amendment / ADR-0015 (SEC-4): mitra reads a customer's own

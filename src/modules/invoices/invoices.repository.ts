@@ -307,8 +307,7 @@ export class InvoicesRepository {
    * Writing `customers` here is the sanctioned money-path exception to "one
    * repository per table" (as in `VouchersRepository.settle`). `reactivated`
    * reports whether an isolir customer was flipped back to `aktif`; re-enabling
-   * the PPPoE secret and posting the reseller commission stay in the service,
-   * outside this transaction.
+   * the PPPoE secret stays in the service, outside this transaction.
    */
   async recordPayment(
     invoiceId: string,

@@ -10,7 +10,12 @@ describe('UpdateCustomerSchema', () => {
   });
 
   it('still accepts the editable profile fields', () => {
-    const parsed = UpdateCustomerSchema.parse({ fullName: 'Budi', resellerId: null });
-    expect(parsed).toEqual({ fullName: 'Budi', resellerId: null });
+    const parsed = UpdateCustomerSchema.parse({ fullName: 'Budi' });
+    expect(parsed).toEqual({ fullName: 'Budi' });
+  });
+
+  it('rejects resellerId (resellers are out of the MVP; strict schema)', () => {
+    const result = UpdateCustomerSchema.safeParse({ resellerId: null });
+    expect(result.success).toBe(false);
   });
 });

@@ -40,7 +40,6 @@ export const DashboardSummarySchema = z.object({
   // Cross-module rollup surfaced as the dashboard "command center".
   commandCenter: z.object({
     churnRate: z.number().min(0).max(1),
-    slaCreditsPending: z.number().int().nonnegative(),
   }),
   // Subscriber distribution by lifecycle status.
   customerMix: z.array(StatusCountSchema),

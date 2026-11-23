@@ -11,7 +11,6 @@ import { wibDateString, wibMonthStart } from '../../common/utils/wib-date';
 import type { Invoice, Payment } from '../../infrastructure/database/schema/invoices.schema';
 import { CustomersRepository } from '../customers/customers.repository';
 import { NotificationsService } from '../notifications/notifications.service';
-import { ResellersRepository } from '../resellers/resellers.repository';
 import { SecretEnforcementService } from '../router-resources/secret-enforcement.service';
 import { SettingsService } from '../settings/settings.service';
 import { SlaCreditsRepository } from '../sla-credits/sla-credits.repository';
@@ -49,8 +48,6 @@ export class InvoicesService {
     private readonly secrets: SecretEnforcementService,
     // Tax + due-days policy (P2.3) — read at run time so admin edits apply.
     private readonly settings: SettingsService,
-    // Reseller commission on payment (P3.D.1, ADR-0010).
-    private readonly resellers: ResellersRepository,
     // Absorbs pending SLA credits into the invoice discount (P3.A.4).
     private readonly slaCredits: SlaCreditsRepository,
     // invoice_created/paid via the retried queue (ADR-0012); best-effort, see notifyBestEffort.
@@ -157,11 +154,10 @@ export class InvoicesService {
     if (reactivated) {
       await this.reenableSecrets(invoice.customerId);
     }
-    // Reactivation, commission and the 'paid' notice key off the invoice
+    // Reactivation and the 'paid' notice key off the invoice
     // reaching 'paid', never a partial payment. The notice fires after
     // recordPayment commits (ADR-0012) so a rollback can't send a false one.
     if (appliedAmount > 0 && updated.status === 'paid') {
-      await this.postResellerCommission(invoice.customerId, invoice.id, total);
       await this.notifyPaid(updated, total);
     }
     this.logger.log(
@@ -179,38 +175,6 @@ export class InvoicesService {
       await this.secrets.applyDisabledForCustomer(customerId, false);
     } catch (err) {
       this.logger.error({ customerId, err }, 'secret re-enable failed after payment');
-    }
-  }
-
-  /**
-   * Credit the acquiring reseller's commission on a paid invoice (P3.D.1,
-   * ADR-0010). Idempotent by invoice id; no-op without a reseller or with a
-   * zero commission rate.
-   */
-  private async postResellerCommission(
-    customerId: string,
-    invoiceId: string,
-    paidTotal: number,
-  ): Promise<void> {
-    const customer = await this.customers.findById(customerId);
-    if (!customer?.resellerId) return;
-    const reseller = await this.resellers.findById(customer.resellerId);
-    if (!reseller || reseller.commissionPct <= 0) return;
-
-    const commission = Math.round(paidTotal * reseller.commissionPct);
-    if (commission <= 0) return;
-
-    const posted = await this.resellers.postCommissionForInvoice({
-      resellerId: reseller.id,
-      amount: commission,
-      invoiceId,
-      note: `Komisi tagihan ${invoiceId}`,
-    });
-    if (posted) {
-      this.logger.log(
-        { resellerId: reseller.id, invoiceId, commission },
-        'reseller commission posted',
-      );
     }
   }
 

@@ -24,13 +24,11 @@ import { InventoryModule } from './modules/inventory/inventory.module';
 import { InvoicesModule } from './modules/invoices/invoices.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { PlansModule } from './modules/plans/plans.module';
-import { ResellersModule } from './modules/resellers/resellers.module';
 import { RouterResourcesModule } from './modules/router-resources/router-resources.module';
 import { RoutersModule } from './modules/routers/routers.module';
 import { SecurityModule } from './modules/security/security.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { SetupModule } from './modules/setup/setup.module';
-import { SlaCreditsModule } from './modules/sla-credits/sla-credits.module';
 import { TicketsModule } from './modules/tickets/tickets.module';
 import { UsersModule } from './modules/users/users.module';
 import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
@@ -46,7 +44,9 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
  * only (queue registration + *Service.enqueue); its consumer
  * (NotificationsProcessor) lives in NotificationsWorkerModule, imported
  * only by WorkerModule. EmailModule and its consumer are unregistered
- * for the MVP (source kept on disk). SchedulerModule (SchedulerProcessor + the scheduler's own
+ * for the MVP (source kept on disk), as are ResellersModule and SlaCreditsModule
+ * (commission/payout and the SLA-credit screens are v1.1; SlaCreditsRepository is still
+ * provided to InvoicesModule so billing absorbs proration credits). SchedulerModule (SchedulerProcessor + the scheduler's own
  * repeatable-job registration) is entirely worker-side and intentionally
  * absent from this import list. See test/worker-isolation.e2e-spec.ts,
  * which fails if a processor is reintroduced here.
@@ -104,13 +104,11 @@ import { WorkOrdersModule } from './modules/work-orders/work-orders.module';
     InvoicesModule,
     NotificationsModule,
     PlansModule,
-    ResellersModule,
     RouterResourcesModule,
     RoutersModule,
     SecurityModule,
     SettingsModule,
     SetupModule,
-    SlaCreditsModule,
     TicketsModule,
     UsersModule,
     WorkOrdersModule,
