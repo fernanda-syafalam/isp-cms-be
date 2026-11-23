@@ -13,6 +13,7 @@ import { ZodSerializerDto } from 'nestjs-zod';
 import { z } from 'zod';
 import { Audit } from '../../common/decorators/audit.decorator';
 import { type AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
+import { MvpDisabled } from '../../common/decorators/mvp-disabled.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CustomersService } from './customers.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
@@ -114,6 +115,7 @@ export class CustomersController {
 
   @Roles('admin', 'staff')
   @Audit('customer.suspend')
+  @MvpDisabled()
   @Post(':id/suspend')
   @ZodSerializerDto(CustomerResponseDto)
   suspend(@Param('id') id: string) {
@@ -122,6 +124,7 @@ export class CustomersController {
 
   @Roles('admin', 'staff')
   @Audit('customer.resume')
+  @MvpDisabled()
   @Post(':id/resume')
   @ZodSerializerDto(CustomerResponseDto)
   resume(@Param('id') id: string) {
@@ -197,6 +200,7 @@ export class CustomersController {
 
   @Roles('admin', 'staff')
   @Audit('customer.relocate')
+  @MvpDisabled()
   @Post(':id/relocate')
   @ZodSerializerDto(CustomerResponseDto)
   relocate(@Param('id') id: string, @Body() body: RelocateDto) {
@@ -213,6 +217,7 @@ export class CustomersController {
 
   @Roles('admin', 'staff', 'teknisi')
   @Audit('customer.onu_reboot')
+  @MvpDisabled()
   @Post(':id/onu/reboot')
   @ZodSerializerDto(CustomerResponseDto)
   rebootOnu(@Param('id') id: string, @CurrentUser() user: AuthUser) {
@@ -221,6 +226,7 @@ export class CustomersController {
 
   @Roles('admin', 'staff', 'teknisi')
   @Audit('customer.onu_wifi')
+  @MvpDisabled()
   @Post(':id/onu/wifi')
   @ZodSerializerDto(CustomerResponseDto)
   setOnuWifi(@Param('id') id: string, @Body() body: SetOnuWifiDto, @CurrentUser() user: AuthUser) {

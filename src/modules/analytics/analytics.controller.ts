@@ -1,5 +1,6 @@
 import { Controller, Get } from '@nestjs/common';
 import { ZodSerializerDto } from 'nestjs-zod';
+import { MvpDisabled } from '../../common/decorators/mvp-disabled.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { AnalyticsService } from './analytics.service';
 import { DashboardSummaryDto } from './dto/dashboard-summary-response.dto';
@@ -21,6 +22,7 @@ export class AnalyticsController {
     return this.analytics.getDashboard();
   }
 
+  @MvpDisabled()
   @Get('reports')
   @ZodSerializerDto(ReportsSummaryDto)
   getReports() {
