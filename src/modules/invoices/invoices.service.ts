@@ -12,7 +12,7 @@ import type { Invoice, Payment } from '../../infrastructure/database/schema/invo
 import { CustomersRepository } from '../customers/customers.repository';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ResellersRepository } from '../resellers/resellers.repository';
-import { SecretsRepository } from '../router-resources/secrets.repository';
+import { SecretEnforcementService } from '../router-resources/secret-enforcement.service';
 import { SettingsService } from '../settings/settings.service';
 import { SlaCreditsRepository } from '../sla-credits/sla-credits.repository';
 import type { BillingRunResult } from './dto/billing-run-result.dto';
@@ -37,8 +37,8 @@ export class InvoicesService {
     // Billing owns a customer's outstanding balance + payment-driven
     // reactivation, written through the customers repository seam.
     private readonly customers: CustomersRepository,
-    // Payment-driven reactivation must re-enable the PPPoE secret (ADR-0008).
-    private readonly secrets: SecretsRepository,
+    // Payment-driven reactivation must re-enable the PPPoE secret in the DB and on the router (ADR-0008).
+    private readonly secrets: SecretEnforcementService,
     // Tax + due-days policy (P2.3) — read at run time so admin edits apply.
     private readonly settings: SettingsService,
     // Reseller commission on payment (P3.D.1, ADR-0010).
@@ -137,7 +137,7 @@ export class InvoicesService {
     // Router secret belongs to another module: runs outside the invoice/customer
     // transaction (ADR-0008).
     if (reactivated) {
-      await this.secrets.setDisabledByCustomerId(invoice.customerId, false);
+      await this.reenableSecrets(invoice.customerId);
     }
     // Reactivation, commission and the 'paid' notice key off the invoice
     // reaching 'paid', never a partial payment. The notice fires after
@@ -151,6 +151,17 @@ export class InvoicesService {
       'invoice payment recorded',
     );
     return toInvoiceResponse(updated);
+  }
+
+  // The payment is already committed, so an enforcement failure must not fail it.
+  // The RouterOS adapter logs router I/O errors itself; this only catches DB or
+  // target-lookup failures. Nothing retries them: no reconcile job yet.
+  private async reenableSecrets(customerId: string): Promise<void> {
+    try {
+      await this.secrets.applyDisabledForCustomer(customerId, false);
+    } catch (err) {
+      this.logger.error({ customerId, err }, 'secret re-enable failed after payment');
+    }
   }
 
   /**
