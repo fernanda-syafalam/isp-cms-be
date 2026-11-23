@@ -168,7 +168,6 @@ describe('MVP-disabled endpoints (e2e)', () => {
     ['DELETE', `/v1/routers/${ROUTER}/queues/${ID}`],
     ['GET', '/v1/payments/reconciliation'],
     ['GET', '/v1/analytics/reports'],
-    ['POST', '/v1/topology/customer-drop'],
   ];
 
   // Compare with a genuinely unknown route (same method) so a 404 coming from a

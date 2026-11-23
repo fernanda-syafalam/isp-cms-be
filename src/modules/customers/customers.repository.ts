@@ -37,6 +37,12 @@ type DbTx = Parameters<Parameters<Db['transaction']>[0]>[0];
 // so the money-critical proration transaction is auditable within this file.
 const UNPAID_STATUSES = ['pending', 'partial', 'overdue'] as const;
 
+/** Minimal customer projection the topology module needs (see findForTopology). */
+export type CustomerTopologyRow = Pick<
+  Customer,
+  'id' | 'customerNo' | 'fullName' | 'status' | 'lat' | 'lng' | 'phone'
+> & { planName: string | null };
+
 // Customer joined with plan and reseller names (derived, never stored).
 // planName: inner join (planId required); resellerName: left join (optional).
 export type CustomerRow = Customer & { planName: string; resellerName: string | null };
@@ -198,6 +204,39 @@ export class CustomersRepository {
       .where(eq(customers.id, id))
       .limit(1);
     return row ?? null;
+  }
+
+  // Read-only projection for the network map: the customer's identity, lifecycle
+  // status and the coordinates that are the source of truth for its map node.
+  async findForTopology(id: string): Promise<CustomerTopologyRow | null> {
+    const [row] = await this.db
+      .select({
+        id: customers.id,
+        customerNo: customers.customerNo,
+        fullName: customers.fullName,
+        status: customers.status,
+        lat: customers.lat,
+        lng: customers.lng,
+        phone: customers.phone,
+        planName: plans.name,
+      })
+      .from(customers)
+      .leftJoin(plans, eq(customers.planId, plans.id))
+      .where(eq(customers.id, id))
+      .limit(1);
+    return row ?? null;
+  }
+
+  // Single-table write for the map's "click to place" flow. Only fills a customer
+  // that has NO coordinates yet (lat AND lng null), so a concurrent edit is never
+  // overwritten. Returns false when 0 rows matched (someone else set it first).
+  async setLocation(id: string, lat: number, lng: number): Promise<boolean> {
+    const rows = await this.db
+      .update(customers)
+      .set({ lat, lng, updatedAt: new Date() })
+      .where(and(eq(customers.id, id), isNull(customers.lat), isNull(customers.lng)))
+      .returning({ id: customers.id });
+    return rows.length > 0;
   }
 
   // Batched findById for the billing cron (R6-DB-2); order is unspecified

@@ -8,6 +8,7 @@ import { AppModule } from '../src/app.module';
 import { DrizzleService } from '../src/infrastructure/database/drizzle.service';
 import type { User } from '../src/infrastructure/database/schema/users.schema';
 import { RedisService } from '../src/infrastructure/redis/redis.service';
+import { CustomersRepository } from '../src/modules/customers/customers.repository';
 import { TopologyRepository } from '../src/modules/topology/topology.repository';
 import { UsersRepository } from '../src/modules/users/users.repository';
 
@@ -56,7 +57,10 @@ describe('Topology routes (e2e)', () => {
     listSplitters: vi.fn(async () => []),
     listStrands: vi.fn(async () => []),
     deleteNode: vi.fn(async () => false),
+    customerDrop: vi.fn(),
   };
+
+  const fakeCustomersRepo = { findForTopology: vi.fn(), setLocation: vi.fn() };
 
   const NODE_ID = '00000000-0000-4000-8000-0000000000d1';
 
@@ -85,6 +89,8 @@ describe('Topology routes (e2e)', () => {
       })
       .overrideProvider(UsersRepository)
       .useValue(fakeUsersRepo)
+      .overrideProvider(CustomersRepository)
+      .useValue(fakeCustomersRepo)
       .overrideProvider(TopologyRepository)
       .useValue(fakeTopologyRepo)
       .compile();
@@ -163,13 +169,103 @@ describe('Topology routes (e2e)', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('POST /v1/topology/customer-drop is closed (404) for admin', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/v1/topology/customer-drop',
-      headers: await headersFor(admin),
-      payload: {},
+  describe('POST /v1/topology/customer-drop', () => {
+    const CUSTOMER_ID = '00000000-0000-4000-8000-0000000000c1';
+    const payload = { customerId: CUSTOMER_ID, odpId: 'odp-1', lat: -6.7, lng: 110.9 };
+    const customer = {
+      id: CUSTOMER_ID,
+      customerNo: 'C-9001',
+      fullName: 'Budi',
+      status: 'aktif' as const,
+      lat: -6.55,
+      lng: 110.68,
+      phone: '0812',
+      planName: null,
+    };
+
+    it('is 201 for teknisi when the customer has coordinates', async () => {
+      fakeCustomersRepo.findForTopology.mockResolvedValueOnce(customer);
+      fakeTopologyRepo.customerDrop.mockResolvedValueOnce({
+        id: `${CUSTOMER_ID}-node`,
+        name: 'Budi',
+        type: 'customer',
+        status: 'up',
+        lat: -6.55,
+        lng: 110.68,
+        parentId: 'odp-1',
+        meta: { customerId: CUSTOMER_ID, lifecycle: 'aktif' },
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        updatedAt: new Date('2026-01-01T00:00:00Z'),
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/topology/customer-drop',
+        headers: await headersFor(technician),
+        payload,
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().id).toBe(`${CUSTOMER_ID}-node`);
     });
-    expect(res.statusCode).toBe(404);
+
+    it('is 201 and writes the body coordinates to a customer without any', async () => {
+      fakeCustomersRepo.setLocation.mockClear();
+      fakeCustomersRepo.findForTopology.mockResolvedValueOnce({
+        ...customer,
+        lat: null,
+        lng: null,
+      });
+      fakeCustomersRepo.setLocation.mockResolvedValueOnce(true);
+      fakeTopologyRepo.customerDrop.mockResolvedValueOnce({
+        id: `${CUSTOMER_ID}-node`,
+        name: 'Budi',
+        type: 'customer',
+        status: 'up',
+        lat: -6.7,
+        lng: 110.9,
+        parentId: 'odp-1',
+        meta: { customerId: CUSTOMER_ID },
+        createdAt: new Date('2026-01-01T00:00:00Z'),
+        updatedAt: new Date('2026-01-01T00:00:00Z'),
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/topology/customer-drop',
+        headers: await headersFor(admin),
+        payload,
+      });
+      expect(res.statusCode).toBe(201);
+      expect(fakeCustomersRepo.setLocation).toHaveBeenCalledWith(CUSTOMER_ID, -6.7, 110.9);
+    });
+
+    it('is 400 for an out-of-range latitude or a non-uuid customerId', async () => {
+      for (const bad of [
+        { ...payload, lat: 91 },
+        { ...payload, customerId: 'cust-12' },
+      ]) {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/v1/topology/customer-drop',
+          headers: await headersFor(admin),
+          payload: bad,
+        });
+        expect(res.statusCode).toBe(400);
+      }
+    });
+
+    it('is 422 when neither the customer nor the body has coordinates', async () => {
+      fakeCustomersRepo.findForTopology.mockResolvedValueOnce({
+        ...customer,
+        lat: null,
+        lng: null,
+      });
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/topology/customer-drop',
+        headers: await headersFor(admin),
+        payload: { customerId: CUSTOMER_ID, odpId: 'odp-1' },
+      });
+      expect(res.statusCode).toBe(422);
+      expect(JSON.stringify(res.json())).toContain('C-9001');
+    });
   });
 });

@@ -285,6 +285,19 @@ describe('CustomersRepository (integration)', () => {
     expect(page.items.map((c) => c.fullName)).toEqual(['A', 'B']);
   });
 
+  it('findForTopology joins the plan; setLocation only fills a customer without coordinates', async () => {
+    const c = await repo.create({ fullName: 'Budi', phone: '0811', address: 'Jl. A', planId });
+    const before = await repo.findForTopology(c.id);
+    expect(before).toMatchObject({ planName: 'Home 20', phone: '0811', lat: null, lng: null });
+
+    expect(await repo.setLocation(c.id, -6.5, 110.6)).toBe(true);
+    // A second write must not overwrite the stored coordinates.
+    expect(await repo.setLocation(c.id, 1, 2)).toBe(false);
+    const after = await repo.findForTopology(c.id);
+    expect(after).toMatchObject({ lat: -6.5, lng: 110.6 });
+    expect(await repo.findForTopology('00000000-0000-4000-8000-000000000000')).toBeNull();
+  });
+
   it('updates profile fields and bumps updated_at', async () => {
     const created = await repo.create({
       fullName: 'Budi',

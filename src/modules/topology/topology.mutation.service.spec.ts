@@ -1,21 +1,31 @@
+import { NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
+import { PinoLogger } from 'nestjs-pino';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   CableRow,
   NetworkNodeRow,
 } from '../../infrastructure/database/schema/topology.schema';
+import { CustomersRepository } from '../customers/customers.repository';
 import { TopologyMutationService } from './topology.mutation.service';
 import { TopologyRepository } from './topology.repository';
 
 const customerNode: NetworkNodeRow = {
-  id: 'cust-12-node',
+  id: '11111111-1111-4111-8111-111111111111-node',
   name: 'Lukman Hakim',
   type: 'customer',
   status: 'up',
   lat: -6.55,
   lng: 110.68,
   parentId: 'olt-1-odc-1-odp-1',
-  meta: { customerId: 'cust-12', planName: 'Home 50', coreNo: 3, lifecycle: 'aktif' },
+  meta: {
+    customerId: '11111111-1111-4111-8111-111111111111',
+    planName: 'Home 50',
+    coreNo: 3,
+    lifecycle: 'aktif',
+    ponPort: '0/3/3',
+    onuSerial: 'ZTEG10000012',
+  },
   createdAt: new Date('2026-06-16T00:00:00.000Z'),
   updatedAt: new Date('2026-06-16T00:00:00.000Z'),
 };
@@ -48,7 +58,12 @@ const cable: CableRow = {
 
 describe('TopologyMutationService', () => {
   let service: TopologyMutationService;
+  let logger: { setContext: ReturnType<typeof vi.fn>; info: ReturnType<typeof vi.fn> };
   let repo: Record<string, ReturnType<typeof vi.fn>>;
+  let customers: {
+    findForTopology: ReturnType<typeof vi.fn>;
+    setLocation: ReturnType<typeof vi.fn>;
+  };
 
   beforeEach(async () => {
     repo = {
@@ -61,8 +76,15 @@ describe('TopologyMutationService', () => {
       updateCableRoute: vi.fn(),
       customerDrop: vi.fn(),
     };
+    logger = { setContext: vi.fn(), info: vi.fn() };
+    customers = { findForTopology: vi.fn(), setLocation: vi.fn() };
     const moduleRef: TestingModule = await Test.createTestingModule({
-      providers: [TopologyMutationService, { provide: TopologyRepository, useValue: repo }],
+      providers: [
+        TopologyMutationService,
+        { provide: TopologyRepository, useValue: repo },
+        { provide: CustomersRepository, useValue: customers },
+        { provide: PinoLogger, useValue: logger },
+      ],
     }).compile();
     service = moduleRef.get(TopologyMutationService);
   });
@@ -106,36 +128,110 @@ describe('TopologyMutationService', () => {
   });
 
   describe('customerDrop', () => {
-    it('resolves the subscriber and forwards a built meta + connection', async () => {
+    const dropBody = {
+      customerId: '11111111-1111-4111-8111-111111111111',
+      odpId: 'olt-1-odc-1-odp-1',
+      lat: 1,
+      lng: 2,
+    };
+    const dbCustomer = {
+      id: '11111111-1111-4111-8111-111111111111',
+      customerNo: 'C-9012',
+      fullName: 'Lukman Hakim',
+      status: 'aktif' as const,
+      lat: -6.55,
+      lng: 110.68,
+      phone: '081234500012',
+      planName: 'Home 50',
+    };
+
+    it('places the node at the customer coordinates and maps status to up', async () => {
+      customers.findForTopology.mockResolvedValue(dbCustomer);
       repo.customerDrop.mockResolvedValue(customerNode);
-      const result = await service.customerDrop({
-        customerId: 'cust-12',
-        odpId: 'olt-1-odc-1-odp-1',
-        lat: -6.55,
-        lng: 110.68,
-      });
-      expect(result.id).toBe('cust-12-node');
+      const result = await service.customerDrop(dropBody);
+      expect(result.id).toBe('11111111-1111-4111-8111-111111111111-node');
       expect(repo.customerDrop).toHaveBeenCalledWith(
         expect.objectContaining({
-          customerId: 'cust-12',
-          customerNodeId: 'cust-12-node',
+          customerId: '11111111-1111-4111-8111-111111111111',
+          customerNodeId: '11111111-1111-4111-8111-111111111111-node',
           name: 'Lukman Hakim',
           netStatus: 'up',
-          conn: { ponPort: '0/3/3', onuSerial: 'ZTEG10000012' },
-          metaBase: expect.objectContaining({
-            customerId: 'cust-12',
-            planName: 'Home 50',
+          lat: -6.55,
+          lng: 110.68,
+          metaBase: {
+            customerId: '11111111-1111-4111-8111-111111111111',
             lifecycle: 'aktif',
-            onuSerial: 'ZTEG10000012',
-          }),
+            planName: 'Home 50',
+            phone: '081234500012',
+          },
         }),
       );
     });
 
-    it('throws 404 for an unknown subscriber', async () => {
+    it('keeps an isolir customer up and a berhenti customer unknown', async () => {
+      repo.customerDrop.mockResolvedValue(customerNode);
+      customers.findForTopology.mockResolvedValueOnce({ ...dbCustomer, status: 'isolir' });
+      await service.customerDrop(dropBody);
+      customers.findForTopology.mockResolvedValueOnce({ ...dbCustomer, status: 'berhenti' });
+      await service.customerDrop(dropBody);
+      const statuses = repo.customerDrop.mock.calls.map((c) => c[0].netStatus);
+      expect(statuses).toEqual(['up', 'unknown']);
+    });
+
+    it('throws 404 for an unknown customer', async () => {
+      customers.findForTopology.mockResolvedValue(null);
       await expect(
-        service.customerDrop({ customerId: 'ghost', odpId: 'odp-1', lat: 0, lng: 0 }),
-      ).rejects.toThrow('Pelanggan tidak ditemukan');
+        service.customerDrop({ ...dropBody, customerId: '22222222-2222-4222-8222-222222222222' }),
+      ).rejects.toThrow(NotFoundException);
+      expect(repo.customerDrop).not.toHaveBeenCalled();
+    });
+
+    it('ignores body coordinates when the customer already has some', async () => {
+      customers.findForTopology.mockResolvedValue(dbCustomer);
+      repo.customerDrop.mockResolvedValue(customerNode);
+      await service.customerDrop(dropBody);
+      expect(customers.setLocation).not.toHaveBeenCalled();
+    });
+
+    it('adopts the map click for a customer without coordinates', async () => {
+      customers.findForTopology.mockResolvedValue({ ...dbCustomer, lat: null, lng: null });
+      customers.setLocation.mockResolvedValue(true);
+      repo.customerDrop.mockResolvedValue(customerNode);
+      await service.customerDrop(dropBody, 'user-1');
+      expect(customers.setLocation).toHaveBeenCalledWith(
+        '11111111-1111-4111-8111-111111111111',
+        1,
+        2,
+      );
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ audit: true, actor: 'user-1', setLocation: true }),
+        'audit event',
+      );
+      expect(repo.customerDrop).toHaveBeenCalledWith(expect.objectContaining({ lat: 1, lng: 2 }));
+    });
+
+    it('uses the stored coordinates when the conditional update lost the race', async () => {
+      customers.findForTopology
+        .mockResolvedValueOnce({ ...dbCustomer, lat: null, lng: null })
+        .mockResolvedValueOnce(dbCustomer);
+      customers.setLocation.mockResolvedValue(false);
+      repo.customerDrop.mockResolvedValue(customerNode);
+      await service.customerDrop(dropBody);
+      expect(repo.customerDrop).toHaveBeenCalledWith(
+        expect.objectContaining({ lat: -6.55, lng: 110.68 }),
+      );
+    });
+
+    it('throws 422 naming the customer number when coordinates are missing', async () => {
+      customers.findForTopology.mockResolvedValue({ ...dbCustomer, lat: null, lng: null });
+      const err = await service
+        .customerDrop({
+          customerId: '11111111-1111-4111-8111-111111111111',
+          odpId: 'olt-1-odc-1-odp-1',
+        })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(UnprocessableEntityException);
+      expect((err as Error).message).toContain('C-9012');
       expect(repo.customerDrop).not.toHaveBeenCalled();
     });
   });
@@ -149,15 +245,58 @@ describe('TopologyMutationService', () => {
       expect(repo.updateNode).not.toHaveBeenCalled();
     });
 
-    it('passes the subscriber connection through for a customer re-home', async () => {
+    it('resolves the customer from the repository for a customer re-home', async () => {
       repo.findNode.mockResolvedValue(customerNode);
+      customers.findForTopology.mockResolvedValue({
+        id: '11111111-1111-4111-8111-111111111111',
+        customerNo: 'C-9012',
+        fullName: 'Lukman Hakim',
+        status: 'aktif',
+        lat: null,
+        lng: null,
+        phone: '0812',
+        planName: null,
+      });
       repo.updateNode.mockResolvedValue({ ...customerNode, parentId: 'olt-2-odc-2-odp-2' });
-      await service.updateNode('cust-12-node', { parentId: 'olt-2-odc-2-odp-2' });
+      await service.updateNode('11111111-1111-4111-8111-111111111111-node', {
+        parentId: 'olt-2-odc-2-odp-2',
+      });
+      expect(customers.findForTopology).toHaveBeenCalledWith(
+        '11111111-1111-4111-8111-111111111111',
+      );
       expect(repo.updateNode).toHaveBeenCalledWith(
-        'cust-12-node',
+        '11111111-1111-4111-8111-111111111111-node',
         { parentId: 'olt-2-odc-2-odp-2' },
         { ponPort: '0/3/3', onuSerial: 'ZTEG10000012' },
       );
+    });
+
+    it('does not touch the customers table for a plain rename / drag', async () => {
+      repo.findNode.mockResolvedValue({ ...customerNode, meta: { customerId: 'cust-12' } });
+      repo.updateNode.mockResolvedValue(customerNode);
+      await service.updateNode('11111111-1111-4111-8111-111111111111-node', { name: 'Renamed' });
+      expect(customers.findForTopology).not.toHaveBeenCalled();
+    });
+
+    it('answers 404 without querying for a non-uuid customer id on re-home', async () => {
+      repo.findNode.mockResolvedValue({ ...customerNode, meta: { customerId: 'cust-12' } });
+      await expect(
+        service.updateNode('11111111-1111-4111-8111-111111111111-node', {
+          parentId: 'olt-2-odc-2-odp-2',
+        }),
+      ).rejects.toThrow(NotFoundException);
+      expect(customers.findForTopology).not.toHaveBeenCalled();
+    });
+
+    it('throws 404 when the re-homed customer no longer exists', async () => {
+      repo.findNode.mockResolvedValue(customerNode);
+      customers.findForTopology.mockResolvedValue(null);
+      await expect(
+        service.updateNode('11111111-1111-4111-8111-111111111111-node', {
+          parentId: 'olt-2-odc-2-odp-2',
+        }),
+      ).rejects.toThrow(NotFoundException);
+      expect(repo.updateNode).not.toHaveBeenCalled();
     });
   });
 
@@ -169,7 +308,9 @@ describe('TopologyMutationService', () => {
 
     it('resolves when the node was removed', async () => {
       repo.deleteNode.mockResolvedValue(true);
-      await expect(service.deleteNode('cust-12-node')).resolves.toBeUndefined();
+      await expect(
+        service.deleteNode('11111111-1111-4111-8111-111111111111-node'),
+      ).resolves.toBeUndefined();
     });
   });
 
