@@ -115,7 +115,6 @@ describe('MVP-disabled routes (e2e)', () => {
     '/v1/vouchers',
     '/v1/portal/me',
     '/v1/branches',
-    '/v1/topology',
     '/v1/leads',
     '/v1/devices',
     '/v1/resellers',

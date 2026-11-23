@@ -32,6 +32,8 @@ function isValidTwoFaEncKey(value: string): boolean {
 export const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    // Set to 'demo' on demo deployments only; gates demo-data seeding (topology).
+    DEPLOY_ENV: z.string().optional(),
     PORT: z.coerce.number().int().positive().default(3000),
 
     DATABASE_URL: z.string().min(1),

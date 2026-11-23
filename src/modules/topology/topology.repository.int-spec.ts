@@ -1,8 +1,10 @@
+import type { ConfigService } from '@nestjs/config';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { eq } from 'drizzle-orm';
 import { type NodePgDatabase, drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { AppConfig } from '../../config/configuration';
 import type { DrizzleService } from '../../infrastructure/database/drizzle.service';
 import * as schema from '../../infrastructure/database/schema';
 import {
@@ -115,7 +117,12 @@ describe('TopologyRepository (integration)', () => {
       );
     `);
 
-    repo = new TopologyRepository({ db } as unknown as DrizzleService);
+    repo = new TopologyRepository(
+      { db } as unknown as DrizzleService,
+      {
+        get: (key: string) => (key === 'app.nodeEnv' ? 'test' : undefined),
+      } as unknown as ConfigService<{ app: AppConfig }, true>,
+    );
   }, 60_000);
 
   afterAll(async () => {

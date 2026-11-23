@@ -53,7 +53,7 @@ export class TopologyMutationService {
     await this.repo.ensureSeeded();
     const found = await this.repo.findNode(id);
     if (!found) throw new NotFoundException('Node tidak ditemukan');
-    // A customer re-home needs the subscriber's PON/ONU facts for the new circuit.
+    // Depends on the hardcoded fixture catalogue (findSubscriber), not the customers table.
     const customerId = found.type === 'customer' ? found.meta?.customerId : undefined;
     const sub = customerId ? findSubscriber(customerId) : undefined;
     const conn = sub?.connection

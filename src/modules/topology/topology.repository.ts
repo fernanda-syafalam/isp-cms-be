@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { and, asc, count, eq, inArray, or } from 'drizzle-orm';
+import type { AppConfig } from '../../config/configuration';
 import { type Db, DrizzleService } from '../../infrastructure/database/drizzle.service';
 import {
   type CableRow,
@@ -25,6 +27,7 @@ import { type DropPlan, clearPortsFor, planDrop, planSplitterRatio } from './top
 import { deriveCabling } from './topology.derive';
 import { buildTopologyFixture } from './topology.fixtures';
 import { indexById, oltOf, routeLength, segmentMeters, servingOdp } from './topology.graph';
+import { isDemoSeedAllowed } from './topology.seed-gate';
 
 // The transaction handle drizzle hands its callback — used to type the private
 // write helpers without an `any`.
@@ -37,35 +40,46 @@ type DbTx = Parameters<Parameters<Db['transaction']>[0]>[0];
  */
 @Injectable()
 export class TopologyRepository {
-  constructor(private readonly drizzle: DrizzleService) {}
+  constructor(
+    private readonly drizzle: DrizzleService,
+    private readonly config: ConfigService<{ app: AppConfig }, true>,
+  ) {}
 
   private get db() {
     return this.drizzle.db;
   }
 
-  // Seed the node forest + its derived cabling on first read. Idempotent: a
-  // single guard on network_nodes (deterministic string ids) means a re-run is a
-  // no-op, and onConflictDoNothing makes a concurrent double-seed safe.
+  // Demo-only: seed the node forest + its derived cabling on first read when the
+  // table is empty. A no-op outside development/test/DEPLOY_ENV=demo, so real
+  // environments start with an empty map. All inserts share one transaction;
+  // onConflictDoNothing keeps a concurrent double-seed safe.
   async ensureSeeded(): Promise<void> {
+    const allowed = isDemoSeedAllowed({
+      nodeEnv: this.config.get('app.nodeEnv', { infer: true }),
+      deployEnv: this.config.get('app.deployEnv', { infer: true }),
+    });
+    if (!allowed) return;
     const [existing] = await this.db.select({ value: count() }).from(networkNodes);
     if ((existing?.value ?? 0) > 0) return;
 
     const nodes = buildTopologyFixture();
     const cabling = deriveCabling(nodes);
 
-    await this.db.insert(networkNodes).values(nodes).onConflictDoNothing();
-    if (cabling.splitters.length)
-      await this.db.insert(splitters).values(cabling.splitters).onConflictDoNothing();
-    if (cabling.closures.length)
-      await this.db.insert(closures).values(cabling.closures).onConflictDoNothing();
-    if (cabling.cables.length)
-      await this.db.insert(cables).values(cabling.cables).onConflictDoNothing();
-    if (cabling.strands.length)
-      await this.db.insert(strands).values(cabling.strands).onConflictDoNothing();
-    if (cabling.splices.length)
-      await this.db.insert(splices).values(cabling.splices).onConflictDoNothing();
-    if (cabling.circuits.length)
-      await this.db.insert(circuits).values(cabling.circuits).onConflictDoNothing();
+    await this.db.transaction(async (tx) => {
+      await tx.insert(networkNodes).values(nodes).onConflictDoNothing();
+      if (cabling.splitters.length)
+        await tx.insert(splitters).values(cabling.splitters).onConflictDoNothing();
+      if (cabling.closures.length)
+        await tx.insert(closures).values(cabling.closures).onConflictDoNothing();
+      if (cabling.cables.length)
+        await tx.insert(cables).values(cabling.cables).onConflictDoNothing();
+      if (cabling.strands.length)
+        await tx.insert(strands).values(cabling.strands).onConflictDoNothing();
+      if (cabling.splices.length)
+        await tx.insert(splices).values(cabling.splices).onConflictDoNothing();
+      if (cabling.circuits.length)
+        await tx.insert(circuits).values(cabling.circuits).onConflictDoNothing();
+    });
   }
 
   listNodes(): Promise<NetworkNodeRow[]> {
