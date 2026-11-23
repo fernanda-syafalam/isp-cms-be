@@ -266,6 +266,31 @@ describe('InvoicesRepository (integration)', () => {
     expect(page.total).toBe(3);
   });
 
+  it('filters the list by customerId with a matching total', async () => {
+    const [self] = await db.select().from(customers).where(eq(customers.id, customerId));
+    if (!self) throw new Error('customer seed missing');
+    const [other] = await db
+      .insert(customers)
+      .values({
+        fullName: 'Ani',
+        phone: '0813',
+        address: 'Jl. C',
+        planId: self.planId,
+        status: 'aktif',
+      })
+      .returning();
+    if (!other) throw new Error('customer seed failed');
+
+    await repo.create(newInvoice({ periodStart: '2026-06-01' }));
+    await repo.create(newInvoice({ periodStart: '2026-07-01' }));
+    await repo.create(newInvoice({ customerId: other.id, periodStart: '2026-06-01' }));
+
+    const mine = await repo.list({ customerId, limit: 50, offset: 0 });
+    expect(mine.total).toBe(2);
+    expect(mine.items).toHaveLength(2);
+    expect(mine.items.every((i) => i.customerId === customerId)).toBe(true);
+  });
+
   // ---------------------------------------------------------------------------
   // list — full-set summary aggregate (the invariant)
   // ---------------------------------------------------------------------------

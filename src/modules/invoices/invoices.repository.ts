@@ -33,6 +33,7 @@ export interface RecordPaymentResult {
 export interface InvoiceListFilter {
   status?: Invoice['status'];
   q?: string;
+  customerId?: string;
   sort?: string;
   order?: 'asc' | 'desc';
   limit: number;
@@ -107,9 +108,10 @@ export class InvoicesRepository {
   async list(
     filter: InvoiceListFilter,
   ): Promise<Omit<InvoiceListResponse, 'items'> & { items: Invoice[] }> {
-    // WHERE clause for status + q (applied to items + filtered total).
+    // WHERE clause for status + customerId + q (applied to items + filtered total).
     const where = and(
       filter.status ? eq(invoices.status, filter.status) : undefined,
+      filter.customerId ? eq(invoices.customerId, filter.customerId) : undefined,
       filter.q
         ? or(
             ilike(invoices.invoiceNo, `%${filter.q}%`),
@@ -135,7 +137,7 @@ export class InvoicesRepository {
 
     const [filteredCount] = await this.db.select({ value: count() }).from(invoices).where(where);
 
-    // Full-set summary over ALL invoices (ignores status/q/paging).
+    // Full-set summary over ALL invoices (ignores status/customerId/q/paging).
     const [summaryRow] = await this.db
       .select({
         total: count(),
