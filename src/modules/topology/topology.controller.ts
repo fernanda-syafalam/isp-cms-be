@@ -10,7 +10,7 @@ import {
   Post,
 } from '@nestjs/common';
 import { Audit } from '../../common/decorators/audit.decorator';
-import { MvpDisabled } from '../../common/decorators/mvp-disabled.decorator';
+import { type AuthUser, CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CreateNodeDto, UpdateNodeDto } from './dto/create-node.dto';
 import { CustomerDropDto } from './dto/customer-drop.dto';
@@ -78,13 +78,12 @@ export class TopologyController {
     return this.mutation.createNode(body);
   }
 
-  @MvpDisabled()
   @Roles('admin', 'staff', 'teknisi')
   @Audit('topology.install')
   @Post('topology/customer-drop')
   @HttpCode(HttpStatus.CREATED)
-  customerDrop(@Body() body: CustomerDropDto) {
-    return this.mutation.customerDrop(body);
+  customerDrop(@Body() body: CustomerDropDto, @CurrentUser() user: AuthUser) {
+    return this.mutation.customerDrop(body, user.id);
   }
 
   @Roles('admin', 'staff', 'teknisi')
