@@ -133,7 +133,7 @@ describe('Users create gate (e2e)', () => {
     expect(fakeRepo.create).not.toHaveBeenCalled();
   });
 
-  it('rejects a customer create with 403', async () => {
+  it('rejects a customer create with 401 (role disabled for the MVP)', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/users',
@@ -143,7 +143,7 @@ describe('Users create gate (e2e)', () => {
         authorization: `Bearer ${await tokenFor('customer')}`,
       },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(401);
     expect(fakeRepo.create).not.toHaveBeenCalled();
   });
 

@@ -185,7 +185,7 @@ describe('Staff read-surface gate (e2e)', () => {
     '/v1/users',
   ];
 
-  it('rejects a customer JWT with 403 on every staff GET', async () => {
+  it('rejects a customer JWT with 401 on every staff GET (role disabled for the MVP)', async () => {
     const token = await tokenFor('customer');
     for (const url of STAFF_GETS) {
       const res = await app.inject({
@@ -193,7 +193,7 @@ describe('Staff read-surface gate (e2e)', () => {
         url,
         headers: { authorization: `Bearer ${token}` },
       });
-      expect({ url, status: res.statusCode }).toEqual({ url, status: 403 });
+      expect({ url, status: res.statusCode }).toEqual({ url, status: 401 });
     }
   });
 
@@ -255,41 +255,27 @@ describe('Staff read-surface gate (e2e)', () => {
   });
 
   // P1.5: a mitra principal is scoped to their own reseller.
-  it('scopes a mitra with no linked reseller to an empty customer list', async () => {
+  it('rejects a mitra token with 401 on the customer list (role disabled for the MVP)', async () => {
     const res = await app.inject({
       method: 'GET',
       url: '/v1/customers',
       headers: { authorization: `Bearer ${await tokenFor('mitra')}` },
     });
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({
-      items: [],
-      total: 0,
-      summary: {
-        total: 0,
-        outstanding: 0,
-        byStatus: { prospek: 0, instalasi: 0, aktif: 0, isolir: 0, berhenti: 0 },
-      },
-    });
+    expect(res.statusCode).toBe(401);
   });
 
   // ADR-0010 amendment / ADR-0015 (SEC-4): mitra reads a customer's own
   // reseller detail record without KYC identity fields; scoping to another
   // reseller's customer still 404s.
   describe('mitra customer detail: KYC-safe projection + reseller scoping', () => {
-    it('a mitra reading their own reseller customer gets it without npwp/ktp', async () => {
+    it('rejects a mitra token with 401 on its own reseller customer (role disabled for the MVP)', async () => {
       actor.resellerId = RESELLER_ID;
       const res = await app.inject({
         method: 'GET',
         url: `/v1/customers/${CUSTOMER_ID}`,
         headers: { authorization: `Bearer ${await tokenFor('mitra')}` },
       });
-      expect(res.statusCode).toBe(200);
-      const body = res.json();
-      expect(body).not.toHaveProperty('npwp');
-      expect(body).not.toHaveProperty('ktp');
-      expect(body.id).toBe(CUSTOMER_ID);
-      expect(body.resellerName).toBe('Loket Andi');
+      expect(res.statusCode).toBe(401);
     });
 
     it('staff reading the same customer still gets npwp/ktp (unaffected)', async () => {
@@ -304,28 +290,28 @@ describe('Staff read-surface gate (e2e)', () => {
       expect(body.ktp).toBe('3201xxxxxxxxxxxx');
     });
 
-    it('404s a mitra reading a customer that is not their reseller’s (scoping regression guard)', async () => {
+    it('rejects a mitra token with 401 on a foreign reseller’s customer (role disabled for the MVP)', async () => {
       actor.resellerId = '00000000-0000-0000-0000-0000000000zz';
       const res = await app.inject({
         method: 'GET',
         url: `/v1/customers/${CUSTOMER_ID}`,
         headers: { authorization: `Bearer ${await tokenFor('mitra')}` },
       });
-      expect(res.statusCode).toBe(404);
+      expect(res.statusCode).toBe(401);
     });
 
-    it('404s a mitra with no linked reseller reading any customer by id', async () => {
+    it('rejects a mitra token with 401 on customer by id with no linked reseller (role disabled for the MVP)', async () => {
       actor.resellerId = null;
       const res = await app.inject({
         method: 'GET',
         url: `/v1/customers/${CUSTOMER_ID}`,
         headers: { authorization: `Bearer ${await tokenFor('mitra')}` },
       });
-      expect(res.statusCode).toBe(404);
+      expect(res.statusCode).toBe(401);
     });
   });
 
-  it('keeps mitra out of the staff-only surface', async () => {
+  it('rejects a mitra token with 401 on the staff-only surface (role disabled for the MVP)', async () => {
     const token = await tokenFor('mitra');
     for (const url of ['/v1/invoices', '/v1/tickets', '/v1/users', '/v1/work-orders']) {
       const res = await app.inject({
@@ -333,7 +319,7 @@ describe('Staff read-surface gate (e2e)', () => {
         url,
         headers: { authorization: `Bearer ${token}` },
       });
-      expect({ url, status: res.statusCode }).toEqual({ url, status: 403 });
+      expect({ url, status: res.statusCode }).toEqual({ url, status: 401 });
     }
   });
 });

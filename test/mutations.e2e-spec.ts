@@ -232,7 +232,7 @@ describe('Representative domain mutations (e2e)', () => {
       expect(res.json()).toEqual(ISOLATED_CUSTOMER);
     });
 
-    it('mitra: 403 on both mutations (mitra is read-only, scoped to its own reseller)', async () => {
+    it('mitra: 401 on both mutations (role disabled for the MVP)', async () => {
       const token = await tokenFor('mitra');
       const create = await app.inject({
         method: 'POST',
@@ -246,14 +246,14 @@ describe('Representative domain mutations (e2e)', () => {
         },
         headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
       });
-      expect(create.statusCode).toBe(403);
+      expect(create.statusCode).toBe(401);
 
       const isolate = await app.inject({
         method: 'POST',
         url: `/v1/customers/${CUSTOMER_ID}/isolate`,
         headers: { authorization: `Bearer ${token}` },
       });
-      expect(isolate.statusCode).toBe(403);
+      expect(isolate.statusCode).toBe(401);
     });
   });
 
@@ -282,14 +282,14 @@ describe('Representative domain mutations (e2e)', () => {
       expect(res.json()).toEqual(COMPLETED_WORK_ORDER);
     });
 
-    it('customer: 403 on both (work-orders is admin/staff/teknisi only)', async () => {
+    it('customer: 401 on both (role disabled for the MVP)', async () => {
       const token = await tokenFor('customer');
       const start = await app.inject({
         method: 'POST',
         url: `/v1/work-orders/${WORK_ORDER_ID}/start`,
         headers: { authorization: `Bearer ${token}` },
       });
-      expect(start.statusCode).toBe(403);
+      expect(start.statusCode).toBe(401);
 
       const complete = await app.inject({
         method: 'POST',
@@ -297,7 +297,7 @@ describe('Representative domain mutations (e2e)', () => {
         payload: {},
         headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
       });
-      expect(complete.statusCode).toBe(403);
+      expect(complete.statusCode).toBe(401);
     });
   });
 

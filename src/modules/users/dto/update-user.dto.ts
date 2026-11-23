@@ -1,5 +1,6 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
+import { AssignableRoleSchema } from '../../../common/security/mvp-roles';
 
 /**
  * Input for PATCH /v1/users/:id. Only the mutable profile fields are
@@ -11,7 +12,7 @@ import { z } from 'zod';
 export const UpdateUserSchema = z
   .object({
     fullName: z.string().trim().min(1).max(120).optional(),
-    role: z.enum(['admin', 'staff', 'customer', 'teknisi', 'mitra']).optional(),
+    role: AssignableRoleSchema.optional(),
   })
   .strict();
 

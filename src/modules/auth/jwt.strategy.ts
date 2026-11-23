@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import type { AuthUser } from '../../common/decorators/current-user.decorator';
+import { isRoleDisabled } from '../../common/security/mvp-roles';
 import type { AppConfig } from '../../config/configuration';
 import { UsersRepository } from '../users/users.repository';
 
@@ -40,7 +41,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
   async validate(payload: JwtPayload): Promise<AuthUser> {
     const user = await this.usersRepo.findById(payload.sub);
-    if (!user) throw new UnauthorizedException();
+    if (!user || isRoleDisabled(user.role)) throw new UnauthorizedException();
     return {
       id: user.id,
       email: user.email,
