@@ -10,6 +10,7 @@ import { InvoicesService } from './invoices.service';
 const ListQuerySchema = z.object({
   status: z.enum(['draft', 'pending', 'partial', 'overdue', 'paid']).optional(),
   q: z.string().trim().min(1).optional(),
+  customerId: z.uuid().optional(),
   sort: z.string().optional(),
   order: z.enum(['asc', 'desc']).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),

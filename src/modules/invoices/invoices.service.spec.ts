@@ -111,6 +111,13 @@ describe('InvoicesService', () => {
   // ---------------------------------------------------------------------------
 
   describe('list', () => {
+    it('forwards the customerId filter to the repo', async () => {
+      const filter = { customerId: '00000000-0000-0000-0000-0000000000c1', limit: 50, offset: 0 };
+      repo.list.mockResolvedValue({ items: [pendingInvoice], total: 1, summary: defaultSummary });
+      await service.list(filter);
+      expect(repo.list).toHaveBeenCalledWith(filter);
+    });
+
     it('maps invoices, passes total through, and includes summary', async () => {
       repo.list.mockResolvedValue({ items: [pendingInvoice], total: 1, summary: defaultSummary });
       const result = await service.list({ limit: 50, offset: 0 });

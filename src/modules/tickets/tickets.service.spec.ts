@@ -67,6 +67,13 @@ describe('TicketsService', () => {
   const summary = { total: 1, byStatus: { open: 1, in_progress: 0, resolved: 0, breached: 0 } };
 
   describe('list', () => {
+    it('forwards the customerId filter to the repo', async () => {
+      const filter = { customerId: '00000000-0000-0000-0000-0000000000c1', limit: 50, offset: 0 };
+      repo.list.mockResolvedValue({ items: [baseTicket], total: 1, summary });
+      await service.list(filter);
+      expect(repo.list).toHaveBeenCalledWith(filter);
+    });
+
     it('forwards the filter to the repo and maps rows', async () => {
       repo.list.mockResolvedValue({ items: [baseTicket], total: 1, summary });
       const result = await service.list({ limit: 50, offset: 0 });

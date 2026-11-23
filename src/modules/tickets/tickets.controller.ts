@@ -23,6 +23,7 @@ import { TicketsService } from './tickets.service';
 
 const ListQuerySchema = z.object({
   q: z.string().trim().min(1).optional(),
+  customerId: z.uuid().optional(),
   status: z.enum(['open', 'in_progress', 'resolved', 'breached']).optional(),
   sort: z.string().optional(),
   order: z.enum(['asc', 'desc']).optional(),

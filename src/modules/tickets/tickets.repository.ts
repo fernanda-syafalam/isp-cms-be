@@ -14,6 +14,7 @@ import type { TicketSummary } from './dto/ticket-response.dto';
 
 export interface TicketListFilter {
   q?: string;
+  customerId?: string;
   status?: Ticket['status'];
   sort?: string;
   order?: 'asc' | 'desc';
@@ -55,6 +56,7 @@ export class TicketsRepository {
   ): Promise<{ items: Ticket[]; total: number; summary: TicketSummary }> {
     const where = and(
       filter.status ? eq(tickets.status, filter.status) : undefined,
+      filter.customerId ? eq(tickets.customerId, filter.customerId) : undefined,
       filter.q
         ? or(
             ilike(tickets.code, `%${filter.q}%`),
@@ -81,7 +83,7 @@ export class TicketsRepository {
     const [totals] = await this.db.select({ value: count() }).from(tickets).where(where);
 
     // Full-set status-count rollup — computed over ALL tickets, ignoring
-    // status/q/paging (mirrors the work-orders/invoices summary aggregate).
+    // status/customerId/q/paging (mirrors the work-orders/invoices summary aggregate).
     // `breached` is a raw status value (see markBreachedPastSla below), so
     // this is a straight grouped count — same shape as countByStatus(), but
     // a single query here to match the list-summary pattern used by the

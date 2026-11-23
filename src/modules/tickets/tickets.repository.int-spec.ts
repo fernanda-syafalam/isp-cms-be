@@ -156,6 +156,17 @@ describe('TicketsRepository (integration)', () => {
     expect(page.total).toBe(3);
   });
 
+  it('filters the list by customerId with a matching total', async () => {
+    await repo.create(newTicket());
+    await repo.create(newTicket({ status: 'resolved' }));
+    await repo.create(newTicket({ customerId: null, customerName: 'Unknown' }));
+
+    const mine = await repo.list({ customerId, limit: 50, offset: 0 });
+    expect(mine.total).toBe(2);
+    expect(mine.items).toHaveLength(2);
+    expect(mine.items.every((t) => t.customerId === customerId)).toBe(true);
+  });
+
   // ---------------------------------------------------------------------------
   // list — full-set summary aggregate (T1, FE contract parity)
   // ---------------------------------------------------------------------------
