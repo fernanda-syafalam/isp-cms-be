@@ -3,7 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import type { AppConfig } from '../../config/configuration';
 import { CustomersModule } from '../customers/customers.module';
 import { NotificationsModule } from '../notifications/notifications.module';
-import { ResellersModule } from '../resellers/resellers.module';
 import { RouterResourcesModule } from '../router-resources/router-resources.module';
 import { SettingsModule } from '../settings/settings.module';
 import { SlaCreditsModule } from '../sla-credits/sla-credits.module';
@@ -42,7 +41,6 @@ import { PaymentsController } from './payments.controller';
     RouterResourcesModule,
     NotificationsModule,
     SettingsModule,
-    ResellersModule,
     forwardRef(() => SlaCreditsModule),
   ],
   controllers: [

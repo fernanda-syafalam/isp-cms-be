@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Invoice } from '../../infrastructure/database/schema/invoices.schema';
 import { CustomersRepository } from '../customers/customers.repository';
 import { NotificationsService } from '../notifications/notifications.service';
-import { ResellersRepository } from '../resellers/resellers.repository';
 import { SecretEnforcementService } from '../router-resources/secret-enforcement.service';
 import { SettingsService } from '../settings/settings.service';
 import { SlaCreditsRepository } from '../sla-credits/sla-credits.repository';
@@ -47,10 +46,6 @@ const defaultSummary = {
 
 describe('InvoicesService', () => {
   let service: InvoicesService;
-  let resellersFake: {
-    findById: ReturnType<typeof vi.fn>;
-    postCommissionForInvoice: ReturnType<typeof vi.fn>;
-  };
   let repo: Record<string, ReturnType<typeof vi.fn>>;
   let customers: Record<string, ReturnType<typeof vi.fn>>;
   let secrets: { applyDisabledForCustomer: ReturnType<typeof vi.fn> };
@@ -77,15 +72,10 @@ describe('InvoicesService', () => {
     customers = {
       findActiveBillable: vi.fn(),
       setBilling: vi.fn(),
-      // Default: no reseller, so commission is a no-op unless a test overrides.
       findById: vi.fn().mockResolvedValue({ id: 'c1', resellerId: null }),
       findBillingInfo: vi.fn(),
     };
     secrets = { applyDisabledForCustomer: vi.fn() };
-    const resellers = {
-      findById: vi.fn(),
-      postCommissionForInvoice: vi.fn().mockResolvedValue(true),
-    };
     const settings = {
       getBillingPolicy: vi.fn().mockResolvedValue({
         pkp: true,
@@ -109,13 +99,11 @@ describe('InvoicesService', () => {
         { provide: CustomersRepository, useValue: customers },
         { provide: SecretEnforcementService, useValue: secrets },
         { provide: SettingsService, useValue: settings },
-        { provide: ResellersRepository, useValue: resellers },
         { provide: SlaCreditsRepository, useValue: slaCreditsFake },
         { provide: NotificationsService, useValue: notifications },
       ],
     }).compile();
     service = moduleRef.get(InvoicesService);
-    resellersFake = resellers;
   });
 
   // ---------------------------------------------------------------------------
@@ -263,8 +251,6 @@ describe('InvoicesService', () => {
         appliedAmount: 222_000,
         claimed: true,
       });
-      // Only used for the commission lookup now — reactivation is decided
-      // and applied inside the repository's transaction.
       customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
 
       const result = await service.pay(pendingInvoice.id, {
@@ -288,8 +274,6 @@ describe('InvoicesService', () => {
       expect(result.status).toBe('paid');
       expect(result.paidAt).toBe('2026-06-15T10:00:00.000Z');
       expect(result.balanceDue).toBe(0);
-      // No reseller on this customer → no commission (P3.D.1).
-      expect(resellersFake.postCommissionForInvoice).not.toHaveBeenCalled();
     });
 
     // FIN-D go-live finding: a cashier's manual-entry justification threads
@@ -380,9 +364,8 @@ describe('InvoicesService', () => {
       );
       expect(result.status).toBe('partial');
       expect(result.balanceDue).toBe(122_000);
-      // Still in debt -> no reactivation, no commission, no secret re-enable.
+      // Still in debt -> no reactivation, no secret re-enable.
       expect(secrets.applyDisabledForCustomer).not.toHaveBeenCalled();
-      expect(resellersFake.postCommissionForInvoice).not.toHaveBeenCalled();
     });
 
     it('a second partial payment that clears the balance flips to paid, stamps paidAt, and reactivates the isolir customer', async () => {
@@ -476,68 +459,6 @@ describe('InvoicesService', () => {
         service.pay(pendingInvoice.id, { method: 'cash', tenderedAmount: 100_000 }),
       ).rejects.toThrow();
       expect(repo.recordPayment).not.toHaveBeenCalled();
-    });
-
-    it('posts the acquiring reseller commission once the invoice is fully paid (P3.D.1)', async () => {
-      repo.findById.mockResolvedValue(pendingInvoice);
-      repo.recordPayment.mockResolvedValue({
-        invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
-        reactivated: false,
-        appliedAmount: 222_000,
-        claimed: true,
-      });
-      customers.findById.mockResolvedValue({
-        id: CUSTOMER_ID,
-        status: 'aktif',
-        resellerId: 'r-1',
-      });
-      resellersFake.findById.mockResolvedValue({ id: 'r-1', commissionPct: 0.05 });
-
-      await service.pay(pendingInvoice.id, { method: 'transfer' });
-
-      // 5% of the 222_000 total.
-      expect(resellersFake.postCommissionForInvoice).toHaveBeenCalledWith({
-        resellerId: 'r-1',
-        amount: 11_100,
-        invoiceId: pendingInvoice.id,
-        note: expect.stringContaining(pendingInvoice.id),
-      });
-    });
-
-    it('does not post a commission for a partial payment (only once fully paid)', async () => {
-      repo.findById.mockResolvedValue(pendingInvoice);
-      repo.recordPayment.mockResolvedValue({
-        invoice: { ...pendingInvoice, status: 'partial', paidAmount: 100_000 },
-        reactivated: false,
-        appliedAmount: 222_000,
-        claimed: true,
-      });
-      customers.findById.mockResolvedValue({
-        id: CUSTOMER_ID,
-        status: 'aktif',
-        resellerId: 'r-1',
-      });
-      resellersFake.findById.mockResolvedValue({ id: 'r-1', commissionPct: 0.05 });
-
-      await service.pay(pendingInvoice.id, { method: 'transfer', amount: 100_000 });
-
-      expect(resellersFake.postCommissionForInvoice).not.toHaveBeenCalled();
-    });
-
-    it('skips commission when the reseller rate is zero', async () => {
-      repo.findById.mockResolvedValue(pendingInvoice);
-      repo.recordPayment.mockResolvedValue({
-        invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
-        reactivated: false,
-        appliedAmount: 222_000,
-        claimed: true,
-      });
-      customers.findById.mockResolvedValue({ id: CUSTOMER_ID, status: 'aktif', resellerId: 'r-1' });
-      resellersFake.findById.mockResolvedValue({ id: 'r-1', commissionPct: 0 });
-
-      await service.pay(pendingInvoice.id, { method: 'transfer' });
-
-      expect(resellersFake.postCommissionForInvoice).not.toHaveBeenCalled();
     });
 
     it('does not reactivate or touch the secret when the repository reports no reactivation', async () => {
@@ -1033,6 +954,128 @@ describe('InvoicesService', () => {
         expect.objectContaining({ event: 'invoice_created', to: '0811' }),
         'invoice_created:inv-first',
       );
+    });
+  });
+
+  // Characterization: what survives the resellers/sla-credits HTTP removal.
+  // A plan-change downgrade writes a pending proration credit; billing must
+  // keep absorbing it. These pin outcomes only, not the reseller fake.
+  describe('characterization: proration credit absorption + reseller-free payment', () => {
+    const billable = {
+      id: 'c1',
+      fullName: 'Ani',
+      planPriceMonthly: 200_000,
+      billingAnchorDay: null,
+    };
+
+    it('run: a customer with no pending credits gets amount/tax unchanged, discount 0 and no credit ids', async () => {
+      customers.findActiveBillable.mockResolvedValue([billable]);
+      repo.existsForPeriod.mockResolvedValue(false);
+      repo.createBilled.mockResolvedValue({ ...pendingInvoice, customerId: 'c1' });
+      slaCreditsFake.findPendingByCustomer.mockResolvedValue([]);
+
+      await service.run();
+
+      expect(slaCreditsFake.findPendingByCustomer).toHaveBeenCalledWith('c1');
+      expect(repo.createBilled).toHaveBeenCalledWith(
+        expect.objectContaining({ amount: 200_000, taxAmount: 22_000, discountAmount: 0 }),
+        [],
+      );
+    });
+
+    it('run: several pending credits below the gross total sum into the discount and all ids go to createBilled', async () => {
+      customers.findActiveBillable.mockResolvedValue([billable]);
+      repo.existsForPeriod.mockResolvedValue(false);
+      repo.createBilled.mockResolvedValue({ ...pendingInvoice, customerId: 'c1' });
+      slaCreditsFake.findPendingByCustomer.mockResolvedValue([
+        { id: 'credit-a', customerId: 'c1', amount: 30_000, status: 'pending' },
+        { id: 'credit-b', customerId: 'c1', amount: 20_000, status: 'pending' },
+      ]);
+
+      await service.run();
+
+      expect(repo.createBilled).toHaveBeenCalledWith(
+        expect.objectContaining({ amount: 200_000, taxAmount: 22_000, discountAmount: 50_000 }),
+        ['credit-a', 'credit-b'],
+      );
+    });
+
+    it('run: credits above the gross total cap the discount at the gross total but every id is still absorbed', async () => {
+      customers.findActiveBillable.mockResolvedValue([billable]);
+      repo.existsForPeriod.mockResolvedValue(false);
+      repo.createBilled.mockResolvedValue({ ...pendingInvoice, customerId: 'c1' });
+      slaCreditsFake.findPendingByCustomer.mockResolvedValue([
+        { id: 'credit-a', customerId: 'c1', amount: 500_000, status: 'pending' },
+      ]);
+
+      await service.run();
+
+      expect(repo.createBilled).toHaveBeenCalledWith(
+        expect.objectContaining({ discountAmount: 222_000 }),
+        ['credit-a'],
+      );
+    });
+
+    it('generateFirstInvoice: pending credits are absorbed the same way as in run()', async () => {
+      customers.findBillingInfo.mockResolvedValue({
+        fullName: 'Ani',
+        planPriceMonthly: 200_000,
+        billingAnchorDay: null,
+      });
+      repo.existsForPeriod.mockResolvedValue(false);
+      repo.createBilled.mockResolvedValue({ ...pendingInvoice, customerId: 'c1' });
+      slaCreditsFake.findPendingByCustomer.mockResolvedValue([
+        { id: 'credit-a', customerId: 'c1', amount: 40_000, status: 'pending' },
+      ]);
+
+      await service.generateFirstInvoice('c1');
+
+      expect(repo.createBilled).toHaveBeenCalledWith(
+        expect.objectContaining({
+          customerId: 'c1',
+          amount: 200_000,
+          taxAmount: 22_000,
+          discountAmount: 40_000,
+        }),
+        ['credit-a'],
+      );
+    });
+
+    it('generateFirstInvoice: credits above the gross total are capped', async () => {
+      customers.findBillingInfo.mockResolvedValue({
+        fullName: 'Ani',
+        planPriceMonthly: 200_000,
+        billingAnchorDay: null,
+      });
+      repo.existsForPeriod.mockResolvedValue(false);
+      repo.createBilled.mockResolvedValue({ ...pendingInvoice, customerId: 'c1' });
+      slaCreditsFake.findPendingByCustomer.mockResolvedValue([
+        { id: 'credit-a', customerId: 'c1', amount: 900_000, status: 'pending' },
+      ]);
+
+      await service.generateFirstInvoice('c1');
+
+      expect(repo.createBilled).toHaveBeenCalledWith(
+        expect.objectContaining({ discountAmount: 222_000 }),
+        ['credit-a'],
+      );
+    });
+
+    it('pay: fully paying a customer with no reseller marks the invoice paid and reactivates, without failing', async () => {
+      repo.findById.mockResolvedValue(pendingInvoice);
+      repo.recordPayment.mockResolvedValue({
+        invoice: { ...pendingInvoice, status: 'paid', paidAmount: 222_000, paidAt: new Date() },
+        reactivated: true,
+        appliedAmount: 222_000,
+        claimed: true,
+      });
+      customers.findById.mockResolvedValue({ id: CUSTOMER_ID, resellerId: null });
+
+      const result = await service.pay(pendingInvoice.id, { method: 'transfer' });
+
+      expect(result.status).toBe('paid');
+      expect(result.balanceDue).toBe(0);
+      expect(secrets.applyDisabledForCustomer).toHaveBeenCalledWith(CUSTOMER_ID, false);
     });
   });
 

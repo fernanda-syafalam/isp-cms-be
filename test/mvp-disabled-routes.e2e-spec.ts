@@ -118,6 +118,8 @@ describe('MVP-disabled routes (e2e)', () => {
     '/v1/topology',
     '/v1/leads',
     '/v1/devices',
+    '/v1/resellers',
+    '/v1/sla-credits',
   ])('GET %s is 404 (module unregistered)', async (url) => {
     const res = await app.inject({ method: 'GET', url, headers: await adminHeaders() });
     expect(res.statusCode).toBe(404);
@@ -146,5 +148,6 @@ describe('MVP-disabled routes (e2e)', () => {
     expect(body).not.toHaveProperty('devicesOnline');
     expect(body).not.toHaveProperty('devicesTotal');
     expect(body.commandCenter).not.toHaveProperty('odpFull');
+    expect(body.commandCenter).not.toHaveProperty('slaCreditsPending');
   });
 });

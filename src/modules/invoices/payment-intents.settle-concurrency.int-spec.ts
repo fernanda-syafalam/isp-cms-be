@@ -16,7 +16,6 @@ import { applyMigrations } from '../../test-utils/apply-migrations';
 import type { AuditRepository } from '../audit/audit.repository';
 import { CustomersRepository } from '../customers/customers.repository';
 import type { NotificationsService } from '../notifications/notifications.service';
-import { ResellersRepository } from '../resellers/resellers.repository';
 import { SimulationRouterAdapter } from '../router-resources/adapters/simulation.adapter';
 import { SecretEnforcementService } from '../router-resources/secret-enforcement.service';
 import { SecretsRepository } from '../router-resources/secrets.repository';
@@ -67,7 +66,6 @@ describe('PaymentIntentsService.settleFromGateway — concurrent delivery (integ
       new SecretsRepository(drizzleService),
       new SimulationRouterAdapter(),
     );
-    const resellersRepo = new ResellersRepository(drizzleService);
     // Never exercised by pay()/settleFromGateway() — see file doc comment.
     const settingsStub = {} as unknown as SettingsService;
     const notificationsStub = {
@@ -79,7 +77,6 @@ describe('PaymentIntentsService.settleFromGateway — concurrent delivery (integ
       customersRepo,
       secretsRepo,
       settingsStub,
-      resellersRepo,
       slaCreditsRepo,
       notificationsStub,
     );

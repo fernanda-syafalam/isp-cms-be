@@ -4,7 +4,6 @@ import { notifyBestEffort } from '../../common/notifications/notify-best-effort'
 import { formatIdr } from '../../common/utils/format-idr';
 import { NotificationsService } from '../notifications/notifications.service';
 import { PlansRepository } from '../plans/plans.repository';
-import { ResellersRepository } from '../resellers/resellers.repository';
 import { SecretEnforcementService } from '../router-resources/secret-enforcement.service';
 import { SettingsService } from '../settings/settings.service';
 import {
@@ -32,8 +31,6 @@ export class CustomersService {
     // Toggles the customer's PPPoE secret in DB and router (ADR-0008 / P2.5). forwardRef with
     // RouterResourcesModule breaks the import cycle.
     private readonly secrets: SecretEnforcementService,
-    // Validates the resellerId FK on onboard (P3.D.2): 400 instead of a DB-level 500.
-    private readonly resellers: ResellersRepository,
     // Billing policy (dueDays) for a proration adjustment invoice's grace
     // period — same grace a regular invoice gets (MED #4, PR #121 review).
     private readonly settings: SettingsService,
@@ -98,7 +95,6 @@ export class CustomersService {
       email: normalizeEmail(input.email),
       address: input.address,
       planId: input.planId,
-      resellerId: input.resellerId ?? null,
       // status defaults to 'prospek'; balance/area/provisioning come later.
     });
     this.logger.log({ customerId: row.id }, 'customer created');
@@ -122,7 +118,6 @@ export class CustomersService {
     },
   ): Promise<CustomerResponse> {
     await this.requirePlan(input.planId);
-    await this.requireResellerIfProvided(input.resellerId);
     const row = await this.repo.create({
       fullName: input.fullName,
       phone: input.phone,
@@ -139,7 +134,6 @@ export class CustomersService {
       ktp: input.ktp ?? null,
       npwp: input.npwp ?? null,
       consentAt: input.consentAt ?? null,
-      resellerId: input.resellerId ?? null,
       // Portal login linkage — provisioned by OnboardingService (P1.3),
       // never accepted from the HTTP DTO (no mass-assignment).
       userId: input.userId ?? null,
@@ -154,7 +148,6 @@ export class CustomersService {
       ...(input.phone !== undefined ? { phone: input.phone } : {}),
       ...(input.email !== undefined ? { email: normalizeEmail(input.email) } : {}),
       ...(input.address !== undefined ? { address: input.address } : {}),
-      ...(input.resellerId !== undefined ? { resellerId: input.resellerId } : {}),
     });
     this.logger.log({ customerId: row.id }, 'customer updated');
     return toCustomerResponse(row);
@@ -341,15 +334,6 @@ export class CustomersService {
     if (!plan) {
       // Bad reference in the request body, not a missing customer: 400, not 404.
       throw new BadRequestException('plan not found');
-    }
-  }
-
-  /** Optional resellerId FK (P3.D.2): 400 here instead of a DB FK-violation 500. */
-  private async requireResellerIfProvided(resellerId?: string | null): Promise<void> {
-    if (!resellerId) return;
-    const reseller = await this.resellers.findById(resellerId);
-    if (!reseller) {
-      throw new BadRequestException('reseller not found');
     }
   }
 }

@@ -2,7 +2,6 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CustomersRepository } from '../customers/customers.repository';
 import { InvoicesRepository } from '../invoices/invoices.repository';
-import { SlaCreditsRepository } from '../sla-credits/sla-credits.repository';
 import { TicketsRepository } from '../tickets/tickets.repository';
 import { AnalyticsService } from './analytics.service';
 
@@ -16,7 +15,6 @@ describe('AnalyticsService', () => {
   let customers: Record<string, ReturnType<typeof vi.fn>>;
   let invoices: Record<string, ReturnType<typeof vi.fn>>;
   let tickets: Record<string, ReturnType<typeof vi.fn>>;
-  let slaCredits: Record<string, ReturnType<typeof vi.fn>>;
 
   beforeEach(async () => {
     vi.useFakeTimers();
@@ -79,7 +77,6 @@ describe('AnalyticsService', () => {
         .fn()
         .mockResolvedValue({ open: 9, in_progress: 5, resolved: 31, breached: 2 }),
     };
-    slaCredits = { countPending: vi.fn().mockResolvedValue(3) };
 
     const moduleRef: TestingModule = await Test.createTestingModule({
       providers: [
@@ -87,7 +84,6 @@ describe('AnalyticsService', () => {
         { provide: CustomersRepository, useValue: customers },
         { provide: InvoicesRepository, useValue: invoices },
         { provide: TicketsRepository, useValue: tickets },
-        { provide: SlaCreditsRepository, useValue: slaCredits },
       ],
     }).compile();
     service = moduleRef.get(AnalyticsService);
@@ -140,7 +136,6 @@ describe('AnalyticsService', () => {
       // Command center rollup.
       expect(result.commandCenter).toEqual({
         churnRate: 0.125,
-        slaCreditsPending: 3,
       });
 
       expect(result.customerMix).toEqual([
