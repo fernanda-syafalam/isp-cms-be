@@ -11,6 +11,7 @@ export const appConfig = registerAs('app', () => {
   const env = envSchema.parse(process.env);
   return {
     nodeEnv: env.NODE_ENV,
+    deployEnv: env.DEPLOY_ENV,
     port: env.PORT,
     database: {
       url: env.DATABASE_URL,

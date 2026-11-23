@@ -10,6 +10,7 @@ import {
   Post,
 } from '@nestjs/common';
 import { Audit } from '../../common/decorators/audit.decorator';
+import { MvpDisabled } from '../../common/decorators/mvp-disabled.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CreateNodeDto, UpdateNodeDto } from './dto/create-node.dto';
 import { CustomerDropDto } from './dto/customer-drop.dto';
@@ -20,9 +21,9 @@ import { TopologyService } from './topology.service';
 /**
  * Network topology + OSP cabling layer. All routes sit at the v1 root (the FE
  * calls `cables`, `strands`, … directly, not under `topology/`), so the
- * controller carries no path prefix and names each route. Reads are open to any
- * authenticated user; mutations (node form + customer-drop install + cable
- * re-route) are gated to admin/staff and audited.
+ * controller carries no path prefix and names each route. Reads are open to
+ * admin/staff/teknisi; mutations (node form + customer-drop install + cable
+ * re-route) also allow all three and are audited, except node delete (admin-only).
  */
 @Roles('admin', 'staff', 'teknisi')
 @Controller({ version: '1' })
@@ -67,7 +68,7 @@ export class TopologyController {
     return this.topology.listCircuits();
   }
 
-  // ---- Mutations (admin/staff, audited) ------------------------------------
+  // ---- Mutations (admin/staff/teknisi, audited; delete admin-only) ------------------------------------
 
   @Roles('admin', 'staff', 'teknisi')
   @Audit('topology.create')
@@ -77,6 +78,7 @@ export class TopologyController {
     return this.mutation.createNode(body);
   }
 
+  @MvpDisabled()
   @Roles('admin', 'staff', 'teknisi')
   @Audit('topology.install')
   @Post('topology/customer-drop')
@@ -92,7 +94,7 @@ export class TopologyController {
     return this.mutation.updateNode(id, body);
   }
 
-  @Roles('admin', 'staff', 'teknisi')
+  @Roles('admin')
   @Audit('topology.delete')
   @Delete('topology/:id')
   @HttpCode(HttpStatus.NO_CONTENT)

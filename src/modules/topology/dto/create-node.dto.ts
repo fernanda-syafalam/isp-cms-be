@@ -22,8 +22,8 @@ export const CreateNodeSchema = z
     type: NodeTypeSchema,
     status: NodeStatusSchema,
     parentId: z.string().nullable(),
-    lat: z.number(),
-    lng: z.number(),
+    lat: z.number().min(-90).max(90),
+    lng: z.number().min(-180).max(180),
   })
   .extend(InfraFieldsSchema.shape);
 
@@ -37,8 +37,8 @@ export const UpdateNodeSchema = z
     type: NodeTypeSchema.optional(),
     status: NodeStatusSchema.optional(),
     parentId: z.string().nullable().optional(),
-    lat: z.number().optional(),
-    lng: z.number().optional(),
+    lat: z.number().min(-90).max(90).optional(),
+    lng: z.number().min(-180).max(180).optional(),
   })
   .extend(InfraFieldsSchema.shape);
 
