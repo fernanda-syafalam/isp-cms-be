@@ -672,7 +672,7 @@ describe('InvoicesRepository (integration)', () => {
       expect(row?.paidAmount).toBe(0);
     });
 
-    it('rolls back the payment row and invoice update when withinTx throws', async () => {
+    it('rolls back the payment row and invoice update when the claim hook throws', async () => {
       const created = await repo.create(newInvoice()); // total = 222_000
 
       await expect(

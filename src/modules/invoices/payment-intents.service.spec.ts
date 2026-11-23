@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, Logger, NotFoundException } from '@nestjs/common';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PaymentIntent } from '../../infrastructure/database/schema/invoices.schema';
@@ -13,6 +13,7 @@ import { PaymentIntentsService } from './payment-intents.service';
 
 const INVOICE_ID = '00000000-0000-0000-0000-0000000000e1';
 const INTENT_ID = '00000000-0000-0000-0000-0000000000f1';
+const FAKE_TX = { marker: 'tx' };
 
 function invoice(over: Partial<InvoiceResponse> = {}): InvoiceResponse {
   return {
@@ -72,14 +73,24 @@ describe('PaymentIntentsService', () => {
     repo = {
       create: vi.fn((values) => Promise.resolve(intentRow({ ...values }))),
       findById: vi.fn(),
-      markPaid: vi.fn(),
-      markPaidTx: vi.fn(),
+      claimPaid: vi.fn(),
+      claimPaidTx: vi.fn(async () => intentRow({ status: 'paid' })),
       markExpired: vi.fn(),
       expireStalePending: vi.fn(),
     };
     invoices = {
       findById: vi.fn(),
-      pay: vi.fn(),
+      // Mirrors recordPayment: the claim hook runs first; a lost claim is a no-op.
+      payWithOutcome: vi.fn(async (_id, input, opts) => {
+        const claimedIntent = await opts.claim(FAKE_TX);
+        return claimedIntent
+          ? {
+              invoice: invoice({ status: 'paid' }),
+              appliedAmount: input.amount ?? 116_000,
+              claimedIntent,
+            }
+          : { invoice: invoice(), appliedAmount: 0, claimedIntent };
+      }),
     };
     customers = {
       findById: vi.fn(async () => null),
@@ -198,32 +209,32 @@ describe('PaymentIntentsService', () => {
   describe('confirm', () => {
     it('settles the invoice with the channel-mapped method and marks the intent paid', async () => {
       repo.findById.mockResolvedValue(intentRow({ channel: 'va_mandiri' }));
-      repo.markPaid.mockResolvedValue(
+      repo.claimPaidTx.mockResolvedValue(
         intentRow({ status: 'paid', paidAt: new Date('2026-06-16T01:00:00.000Z') }),
       );
 
       const result = await service.confirm(INTENT_ID);
 
-      expect(invoices.pay).toHaveBeenCalledWith(
+      expect(invoices.payWithOutcome).toHaveBeenCalledWith(
         INVOICE_ID,
         { method: 'va' },
-        { withinTx: expect.any(Function) },
+        { claim: expect.any(Function) },
       );
-      expect(repo.markPaid).toHaveBeenCalledWith(INTENT_ID);
+      expect(repo.claimPaidTx).toHaveBeenCalledWith(FAKE_TX, INTENT_ID);
       expect(result.status).toBe('paid');
       expect(result.paidAt).toBe('2026-06-16T01:00:00.000Z');
     });
 
     it('maps e-wallet rails to the ewallet payment method', async () => {
       repo.findById.mockResolvedValue(intentRow({ channel: 'ovo' }));
-      repo.markPaid.mockResolvedValue(intentRow({ status: 'paid', channel: 'ovo' }));
+      repo.claimPaidTx.mockResolvedValue(intentRow({ status: 'paid', channel: 'ovo' }));
 
       await service.confirm(INTENT_ID);
 
-      expect(invoices.pay).toHaveBeenCalledWith(
+      expect(invoices.payWithOutcome).toHaveBeenCalledWith(
         INVOICE_ID,
         { method: 'ewallet' },
-        { withinTx: expect.any(Function) },
+        { claim: expect.any(Function) },
       );
     });
 
@@ -233,8 +244,8 @@ describe('PaymentIntentsService', () => {
       const result = await service.confirm(INTENT_ID);
 
       expect(result.status).toBe('paid');
-      expect(invoices.pay).not.toHaveBeenCalled();
-      expect(repo.markPaid).not.toHaveBeenCalled();
+      expect(invoices.payWithOutcome).not.toHaveBeenCalled();
+      expect(repo.claimPaidTx).not.toHaveBeenCalled();
     });
 
     it('throws 404 for an unknown intent', async () => {
@@ -255,52 +266,43 @@ describe('PaymentIntentsService', () => {
 
       await expect(service.confirm(INTENT_ID)).rejects.toBeInstanceOf(ConflictException);
       expect(repo.markExpired).toHaveBeenCalledWith(INTENT_ID);
-      expect(invoices.pay).not.toHaveBeenCalled();
+      expect(invoices.payWithOutcome).not.toHaveBeenCalled();
     });
   });
 
   // The Tripay webhook's settlement path (ADR-0016) — reuses confirm()
   // internally, so these focus on the extra checks the webhook needs:
   // resolve-by-reference, reference/amount validation, and dedupe.
-  describe('settleIntent atomicity', () => {
-    const fakeTx = { marker: 'tx' };
-
-    it('marks the intent paid inside the payment transaction via markPaidTx', async () => {
+  describe('settleIntent claim (recordPayment tx)', () => {
+    it('claims the intent inside the payment transaction', async () => {
       repo.findById.mockResolvedValue(intentRow());
-      repo.markPaidTx.mockResolvedValue(intentRow({ status: 'paid' }));
-      invoices.pay.mockImplementation(async (_id, _input, opts) => {
-        await opts.withinTx(fakeTx);
-        return invoice({ status: 'paid' });
-      });
 
       const result = await service.confirm(INTENT_ID);
 
-      expect(repo.markPaidTx).toHaveBeenCalledWith(fakeTx, INTENT_ID);
-      expect(repo.markPaid).not.toHaveBeenCalled();
+      expect(repo.claimPaidTx).toHaveBeenCalledWith(FAKE_TX, INTENT_ID);
+      expect(repo.claimPaid).not.toHaveBeenCalled();
       expect(result.status).toBe('paid');
     });
 
-    it('falls back to a plain markPaid when pay short-circuits (hook never ran)', async () => {
+    it('claims directly when pay short-circuits on an already-paid invoice (hook never ran)', async () => {
       repo.findById.mockResolvedValue(intentRow());
-      invoices.pay.mockResolvedValue(invoice({ status: 'paid' }));
-      repo.markPaid.mockResolvedValue(intentRow({ status: 'paid' }));
+      invoices.payWithOutcome.mockResolvedValue({
+        invoice: invoice({ status: 'paid' }),
+        appliedAmount: 0,
+        claimedIntent: false,
+      });
+      repo.claimPaid.mockResolvedValue(intentRow({ status: 'paid' }));
 
       await service.confirm(INTENT_ID);
 
-      expect(repo.markPaidTx).not.toHaveBeenCalled();
-      expect(repo.markPaid).toHaveBeenCalledWith(INTENT_ID);
+      expect(repo.claimPaid).toHaveBeenCalledWith(INTENT_ID);
     });
 
-    it('propagates a hook failure without the markPaid fallback', async () => {
+    it('propagates a claim failure', async () => {
       repo.findById.mockResolvedValue(intentRow());
-      repo.markPaidTx.mockRejectedValue(new Error('boom'));
-      invoices.pay.mockImplementation(async (_id, _input, opts) => {
-        await opts.withinTx(fakeTx);
-        return invoice({ status: 'paid' });
-      });
+      repo.claimPaidTx.mockRejectedValue(new Error('boom'));
 
       await expect(service.confirm(INTENT_ID)).rejects.toThrow('boom');
-      expect(repo.markPaid).not.toHaveBeenCalled();
     });
   });
 
@@ -312,7 +314,7 @@ describe('PaymentIntentsService', () => {
         intentRow({ status: 'pending', gatewayReference: GATEWAY_REFERENCE }),
       );
       invoices.findById.mockResolvedValue(invoice({ balanceDue: 116_000 }));
-      repo.markPaid.mockResolvedValue(intentRow({ status: 'paid' }));
+      repo.claimPaidTx.mockResolvedValue(intentRow({ status: 'paid' }));
 
       const result = await service.settleFromGateway({
         reference: GATEWAY_REFERENCE,
@@ -321,12 +323,12 @@ describe('PaymentIntentsService', () => {
       });
 
       expect(result).toEqual({ settled: true });
-      expect(invoices.pay).toHaveBeenCalledWith(
+      expect(invoices.payWithOutcome).toHaveBeenCalledWith(
         INVOICE_ID,
-        { method: 'qris' },
-        { withinTx: expect.any(Function) },
+        { method: 'qris', amount: 116_000 },
+        { claim: expect.any(Function) },
       );
-      expect(repo.markPaid).toHaveBeenCalledWith(INTENT_ID);
+      expect(repo.claimPaidTx).toHaveBeenCalledWith(FAKE_TX, INTENT_ID);
       // R8-OBS-3: a successful gateway settlement lands a queryable
       // `audit_log` row — this is the trail the interceptor-based
       // `@Audit` mechanism can never reach (the webhook route is @Public
@@ -347,7 +349,7 @@ describe('PaymentIntentsService', () => {
         intentRow({ status: 'pending', gatewayReference: GATEWAY_REFERENCE }),
       );
       invoices.findById.mockResolvedValue(invoice({ balanceDue: 116_000 }));
-      repo.markPaid.mockResolvedValue(intentRow({ status: 'paid' }));
+      repo.claimPaidTx.mockResolvedValue(intentRow({ status: 'paid' }));
       audit.record.mockRejectedValue(new Error('db unavailable'));
 
       const result = await service.settleFromGateway({
@@ -358,12 +360,12 @@ describe('PaymentIntentsService', () => {
 
       // Settlement itself (the money path) must still have gone through.
       expect(result).toEqual({ settled: true });
-      expect(invoices.pay).toHaveBeenCalledWith(
+      expect(invoices.payWithOutcome).toHaveBeenCalledWith(
         INVOICE_ID,
-        { method: 'qris' },
-        { withinTx: expect.any(Function) },
+        { method: 'qris', amount: 116_000 },
+        { claim: expect.any(Function) },
       );
-      expect(repo.markPaid).toHaveBeenCalledWith(INTENT_ID);
+      expect(repo.claimPaidTx).toHaveBeenCalledWith(FAKE_TX, INTENT_ID);
     });
 
     it('is idempotent for a redelivered callback on an already-settled intent (one settle, no double ledger row)', async () => {
@@ -378,32 +380,165 @@ describe('PaymentIntentsService', () => {
       });
 
       expect(result).toEqual({ settled: true });
-      expect(invoices.pay).not.toHaveBeenCalled();
-      expect(repo.markPaid).not.toHaveBeenCalled();
+      expect(invoices.payWithOutcome).not.toHaveBeenCalled();
+      expect(repo.claimPaidTx).not.toHaveBeenCalled();
       // No NEW settlement happened — a redelivered callback must not write
       // a second audit row for the same money movement.
       expect(audit.record).not.toHaveBeenCalled();
     });
 
-    // M1: a deterministic non-settle condition is reported via the return
-    // value, NOT a thrown exception — the controller must be able to 200
-    // (acknowledge, no retry) rather than ask Tripay to retry a permanent
-    // condition forever. See settleFromGateway's doc comment.
-    it('returns settled:false with reason "amount_mismatch" (does not throw) when the callback amount does not match balanceDue', async () => {
-      repo.findById.mockResolvedValue(
-        intentRow({ status: 'pending', gatewayReference: GATEWAY_REFERENCE }),
-      );
-      invoices.findById.mockResolvedValue(invoice({ balanceDue: 116_000 }));
-
-      const result = await service.settleFromGateway({
+    // MONEY-1: a settled gateway payment is never dropped because balanceDue drifted
+    // (late fee, partial manual payment, SLA credit) after the intent was created.
+    describe('amount differs from balanceDue (MONEY-1)', () => {
+      const callback = (amount: number) => ({
         reference: GATEWAY_REFERENCE,
         invoiceRef: INTENT_ID,
-        amount: 1, // attacker/bug: far below the real balance due
+        amount,
+      });
+      const givenLedger = (appliedAmount: number, status: InvoiceResponse['status']) =>
+        invoices.payWithOutcome.mockImplementation(async (_id, _input, opts) => {
+          const claimedIntent = await opts.claim(FAKE_TX);
+          return claimedIntent
+            ? { invoice: invoice({ status }), appliedAmount, claimedIntent }
+            : { invoice: invoice(), appliedAmount: 0, claimedIntent };
+        });
+
+      beforeEach(() => {
+        repo.findById.mockResolvedValue(
+          intentRow({ status: 'pending', gatewayReference: GATEWAY_REFERENCE }),
+        );
       });
 
-      expect(result).toEqual({ settled: false, reason: 'amount_mismatch' });
-      expect(invoices.pay).not.toHaveBeenCalled();
-      expect(repo.markPaid).not.toHaveBeenCalled();
+      it('underpaid: records a partial payment of the received amount and audits', async () => {
+        invoices.findById.mockResolvedValue(invoice({ balanceDue: 116_000 }));
+        givenLedger(100_000, 'partial');
+
+        const result = await service.settleFromGateway(callback(100_000));
+
+        expect(result).toEqual({ settled: true });
+        expect(invoices.payWithOutcome).toHaveBeenCalledWith(
+          INVOICE_ID,
+          { method: 'qris', amount: 100_000 },
+          { claim: expect.any(Function) },
+        );
+        expect(audit.record).toHaveBeenCalledWith(
+          expect.objectContaining({
+            actor: 'tripay-webhook',
+            action: 'payment.gateway_underpaid',
+            entityId: INVOICE_ID,
+            summary: expect.stringMatching(/received=100000 applied=100000 excess=0/),
+          }),
+        );
+      });
+
+      it('overpaid: pays balanceDue only; audit and warn use the applied amount', async () => {
+        invoices.findById.mockResolvedValue(invoice({ balanceDue: 90_000 }));
+        givenLedger(90_000, 'paid');
+        const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+        const result = await service.settleFromGateway(callback(116_000));
+
+        expect(result).toEqual({ settled: true });
+        expect(invoices.payWithOutcome).toHaveBeenCalledWith(
+          INVOICE_ID,
+          { method: 'qris', amount: 90_000 },
+          { claim: expect.any(Function) },
+        );
+        expect(audit.record).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: 'payment.gateway_overpaid',
+            summary: expect.stringContaining('excess=26000'),
+          }),
+        );
+        expect(warn).toHaveBeenCalledWith(
+          expect.objectContaining({ audit: true, excess: 26_000, applied: 90_000 }),
+          expect.stringContaining('overpayment'),
+        );
+        warn.mockRestore();
+      });
+
+      it('balance dropped after the read: recordPayment 409 is rethrown so Tripay retries', async () => {
+        invoices.findById.mockResolvedValue(invoice({ balanceDue: 116_000 }));
+        invoices.payWithOutcome.mockRejectedValue(new ConflictException('balance moved'));
+
+        await expect(service.settleFromGateway(callback(116_000))).rejects.toBeInstanceOf(
+          ConflictException,
+        );
+        expect(audit.record).not.toHaveBeenCalled();
+      });
+
+      it('zero balance on an unpaid-status invoice: claims the intent, audits full amount as excess, no pay call', async () => {
+        invoices.findById.mockResolvedValue(invoice({ balanceDue: 0, status: 'pending' }));
+        repo.claimPaid.mockResolvedValue(intentRow({ status: 'paid' }));
+
+        const result = await service.settleFromGateway(callback(116_000));
+
+        expect(result).toEqual({ settled: true });
+        expect(invoices.payWithOutcome).not.toHaveBeenCalled();
+        expect(audit.record).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: 'payment.gateway_overpaid',
+            summary: expect.stringContaining('excess=116000'),
+          }),
+        );
+      });
+
+      it('already-paid invoice with a new intent: claims the intent, whole amount is excess', async () => {
+        invoices.findById.mockResolvedValue(invoice({ balanceDue: 0, status: 'paid' }));
+        invoices.payWithOutcome.mockResolvedValue({
+          invoice: invoice({ status: 'paid' }),
+          appliedAmount: 0,
+          claimedIntent: false,
+        });
+        repo.claimPaid.mockResolvedValue(intentRow({ status: 'paid' }));
+
+        const result = await service.settleFromGateway(callback(116_000));
+
+        expect(result).toEqual({ settled: true });
+        expect(repo.claimPaid).toHaveBeenCalledWith(INTENT_ID);
+        expect(audit.record).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: 'payment.gateway_overpaid',
+            summary: expect.stringContaining('excess=116000'),
+          }),
+        );
+      });
+
+      it('lost claim (concurrent delivery already took the intent): no payment, no audit, no warn', async () => {
+        invoices.findById.mockResolvedValue(invoice({ balanceDue: 100_000 }));
+        repo.claimPaidTx.mockResolvedValue(null);
+        repo.claimPaid.mockResolvedValue(null);
+        const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+        const result = await service.settleFromGateway(callback(50_000));
+
+        expect(result).toEqual({ settled: true });
+        expect(audit.record).not.toHaveBeenCalled();
+        expect(warn).not.toHaveBeenCalled();
+        warn.mockRestore();
+      });
+
+      it('rethrows a 409/422 from pay so Tripay retries (claim rolled back with the tx)', async () => {
+        invoices.findById.mockResolvedValue(invoice({ balanceDue: 116_000 }));
+        invoices.payWithOutcome.mockRejectedValue(new ConflictException('balance moved'));
+
+        await expect(service.settleFromGateway(callback(100_000))).rejects.toBeInstanceOf(
+          ConflictException,
+        );
+        expect(audit.record).not.toHaveBeenCalled();
+      });
+
+      it('replay of a reference whose intent is already paid records no second payment', async () => {
+        repo.findById.mockResolvedValue(
+          intentRow({ status: 'paid', gatewayReference: GATEWAY_REFERENCE }),
+        );
+
+        const result = await service.settleFromGateway(callback(100_000));
+
+        expect(result).toEqual({ settled: true });
+        expect(invoices.payWithOutcome).not.toHaveBeenCalled();
+        expect(audit.record).not.toHaveBeenCalled();
+      });
     });
 
     it('returns settled:false with reason "reference_mismatch" (does not throw) when the callback reference does not match the one recorded at charge-create time', async () => {
@@ -418,7 +553,7 @@ describe('PaymentIntentsService', () => {
       });
 
       expect(result).toEqual({ settled: false, reason: 'reference_mismatch' });
-      expect(invoices.pay).not.toHaveBeenCalled();
+      expect(invoices.payWithOutcome).not.toHaveBeenCalled();
     });
 
     it('returns settled:false with reason "unknown_intent" (does not throw) for an unknown invoiceRef (merchant_ref)', async () => {
@@ -431,7 +566,7 @@ describe('PaymentIntentsService', () => {
       });
 
       expect(result).toEqual({ settled: false, reason: 'unknown_intent' });
-      expect(invoices.pay).not.toHaveBeenCalled();
+      expect(invoices.payWithOutcome).not.toHaveBeenCalled();
     });
 
     // R4-BE-1 regression: a signature-verified PAID callback whose intent has
@@ -445,7 +580,7 @@ describe('PaymentIntentsService', () => {
         intentRow({ status: 'expired', gatewayReference: GATEWAY_REFERENCE }),
       );
       invoices.findById.mockResolvedValue(invoice({ balanceDue: 116_000 }));
-      repo.markPaid.mockResolvedValue(intentRow({ status: 'paid' }));
+      repo.claimPaidTx.mockResolvedValue(intentRow({ status: 'paid' }));
 
       const result = await service.settleFromGateway({
         reference: GATEWAY_REFERENCE,
@@ -454,12 +589,12 @@ describe('PaymentIntentsService', () => {
       });
 
       expect(result).toEqual({ settled: true });
-      expect(invoices.pay).toHaveBeenCalledWith(
+      expect(invoices.payWithOutcome).toHaveBeenCalledWith(
         INVOICE_ID,
-        { method: 'qris' },
-        { withinTx: expect.any(Function) },
+        { method: 'qris', amount: 116_000 },
+        { claim: expect.any(Function) },
       );
-      expect(repo.markPaid).toHaveBeenCalledWith(INTENT_ID);
+      expect(repo.claimPaidTx).toHaveBeenCalledWith(FAKE_TX, INTENT_ID);
     });
 
     // R4-BE-1 sibling: the same must hold for an intent still `pending` in the
@@ -474,7 +609,7 @@ describe('PaymentIntentsService', () => {
         }),
       );
       invoices.findById.mockResolvedValue(invoice({ balanceDue: 116_000 }));
-      repo.markPaid.mockResolvedValue(intentRow({ status: 'paid' }));
+      repo.claimPaidTx.mockResolvedValue(intentRow({ status: 'paid' }));
 
       const result = await service.settleFromGateway({
         reference: GATEWAY_REFERENCE,
@@ -483,12 +618,12 @@ describe('PaymentIntentsService', () => {
       });
 
       expect(result).toEqual({ settled: true });
-      expect(invoices.pay).toHaveBeenCalledWith(
+      expect(invoices.payWithOutcome).toHaveBeenCalledWith(
         INVOICE_ID,
-        { method: 'qris' },
-        { withinTx: expect.any(Function) },
+        { method: 'qris', amount: 116_000 },
+        { claim: expect.any(Function) },
       );
-      expect(repo.markPaid).toHaveBeenCalledWith(INTENT_ID);
+      expect(repo.claimPaidTx).toHaveBeenCalledWith(FAKE_TX, INTENT_ID);
     });
   });
 
@@ -502,7 +637,7 @@ describe('PaymentIntentsService', () => {
       await service.markGatewayNonSettlement(INTENT_ID);
 
       expect(repo.markExpired).toHaveBeenCalledWith(INTENT_ID);
-      expect(invoices.pay).not.toHaveBeenCalled();
+      expect(invoices.payWithOutcome).not.toHaveBeenCalled();
     });
 
     it('is a no-op for an already-paid intent (never touches money)', async () => {
@@ -565,8 +700,8 @@ describe('PaymentIntentsService', () => {
       const result = await service.findForCustomer(OWNER_ID, INTENT_ID);
 
       expect(result.status).toBe('pending');
-      expect(invoices.pay).not.toHaveBeenCalled();
-      expect(repo.markPaid).not.toHaveBeenCalled();
+      expect(invoices.payWithOutcome).not.toHaveBeenCalled();
+      expect(repo.claimPaidTx).not.toHaveBeenCalled();
     });
 
     it('findForCustomer 404s on someone else intent', async () => {
@@ -576,7 +711,7 @@ describe('PaymentIntentsService', () => {
       await expect(service.findForCustomer(STRANGER_ID, INTENT_ID)).rejects.toBeInstanceOf(
         NotFoundException,
       );
-      expect(invoices.pay).not.toHaveBeenCalled();
+      expect(invoices.payWithOutcome).not.toHaveBeenCalled();
     });
 
     it('findForCustomer 404s on an unknown intent', async () => {

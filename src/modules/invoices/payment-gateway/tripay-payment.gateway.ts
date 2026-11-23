@@ -65,7 +65,7 @@ const tripayCallbackSchema = z.object({
   reference: z.string().min(1),
   merchant_ref: z.string().min(1),
   status: z.string(),
-  total_amount: z.number().finite(),
+  total_amount: z.number().int().positive(),
 });
 
 /**

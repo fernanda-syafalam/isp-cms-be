@@ -19,6 +19,17 @@ import { invoiceTotal } from './invoice-total';
 // Drizzle transaction handle, typed without `any` (mirrors VouchersRepository).
 export type DbTx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
+export type PaymentClaim = (tx: DbTx) => Promise<boolean>;
+
+export interface RecordPaymentResult {
+  invoice: Invoice;
+  reactivated: boolean;
+  /** Amount actually written to the ledger; 0 for any no-op. */
+  appliedAmount: number;
+  /** False only when the `claim` hook reported the token was already taken. */
+  claimed: boolean;
+}
+
 export interface InvoiceListFilter {
   status?: Invoice['status'];
   q?: string;
@@ -282,6 +293,8 @@ export class InvoicesRepository {
    * Inside `tx`:
    *  1. `SELECT ... FOR UPDATE` locks the invoice; a concurrent call on the same id
    *     blocks, then re-reads the moved status/balance.
+   *  1b. The optional `claim` hook runs; false means another delivery already claimed the
+   *      caller's token, so the call is a no-op (`claimed: false`, `appliedAmount: 0`).
    *  2. An already-`paid` invoice is a no-op (idempotent; defense in depth against
    *     a race with the service's own short-circuit).
    *  3. `input.amount` is re-validated against the balance due on the LOCKED row,
@@ -307,10 +320,11 @@ export class InvoicesRepository {
       // Cashier's manual-entry justification (FIN-D); null for gateway-settled payments. Metadata only.
       note: string | null;
     },
-    // Runs last inside the transaction so a caller's own write commits or
-    // rolls back together with the payment (e.g. flipping a payment intent).
-    withinTx?: (tx: DbTx) => Promise<void>,
-  ): Promise<{ invoice: Invoice; reactivated: boolean }> {
+    // Runs FIRST under the invoice lock, in the same transaction, so a caller's own conditional
+    // write (claiming a payment intent) commits or rolls back with the payment. Returning false
+    // aborts as an idempotent no-op: nothing is recorded.
+    claim?: PaymentClaim,
+  ): Promise<RecordPaymentResult> {
     return this.db.transaction(async (tx) => {
       const [invoice] = await tx
         .select()
@@ -321,8 +335,10 @@ export class InvoicesRepository {
       if (!invoice) {
         throw new NotFoundException('invoice not found');
       }
-      if (invoice.status === 'paid') {
-        return { invoice, reactivated: false }; // idempotent — see method doc.
+      const claimed = claim ? await claim(tx) : true;
+      if (!claimed || invoice.status === 'paid') {
+        // idempotent — see method doc.
+        return { invoice, reactivated: false, appliedAmount: 0, claimed };
       }
 
       const total = invoiceTotal(invoice);
@@ -361,8 +377,7 @@ export class InvoicesRepository {
       }
 
       const reactivated = await this.refreshOutstandingTx(tx, invoice.customerId);
-      await withinTx?.(tx);
-      return { invoice: updated, reactivated };
+      return { invoice: updated, reactivated, appliedAmount: input.amount, claimed };
     });
   }
 

@@ -21,12 +21,20 @@ import type { PaymentReconciliation } from './dto/payment-reconciliation.dto';
 import type { PaymentResponse } from './dto/payment-response.dto';
 import type { RecordPaymentInput } from './dto/record-payment.dto';
 import { invoiceTotal } from './invoice-total';
-import type { DbTx } from './invoices.repository';
 import {
   type InvoiceListFilter,
   InvoicesRepository,
+  type PaymentClaim,
   type PaymentListFilter,
 } from './invoices.repository';
+
+export interface PayOutcome {
+  invoice: InvoiceResponse;
+  /** Amount written to the ledger by this call; 0 for any no-op. */
+  appliedAmount: number;
+  /** False when the caller's `claim` hook lost the race (or never ran on an already-paid invoice). */
+  claimedIntent: boolean;
+}
 
 @Injectable()
 export class InvoicesService {
@@ -91,16 +99,21 @@ export class InvoicesService {
    * Reactivation from isolir and the reseller commission fire only once the
    * invoice is fully paid. Paying an already-paid invoice is a no-op.
    */
-  async pay(
+  async pay(id: string, input: RecordPaymentInput): Promise<InvoiceResponse> {
+    return (await this.payWithOutcome(id, input)).invoice;
+  }
+
+  /** `pay` plus what actually happened, for gateway settlement (which must audit the real applied amount). */
+  async payWithOutcome(
     id: string,
     input: RecordPaymentInput,
-    // Internal only (never from the HTTP layer): see `recordPayment`'s withinTx.
-    opts?: { withinTx?: (tx: DbTx) => Promise<void> },
-  ): Promise<InvoiceResponse> {
+    // Internal only (never from the HTTP layer): see `recordPayment`'s claim.
+    opts?: { claim?: PaymentClaim },
+  ): Promise<PayOutcome> {
     const invoice = await this.repo.findById(id);
     if (!invoice) throw new NotFoundException('invoice not found');
     if (invoice.status === 'paid') {
-      return toInvoiceResponse(invoice);
+      return { invoice: toInvoiceResponse(invoice), appliedAmount: 0, claimedIntent: false };
     }
 
     const total = invoiceTotal(invoice);
@@ -129,10 +142,15 @@ export class InvoicesService {
     // never ''.
     const note = input.note && input.note.length > 0 ? input.note : null;
 
-    const { invoice: updated, reactivated } = await this.repo.recordPayment(
+    const {
+      invoice: updated,
+      reactivated,
+      appliedAmount,
+      claimed,
+    } = await this.repo.recordPayment(
       id,
       { amount, method: input.method, tenderedAmount, changeAmount, note },
-      opts?.withinTx,
+      opts?.claim,
     );
     // Router secret belongs to another module: runs outside the invoice/customer
     // transaction (ADR-0008).
@@ -142,15 +160,15 @@ export class InvoicesService {
     // Reactivation, commission and the 'paid' notice key off the invoice
     // reaching 'paid', never a partial payment. The notice fires after
     // recordPayment commits (ADR-0012) so a rollback can't send a false one.
-    if (updated.status === 'paid') {
+    if (appliedAmount > 0 && updated.status === 'paid') {
       await this.postResellerCommission(invoice.customerId, invoice.id, total);
       await this.notifyPaid(updated, total);
     }
     this.logger.log(
-      { invoiceId: id, method: input.method, amount, status: updated.status },
+      { invoiceId: id, method: input.method, amount: appliedAmount, status: updated.status },
       'invoice payment recorded',
     );
-    return toInvoiceResponse(updated);
+    return { invoice: toInvoiceResponse(updated), appliedAmount, claimedIntent: claimed };
   }
 
   // The payment is already committed, so an enforcement failure must not fail it.
